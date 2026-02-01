@@ -48,13 +48,17 @@ desugarAlt (Alt pat expr) =
   Alt pat (desugarExpr expr)
 
 desugarDo :: [Stmt] -> Expr
-desugarDo stmts =
+desugarDo =
+  desugarDoWith False
+
+desugarDoWith :: Bool -> [Stmt] -> Expr
+desugarDoWith hasPreviousStatement stmts =
   case stmts of
     [] ->
       error "desugarDo: empty do-block"
 
     [ExprStmt e] ->
-      desugarExpr e
+      if hasPreviousStatement then desugarFinalInDo e else desugarExpr e
 
     BindStmt pat m : rest ->
       case rest of
@@ -63,7 +67,7 @@ desugarDo stmts =
         _ ->
           case pat of
             PVar name ->
-              bindM (desugarExpr m) (Lam [PVar name] (desugarDo rest))
+              bindM (desugarExpr m) (Lam [PVar name] (desugarDoWith True rest))
             _ ->
               error "desugarDo: pattern binds are not supported (only x <- and _ <- are allowed)"
 
@@ -72,17 +76,40 @@ desugarDo stmts =
         [] ->
           error "desugarDo: do-block cannot end with a discard bind statement"
         _ ->
-          thenM (desugarExpr m) (desugarDo rest)
+          thenM (desugarExpr m) (desugarDoWith True rest)
 
     LetStmt name e : rest ->
       case rest of
         [] ->
           error "desugarDo: do-block cannot end with a let statement"
         _ ->
-          LetIn name (desugarExpr e) (desugarDo rest)
+          LetIn name (desugarExpr e) (desugarDoWith True rest)
 
     ExprStmt m : rest ->
-      thenM (desugarExpr m) (desugarDo rest)
+      thenM (desugarExpr m) (desugarDoWith True rest)
+
+desugarFinalInDo :: Expr -> Expr
+desugarFinalInDo expr =
+  case unapply expr of
+    (Var "pure", args@(_ : _)) ->
+      apply (Var "pureM") (map desugarExpr args)
+    _ ->
+      desugarExpr expr
+
+unapply :: Expr -> (Expr, [Expr])
+unapply =
+  go []
+  where
+    go args e =
+      case e of
+        App f x ->
+          go (x : args) f
+        _ ->
+          (e, args)
+
+apply :: Expr -> [Expr] -> Expr
+apply =
+  foldl App
 
 bindM :: Expr -> Expr -> Expr
 bindM m k =
