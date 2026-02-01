@@ -12,6 +12,7 @@ library
   exposed-modules:
       Lune.Syntax
       Lune.Parser
+      Lune.Desugar
 
   hs-source-dirs:   src
   build-depends:
