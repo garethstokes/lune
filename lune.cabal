@@ -21,6 +21,9 @@ library
       Lune.TypeConvert
       Lune.ClassEnv
       Lune.InstanceEnv
+      Lune.Core
+      Lune.Elaborate
+      Lune.Eval
 
   hs-source-dirs:   src
   build-depends:
@@ -39,6 +42,7 @@ executable lune
   hs-source-dirs:   app
   build-depends:
       base,
+      containers,
       text,
       lune
 
