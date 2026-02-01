@@ -1,0 +1,9 @@
+module BadOrphan exposing (x)
+
+instance Functor List where
+  fmap = \f xs -> xs
+
+x : Unit
+x =
+  unit
+

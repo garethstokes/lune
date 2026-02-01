@@ -76,12 +76,22 @@ validateDecl env decl =
       validateType env body
     DeclNewtype _ _ _ ctorTy ->
       validateType env ctorTy
+    DeclClass _ _ supers methods -> do
+      mapM_ (validateConstraint env) supers
+      mapM_ (validateClassMethodSig env) methods
     DeclValue {} ->
+      Right ()
+    DeclInstance {} ->
       Right ()
 
 validateConstraint :: ArityEnv -> Constraint -> Either ValidateError ()
 validateConstraint env constraint =
   mapM_ (validateType env) (constraintArgs constraint)
+
+validateClassMethodSig :: ArityEnv -> ClassMethodSig -> Either ValidateError ()
+validateClassMethodSig env (ClassMethodSig _ (QualType constraints ty)) = do
+  mapM_ (validateConstraint env) constraints
+  validateType env ty
 
 validateTypeCtor :: ArityEnv -> TypeCtor -> Either ValidateError ()
 validateTypeCtor env (TypeCtor _ args) =

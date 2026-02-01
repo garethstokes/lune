@@ -1,0 +1,19 @@
+module BadOverlap exposing (x)
+
+class Functor (f : Type -> Type) where
+  fmap : (a -> b) -> f a -> f b
+
+type List a =
+  Nil
+  | Cons a (List a)
+
+instance Functor List where
+  fmap = \f xs -> xs
+
+instance Functor List where
+  fmap = \f xs -> xs
+
+x : List Int
+x =
+  Nil
+

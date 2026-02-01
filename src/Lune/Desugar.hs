@@ -14,6 +14,8 @@ desugarDecl decl =
   case decl of
     DeclValue name args expr ->
       DeclValue name args (desugarExpr expr)
+    DeclInstance cls headTy methods ->
+      DeclInstance cls headTy [InstanceMethodDef name (desugarExpr expr) | InstanceMethodDef name expr <- methods]
     _ ->
       decl
 

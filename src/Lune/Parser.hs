@@ -79,7 +79,9 @@ importDecl = do
 decl :: Parser Decl
 decl =
   choice
-    [ try typeAliasDecl
+    [ try classDecl
+    , try instanceDecl
+    , try typeAliasDecl
     , try typeDecl
     , try newtypeDecl
     , try typeSigDecl
@@ -146,6 +148,96 @@ typeCtor = do
   name <- typeConstructor
   args <- many (typeAtomWith sc)
   pure (TypeCtor name args)
+
+classDecl :: Parser Decl
+classDecl = do
+  ref0 <- L.indentLevel
+  let ref = mkPos (unPos ref0)
+  keyword "class"
+  supers <- optional (try (parseConstraintsWith sc <* symbol "=>"))
+  name <- typeConstructor
+  params <- some classParam
+  keyword "where"
+  skipNewlines
+  firstMethod <- parseIndentedClassMethodSig ref
+  restMethods <- many (try (skipNewlines *> parseIndentedClassMethodSig ref))
+  scn
+  pure (DeclClass name params (maybe [] id supers) (firstMethod : restMethods))
+
+classParam :: Parser ClassParam
+classParam =
+  choice
+    [ try kindAnnotatedParam
+    , ClassParam <$> typeVar <*> pure Nothing
+    ]
+  where
+    kindAnnotatedParam =
+      between (symbol "(") (symbol ")") $ do
+        name <- typeVar
+        symbol ":"
+        kind <- parseKind
+        pure (ClassParam name (Just kind))
+
+parseKind :: Parser Type
+parseKind = parseArrowKind
+  where
+    parseArrowKind = do
+      kinds <- kindAtom `sepBy1` symbol "->"
+      pure (foldr1 TypeArrow kinds)
+
+    kindAtom =
+      choice
+        [ between (symbol "(") (symbol ")") parseKind
+        , kindType
+        ]
+
+    kindType = do
+      name <- typeConstructor
+      if name == "Type"
+        then pure (TypeCon name)
+        else fail "expected kind Type"
+
+parseIndentedClassMethodSig :: P.Pos -> Parser ClassMethodSig
+parseIndentedClassMethodSig ref =
+  L.indentGuard scIndent GT ref *> classMethodSig
+
+classMethodSig :: Parser ClassMethodSig
+classMethodSig = do
+  name <- identifier
+  symbol ":"
+  ty <- parseQualTypeWith sc
+  pure (ClassMethodSig name ty)
+
+instanceDecl :: Parser Decl
+instanceDecl = do
+  ref0 <- L.indentLevel
+  let ref = mkPos (unPos ref0)
+  keyword "instance"
+  cls <- typeConstructor
+  headTy <- parseInstanceHeadType
+  keyword "where"
+  skipNewlines
+  firstMethod <- parseIndentedInstanceMethodDef ref
+  restMethods <- many (try (skipNewlines *> parseIndentedInstanceMethodDef ref))
+  scn
+  pure (DeclInstance cls headTy (firstMethod : restMethods))
+
+parseInstanceHeadType :: Parser Type
+parseInstanceHeadType = do
+  atoms <- some (typeAtomWith sc)
+  pure (foldl1 TypeApp atoms)
+
+parseIndentedInstanceMethodDef :: P.Pos -> Parser InstanceMethodDef
+parseIndentedInstanceMethodDef ref =
+  L.indentGuard scIndent GT ref *> instanceMethodDef
+
+instanceMethodDef :: Parser InstanceMethodDef
+instanceMethodDef = do
+  name <- identifier
+  symbol "="
+  scnOptional
+  expr <- parseExpr
+  pure (InstanceMethodDef name expr)
 
 parseType :: Parser Type
 parseType =
@@ -264,6 +356,7 @@ parseLambda = do
   symbol "\\"
   args <- some patternAtom
   symbol "->"
+  scnOptional
   Lam args <$> parseExpr
 
 parseLetIn :: Parser Expr
@@ -432,15 +525,21 @@ identifierWith spaceConsumer = L.lexeme spaceConsumer $ do
 typeConstructorWith :: Parser () -> Parser Text
 typeConstructorWith spaceConsumer = L.lexeme spaceConsumer $ do
   first <- upperChar
-  rest <- many (alphaNumChar <|> char '_' <|> char '.')
+  rest <- many (alphaNumChar <|> char '_' <|> char '.' <|> char '#')
   pure (T.pack (first : rest))
 
 typeVarWith :: Parser () -> Parser Text
 typeVarWith spaceConsumer = L.lexeme spaceConsumer $ do
+  P.notFollowedBy reservedWord
   first <- lowerChar
-  rest <- many (alphaNumChar <|> char '_' )
-  let name = first : rest
-  if name `elem` reserved then fail "keyword cannot be type variable" else pure (T.pack name)
+  rest <- many (alphaNumChar <|> char '_')
+  pure (T.pack (first : rest))
+  where
+    reservedWord =
+      choice (map tryWord reserved)
+
+    tryWord w =
+      P.try (string (T.pack w) <* notFollowedBy (alphaNumChar <|> char '_'))
 
 reserved :: [String]
 reserved =
@@ -449,6 +548,9 @@ reserved =
   , "let"
   , "in"
   , "do"
+  , "class"
+  , "instance"
+  , "where"
   , "type"
   , "alias"
   , "newtype"
@@ -468,7 +570,7 @@ lexeme = L.lexeme sc
 
 scTypeSig :: Parser ()
 scTypeSig =
-  L.space consumer (L.skipLineComment "--") empty
+  L.space consumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
   where
     consumer =
       choice
@@ -478,18 +580,18 @@ scTypeSig =
 
 sc :: Parser ()
 sc =
-  L.space (void $ some (satisfy (\c -> c == ' ' || c == '\t'))) (L.skipLineComment "--") empty
+  L.space (void $ some (satisfy (\c -> c == ' ' || c == '\t'))) (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
 
 scIndent :: Parser ()
 scIndent =
-  L.space (void $ some (char ' ' <|> char '\t')) (L.skipLineComment "--") empty
+  L.space (void $ some (char ' ' <|> char '\t')) (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
 
 scn :: Parser ()
 scn =
-  L.space space1 (L.skipLineComment "--") empty
+  L.space space1 (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
 
 skipNewlines :: Parser ()
 skipNewlines =
-  L.space newlineConsumer (L.skipLineComment "--") empty
+  L.space newlineConsumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
   where
     newlineConsumer = void $ some (char '\n')

@@ -18,6 +18,9 @@ library
       Lune.Infer
       Lune.Check
       Lune.Kind
+      Lune.TypeConvert
+      Lune.ClassEnv
+      Lune.InstanceEnv
 
   hs-source-dirs:   src
   build-depends:

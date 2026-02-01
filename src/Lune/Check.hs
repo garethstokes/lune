@@ -13,14 +13,21 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Lune.Desugar (desugarModule)
-import Lune.Kind (KindEnv, KindError, builtinClassEnv, kindCheckQualType, kindEnvFromDecls)
+import qualified Lune.ClassEnv as CE
+import qualified Lune.InstanceEnv as IE
+import qualified Lune.Kind as K
+import Lune.Kind (KindEnv, KindError, kindCheckQualType, kindEnvFromDecls)
 import qualified Lune.Syntax as S
 import Lune.Infer
 import Lune.Type
+import Lune.TypeConvert (AliasEnv, buildAliasEnv, convertType, expandAliases, schemeFromQualType)
 
 data TypecheckError
   = InValue Text InferError
   | InTypeSig Text KindError
+  | InClass CE.ClassError
+  | InInstance IE.InstanceError
+  | InInstanceMethod Text InferError
 
 instance Show TypecheckError where
   show err =
@@ -29,10 +36,35 @@ instance Show TypecheckError where
         T.unpack name <> ": " <> show inferErr
       InTypeSig name kindErr ->
         T.unpack name <> ": " <> show kindErr
+      InClass classErr ->
+        show classErr
+      InInstance instErr ->
+        show instErr
+      InInstanceMethod label inferErr ->
+        T.unpack label <> ": " <> show inferErr
 
 typecheckModule :: S.Module -> Either TypecheckError [(Text, Scheme)]
 typecheckModule m = do
-  checkSigKinds kindEnv decls
+  classEnv <-
+    case CE.buildClassEnv m' of
+      Left err -> Left (InClass err)
+      Right env -> Right env
+
+  methodEnv <-
+    case CE.classMethodEnv classEnv of
+      Left err -> Left (InClass err)
+      Right env -> Right env
+
+  instanceEnv <-
+    case IE.buildInstanceEnv m' classEnv of
+      Left err -> Left (InInstance err)
+      Right env -> Right env
+
+  checkSigKinds kindEnv (CE.classKindEnv classEnv) decls
+
+  let env0 = builtinEnv <> ctorEnv <> methodEnv <> sigEnv
+
+  checkInstanceMethods env0 aliasEnv classEnv instanceEnv
   go env0 [] (valueDecls decls)
   where
     m' = desugarModule m
@@ -41,7 +73,6 @@ typecheckModule m = do
     aliasEnv = buildAliasEnv decls
     sigEnv = buildSigEnv aliasEnv decls
     ctorEnv = buildCtorEnv aliasEnv decls
-    env0 = builtinEnv <> ctorEnv <> sigEnv
 
     go _ acc [] =
       Right (reverse acc)
@@ -55,20 +86,75 @@ typecheckModule m = do
 
     nameOf (n, _, _) = n
 
-checkSigKinds :: KindEnv -> [S.Decl] -> Either TypecheckError ()
-checkSigKinds kindEnv =
+checkSigKinds :: KindEnv -> K.ClassEnv -> [S.Decl] -> Either TypecheckError ()
+checkSigKinds kindEnv classKinds =
   foldM_ step ()
   where
     step () decl =
       case decl of
         S.DeclTypeSig name qualTy ->
-          case kindCheckQualType kindEnv builtinClassEnv qualTy of
+          case kindCheckQualType kindEnv classKinds qualTy of
             Left err ->
               Left (InTypeSig name err)
             Right () ->
               Right ()
         _ ->
           Right ()
+
+checkInstanceMethods :: TypeEnv -> AliasEnv -> CE.ClassEnv -> IE.InstanceEnv -> Either TypecheckError ()
+checkInstanceMethods env0 aliasEnv classEnv instanceEnv =
+  mapM_ checkInstance (Map.elems instanceEnv)
+  where
+    checkInstance inst = do
+      classInfo <-
+        case Map.lookup (IE.instanceInfoClass inst) classEnv of
+          Nothing ->
+            Left (InInstance (IE.UnknownClass (IE.instanceInfoClass inst)))
+          Just info ->
+            Right info
+
+      let params = CE.classInfoParams classInfo
+      paramName <-
+        case params of
+          (p : _) -> Right p
+          _ -> Left (InInstance (IE.UnknownClass (IE.instanceInfoClass inst)))
+
+      let instTy = expandAliases aliasEnv (convertType aliasEnv (IE.instanceInfoHead inst))
+          instVars = Set.toList (ftvType instTy)
+
+      let requiredMethods = CE.classInfoMethods classInfo
+          methodSchemes =
+            Map.map (specializeMethodScheme (IE.instanceInfoClass inst) paramName instTy instVars) requiredMethods
+
+      let instEnv = methodSchemes <> env0
+
+      mapM_ (checkMethod inst instEnv methodSchemes) (Map.toList (IE.instanceInfoMethods inst))
+      pure ()
+
+    checkMethod inst instEnv expectedSchemes (methodName, methodExpr) =
+      case Map.lookup methodName expectedSchemes of
+        Nothing ->
+          pure ()
+        Just scheme ->
+          case runInferM (checkAgainstScheme instEnv methodName [] methodExpr scheme) of
+            Left err ->
+              Left (InInstanceMethod (methodLabel inst methodName) err)
+            Right () ->
+              Right ()
+
+    methodLabel inst methodName =
+      IE.instanceInfoClass inst <> " " <> IE.instanceInfoHeadCon inst <> "." <> methodName
+
+specializeMethodScheme :: Text -> Text -> Type -> [Text] -> Scheme -> Scheme
+specializeMethodScheme className classParam instTy instVars (Forall vars constraints ty) =
+  Forall varsFinal constraintsFinal tyFinal
+  where
+    subst = Map.singleton classParam instTy
+    vars' = filter (/= classParam) vars
+    tyFinal = applySubstType subst ty
+    constraintsSub = applySubstConstraints subst constraints
+    constraintsFinal = filter (/= Constraint className [instTy]) constraintsSub
+    varsFinal = Set.toList (Set.fromList (instVars <> vars'))
 
 checkDecl :: TypeEnv -> TypeEnv -> (Text, [S.Pattern], S.Expr) -> InferM (Text, Scheme)
 checkDecl env sigEnv (name, args, body) =
@@ -131,36 +217,12 @@ valueDecls =
         _ ->
           acc
 
-buildAliasEnv :: [S.Decl] -> AliasEnv
-buildAliasEnv decls =
-  Map.fromList
-    [ (name, (vars, convertType Map.empty body))
-    | S.DeclTypeAlias name vars body <- decls
-    ]
-
-type AliasEnv = Map Text ([Text], Type)
-
 buildSigEnv :: AliasEnv -> [S.Decl] -> TypeEnv
 buildSigEnv aliasEnv decls =
   Map.fromList
     [ (name, schemeFromQualType aliasEnv qualTy)
     | S.DeclTypeSig name qualTy <- decls
     ]
-
-schemeFromQualType :: AliasEnv -> S.QualType -> Scheme
-schemeFromQualType aliasEnv (S.QualType constraints ty) =
-  Forall vars constraints' ty'
-  where
-    ty' = expandAliases aliasEnv (convertType aliasEnv ty)
-    constraints' = map (convertConstraint aliasEnv) constraints
-    vars = Set.toList (ftvConstraints constraints' <> ftvType ty')
-
-convertConstraint :: AliasEnv -> S.Constraint -> Constraint
-convertConstraint aliasEnv constraint =
-  Constraint
-    { constraintClass = S.constraintClass constraint
-    , constraintArgs = map (expandAliases aliasEnv . convertType aliasEnv) (S.constraintArgs constraint)
-    }
 
 buildCtorEnv :: AliasEnv -> [S.Decl] -> TypeEnv
 buildCtorEnv aliasEnv decls =
@@ -196,75 +258,6 @@ builtinEnv =
     , ("thenM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TApp (TVar "m") (TVar "b")) (TApp (TVar "m") (TVar "b")))))
     , ("bindM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TVar "m") (TVar "b"))) (TApp (TVar "m") (TVar "b")))))
     ]
-
-convertType :: AliasEnv -> S.Type -> Type
-convertType aliasEnv ty =
-  case ty of
-    S.TypeCon name ->
-      TCon name
-    S.TypeVar name ->
-      TVar name
-    S.TypeApp f x ->
-      TApp (convertType aliasEnv f) (convertType aliasEnv x)
-    S.TypeArrow a b ->
-      TArrow (convertType aliasEnv a) (convertType aliasEnv b)
-    S.TypeRecord fields ->
-      TRecord (sortOn fst [(name, convertType aliasEnv t) | (name, t) <- fields])
-
-expandAliases :: AliasEnv -> Type -> Type
-expandAliases aliasEnv =
-  go Set.empty
-  where
-    go seen ty =
-      case ty of
-        TVar _ ->
-          ty
-
-        TCon name ->
-          case Map.lookup name aliasEnv of
-            Nothing ->
-              ty
-            Just (params, body) ->
-              if null params && not (name `Set.member` seen)
-                then go (Set.insert name seen) body
-                else ty
-
-        TArrow a b ->
-          TArrow (go seen a) (go seen b)
-
-        TRecord fields ->
-          TRecord [(name, go seen fieldTy) | (name, fieldTy) <- fields]
-
-        TApp {} ->
-          case unapplyApps ty of
-            (TCon name, args) ->
-              case Map.lookup name aliasEnv of
-                Nothing ->
-                  rebuildApps (TCon name) (map (go seen) args)
-                Just (params, body) ->
-                  if name `Set.member` seen
-                    then rebuildApps (TCon name) (map (go seen) args)
-                    else
-                      if length params /= length args
-                        then rebuildApps (TCon name) (map (go seen) args)
-                        else
-                          let subst = Map.fromList (zip params (map (go seen) args))
-                           in go (Set.insert name seen) (applySubstType subst body)
-            (headTy, args) ->
-              rebuildApps (go seen headTy) (map (go seen) args)
-
-    rebuildApps =
-      foldl TApp
-
-    unapplyApps =
-      goApps []
-      where
-        goApps args t =
-          case t of
-            TApp f x ->
-              goApps (x : args) f
-            _ ->
-              (t, args)
 
 renderScheme :: Scheme -> Text
 renderScheme (Forall vars constraints ty) =

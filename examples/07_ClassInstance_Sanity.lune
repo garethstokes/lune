@@ -1,0 +1,18 @@
+module InstanceDemo exposing (idList)
+
+class Functor (f : Type -> Type) where
+  fmap : (a -> b) -> f a -> f b
+
+type List a =
+  Nil
+  | Cons a (List a)
+
+instance Functor List where
+  fmap = \f xs ->
+    case xs of
+      Nil -> Nil
+      Cons x xt -> Cons (f x) (fmap f xt)
+
+idList : List Int
+idList =
+  fmap (\x -> x) (Cons 1 Nil)

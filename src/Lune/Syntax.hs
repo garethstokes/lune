@@ -22,6 +22,8 @@ data Decl
   | DeclType Text [Text] [TypeCtor]
   | DeclTypeAlias Text [Text] Type
   | DeclNewtype Text [Text] Text Type
+  | DeclClass Text [ClassParam] [Constraint] [ClassMethodSig]
+  | DeclInstance Text Type [InstanceMethodDef]
   deriving (Show)
 
 data TypeCtor = TypeCtor Text [Type]
@@ -44,6 +46,24 @@ data Constraint = Constraint
 data QualType = QualType
   { qualConstraints :: [Constraint]
   , qualType :: Type
+  }
+  deriving (Show)
+
+data ClassParam = ClassParam
+  { classParamName :: Text
+  , classParamKind :: Maybe Type
+  }
+  deriving (Show)
+
+data ClassMethodSig = ClassMethodSig
+  { classMethodName :: Text
+  , classMethodQualType :: QualType
+  }
+  deriving (Show)
+
+data InstanceMethodDef = InstanceMethodDef
+  { instanceMethodName :: Text
+  , instanceMethodExpr :: Expr
   }
   deriving (Show)
 
