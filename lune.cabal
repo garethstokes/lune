@@ -14,11 +14,16 @@ library
       Lune.Parser
       Lune.Desugar
       Lune.Validate
+      Lune.Type
+      Lune.Infer
+      Lune.Check
 
   hs-source-dirs:   src
   build-depends:
       base >=4.16 && <4.21,
+      containers,
       text,
+      transformers,
       megaparsec,
       parser-combinators
 
