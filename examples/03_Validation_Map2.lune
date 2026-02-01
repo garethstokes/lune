@@ -1,0 +1,56 @@
+module ValidationDemo exposing (Validation(..), map2, validateUser)
+
+import Lune.Prelude exposing (
+  Bool(..), Int, String, List(..),
+  Result(..),  -- not used; here to show coexistence
+  geInt
+)
+
+type Validation e a =
+  Invalid e
+  | Valid a
+
+appendErrors : List String -> List String -> List String
+appendErrors xs ys =
+  case xs of
+    Nil -> ys
+    Cons x xt -> Cons x (appendErrors xt ys)
+
+map2 : (a -> b -> c)
+   -> Validation (List String) a
+   -> Validation (List String) b
+   -> Validation (List String) c
+map2 f va vb =
+  case va of
+    Invalid ea ->
+      case vb of
+        Invalid eb -> Invalid (appendErrors ea eb)
+        Valid _    -> Invalid ea
+
+    Valid a ->
+      case vb of
+        Invalid eb -> Invalid eb
+        Valid b    -> Valid (f a b)
+
+type alias User =
+  { name : String
+  , age  : Int
+  }
+
+validateName : String -> Validation (List String) String
+validateName s =
+  Valid s
+
+validateAge : Int -> Validation (List String) Int
+validateAge n =
+  case geInt n 0 of
+    True  -> Valid n
+    False -> Invalid (Cons "age must be >= 0" Nil)
+
+mkUser : String -> Int -> User
+mkUser name age =
+  { name = name, age = age }
+
+validateUser : { name : String, age : Int } -> Validation (List String) User
+validateUser input =
+  map2 mkUser (validateName input.name) (validateAge input.age)

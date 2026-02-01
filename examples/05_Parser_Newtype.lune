@@ -1,0 +1,39 @@
+module Parser exposing (Result(..), Maybe(..), Pair(..), Parser(..), run, char)
+
+import Lune.Prelude exposing (Bool(..), Char, String, Result(..), Maybe(..))
+
+type Pair a b =
+  Pair a b
+
+unconsString : String -> Maybe (Pair Char String)
+unconsString s =
+  Nothing
+
+eqChar : Char -> Char -> Bool
+eqChar a b =
+  False
+
+newtype Parser a =
+  Parser (String -> Result String (Pair a String))
+
+run : Parser a -> String -> Result String a
+run p input =
+  case p of
+    Parser parse ->
+      do
+        pr <- parse input
+        case pr of
+          Pair a _rest -> Ok a
+
+char : Char -> Parser Char
+char c =
+  Parser (\input ->
+    case unconsString input of
+      Nothing -> Err "eof"
+      Just pr ->
+        case pr of
+          Pair x xs ->
+            case eqChar x c of
+              True  -> Ok (Pair c xs)
+              False -> Err "mismatch"
+  )

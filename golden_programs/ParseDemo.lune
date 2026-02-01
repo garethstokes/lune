@@ -1,0 +1,20 @@
+module ParseDemo exposing (parsePort)
+
+import Prelude exposing (..)
+
+parseInt : String -> Result String Int
+parseInt s =
+  Err "parseInt not implemented"
+
+guard : Bool -> e -> Result e Unit
+guard cond err =
+  case cond of
+    True  -> Ok unit
+    False -> Err err
+
+parsePort : String -> Result String Int
+parsePort s =
+  do
+    n <- parseInt s
+    _ <- guard (and (geInt n 1) (leInt n 65535)) "port out of range"
+    pureM n

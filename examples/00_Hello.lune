@@ -1,0 +1,8 @@
+module Main exposing (main)
+
+import Lune.Prelude exposing (IO, Unit, putStrLn)
+
+main : IO Unit
+main =
+  do
+    putStrLn "Hello, world!"

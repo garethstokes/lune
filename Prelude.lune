@@ -1,0 +1,78 @@
+module Prelude exposing (..)
+
+-- Core Types
+
+type Bool = True | False
+
+type Unit = Unit
+
+unit : Unit
+unit = Unit
+
+type List a =
+  Nil
+  | Cons a (List a)
+
+type Maybe a =
+  Nothing
+  | Just a
+
+type Result e a =
+  Err e
+  | Ok a
+
+
+-- Typeclasses
+
+class Functor (f : Type -> Type) where
+  fmap : (a -> b) -> f a -> f b
+
+class Functor f => Applicative (f : Type -> Type) where
+  pureA : a -> f a
+  ap    : f (a -> b) -> f a -> f b
+
+class Applicative m => Monad (m : Type -> Type) where
+  pureM : a -> m a
+  bindM : m a -> (a -> m b) -> m b
+  thenM : m a -> m b -> m b
+
+
+-- Primitive operations (implemented by compiler/runtime)
+
+addInt : Int -> Int -> Int
+mulInt : Int -> Int -> Int
+subInt : Int -> Int -> Int
+
+eqInt : Int -> Int -> Bool
+geInt : Int -> Int -> Bool
+leInt : Int -> Int -> Bool
+
+and : Bool -> Bool -> Bool
+
+appendString : String -> String -> String
+showInt : Int -> String
+
+
+-- IO + Concurrency
+
+type IO a
+
+putStrLn : String -> IO Unit
+readInt  : IO Int
+
+type Fiber a
+spawn : IO a -> IO (Fiber a)
+await : Fiber a -> IO a
+yield : IO Unit
+sleepMs : Int -> IO Unit
+
+
+-- STM
+
+type STM a
+type TVar a
+
+atomically : STM a -> IO a
+newTVar    : a -> STM (TVar a)
+readTVar   : TVar a -> STM a
+writeTVar  : TVar a -> a -> STM Unit

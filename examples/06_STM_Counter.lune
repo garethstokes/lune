@@ -1,0 +1,34 @@
+module STMExample exposing (main)
+
+import Lune.Prelude exposing (
+  Unit, unit,
+  Int, String,
+  IO, putStrLn, sleepMs,
+  addInt, appendString, showInt,
+  Fiber, spawn, yield,
+  STM, TVar, atomically, newTVar, readTVar, writeTVar
+)
+
+main : IO Unit
+main =
+  do
+    tv <- atomically (newTVar 0)
+
+    _ <- spawn (loop tv)
+    _ <- spawn (loop tv)
+
+    _ <- sleepMs 1000
+    n <- atomically (readTVar tv)
+    putStrLn (appendString "counter=" (showInt n))
+
+loop : TVar Int -> IO Unit
+loop tv =
+  do
+    _ <- atomically
+      (do
+        n <- readTVar tv
+        _ <- writeTVar tv (addInt n 1)
+        pure unit
+      )
+    _ <- yield
+    loop tv

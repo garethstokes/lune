@@ -1,0 +1,16 @@
+module RecordsDemo exposing (Point, origin, moveRight)
+
+import Prelude exposing (..)
+
+type alias Point =
+  { x : Int
+  , y : Int
+  }
+
+origin : Point
+origin =
+  { x = 0, y = 0 }
+
+moveRight : Int -> Point -> Point
+moveRight dx p =
+  { p | x = addInt p.x dx }
