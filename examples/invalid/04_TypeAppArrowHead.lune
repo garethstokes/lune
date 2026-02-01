@@ -1,0 +1,5 @@
+module Bad exposing (f)
+
+f : (Int -> Int) Bool
+f =
+  unit

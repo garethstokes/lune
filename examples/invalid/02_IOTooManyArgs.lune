@@ -1,0 +1,5 @@
+module Bad exposing (x)
+
+x : IO Int Bool
+x =
+  unit
