@@ -90,7 +90,7 @@ typeSigDecl :: Parser Decl
 typeSigDecl = do
   name <- identifier
   symbol ":"
-  ty <- parseTypeSameLine
+  ty <- parseQualTypeSameLine
   scn
   pure (DeclTypeSig name ty)
 
@@ -151,9 +151,34 @@ parseType :: Parser Type
 parseType =
   parseTypeWith sc
 
-parseTypeSameLine :: Parser Type
-parseTypeSameLine =
-  parseTypeWith scTypeSig
+parseQualTypeSameLine :: Parser QualType
+parseQualTypeSameLine =
+  parseQualTypeWith scTypeSig
+
+parseQualTypeWith :: Parser () -> Parser QualType
+parseQualTypeWith spaceConsumer =
+  choice
+    [ try $ do
+        cs <- parseConstraintsWith spaceConsumer
+        L.symbol spaceConsumer "=>"
+        QualType cs <$> parseTypeWith spaceConsumer
+    , QualType [] <$> parseTypeWith spaceConsumer
+    ]
+
+parseConstraintsWith :: Parser () -> Parser [Constraint]
+parseConstraintsWith spaceConsumer =
+  choice
+    [ between (sym "(") (sym ")") (constraintWith spaceConsumer `sepBy1` sym ",")
+    , pure <$> constraintWith spaceConsumer
+    ]
+  where
+    sym = L.symbol spaceConsumer
+
+constraintWith :: Parser () -> Parser Constraint
+constraintWith spaceConsumer = do
+  cls <- typeConstructorWith spaceConsumer
+  args <- some (typeAtomWith spaceConsumer)
+  pure Constraint {constraintClass = cls, constraintArgs = args}
 
 parseTypeWith :: Parser () -> Parser Type
 parseTypeWith spaceConsumer = parseArrowType

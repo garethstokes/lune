@@ -17,6 +17,7 @@ library
       Lune.Type
       Lune.Infer
       Lune.Check
+      Lune.Kind
 
   hs-source-dirs:   src
   build-depends:

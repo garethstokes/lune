@@ -1,14 +1,19 @@
 module Lune.Type
   ( Type (..)
+  , Constraint (..)
   , Scheme (..)
   , Subst
   , TypeEnv
   , MonadInfer (..)
   , nullSubst
   , ftvType
+  , ftvConstraint
+  , ftvConstraints
   , ftvScheme
   , ftvEnv
   , applySubstType
+  , applySubstConstraint
+  , applySubstConstraints
   , applySubstScheme
   , applySubstEnv
   , composeSubst
@@ -30,7 +35,13 @@ data Type
   | TRecord [(Text, Type)]
   deriving (Eq, Ord, Show)
 
-data Scheme = Forall [Text] Type
+data Constraint = Constraint
+  { constraintClass :: Text
+  , constraintArgs :: [Type]
+  }
+  deriving (Eq, Ord, Show)
+
+data Scheme = Forall [Text] [Constraint] Type
   deriving (Eq, Show)
 
 type Subst = Map Text Type
@@ -57,9 +68,17 @@ ftvType ty =
     TRecord fields ->
       foldMap (ftvType . snd) fields
 
+ftvConstraint :: Constraint -> Set Text
+ftvConstraint constraint =
+  foldMap ftvType (constraintArgs constraint)
+
+ftvConstraints :: [Constraint] -> Set Text
+ftvConstraints =
+  foldMap ftvConstraint
+
 ftvScheme :: Scheme -> Set Text
-ftvScheme (Forall vars ty) =
-  ftvType ty Set.\\ Set.fromList vars
+ftvScheme (Forall vars constraints ty) =
+  (ftvConstraints constraints <> ftvType ty) Set.\\ Set.fromList vars
 
 ftvEnv :: TypeEnv -> Set Text
 ftvEnv env =
@@ -79,9 +98,17 @@ applySubstType subst ty =
     TRecord fields ->
       TRecord [(name, applySubstType subst fieldTy) | (name, fieldTy) <- fields]
 
+applySubstConstraint :: Subst -> Constraint -> Constraint
+applySubstConstraint subst constraint =
+  constraint {constraintArgs = map (applySubstType subst) (constraintArgs constraint)}
+
+applySubstConstraints :: Subst -> [Constraint] -> [Constraint]
+applySubstConstraints subst =
+  map (applySubstConstraint subst)
+
 applySubstScheme :: Subst -> Scheme -> Scheme
-applySubstScheme subst (Forall vars ty) =
-  Forall vars (applySubstType subst' ty)
+applySubstScheme subst (Forall vars constraints ty) =
+  Forall vars (applySubstConstraints subst' constraints) (applySubstType subst' ty)
   where
     subst' = foldr Map.delete subst vars
 
@@ -93,16 +120,16 @@ composeSubst :: Subst -> Subst -> Subst
 composeSubst s1 s2 =
   Map.map (applySubstType s1) s2 <> s1
 
-generalize :: TypeEnv -> Type -> Scheme
-generalize env ty =
-  Forall vars ty
+generalize :: TypeEnv -> [Constraint] -> Type -> Scheme
+generalize env constraints ty =
+  Forall vars constraints ty
   where
-    vars = Set.toList (ftvType ty Set.\\ ftvEnv env)
+    vars = Set.toList ((ftvConstraints constraints <> ftvType ty) Set.\\ ftvEnv env)
 
-instantiate :: MonadInfer m => Scheme -> m Type
-instantiate (Forall vars ty) = do
+instantiate :: MonadInfer m => Scheme -> m ([Constraint], Type)
+instantiate (Forall vars constraints ty) = do
   subst <- buildSubst vars
-  pure (applySubstType subst ty)
+  pure (applySubstConstraints subst constraints, applySubstType subst ty)
   where
     buildSubst [] =
       pure Map.empty

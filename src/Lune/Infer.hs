@@ -122,7 +122,7 @@ varBind v t
   | otherwise =
       pure (Map.singleton v t)
 
-inferExpr :: TypeEnv -> S.Expr -> InferM (Subst, Type)
+inferExpr :: TypeEnv -> S.Expr -> InferM (Subst, [Constraint], Type)
 inferExpr env expr =
   case expr of
     S.Var name ->
@@ -130,43 +130,47 @@ inferExpr env expr =
         Nothing ->
           throwInfer (UnboundVariable name)
         Just scheme -> do
-          ty <- instantiate scheme
-          pure (nullSubst, ty)
+          (constraints, ty) <- instantiate scheme
+          pure (nullSubst, constraints, ty)
 
     S.StringLit _ ->
-      pure (nullSubst, TCon "String")
+      pure (nullSubst, [], TCon "String")
 
     S.IntLit _ ->
-      pure (nullSubst, TCon "Int")
+      pure (nullSubst, [], TCon "Int")
 
     S.App f x -> do
-      (s1, t1) <- inferExpr env f
-      (s2, t2) <- inferExpr (applySubstEnv s1 env) x
+      (s1, c1, t1) <- inferExpr env f
+      (s2, c2, t2) <- inferExpr (applySubstEnv s1 env) x
       tv <- freshTypeVar
       s3 <- unify (applySubstType s2 t1) (TArrow t2 tv)
       let s = s3 `composeSubst` s2 `composeSubst` s1
-      pure (s, applySubstType s tv)
+          c = applySubstConstraints s (c1 <> c2)
+      pure (s, c, applySubstType s tv)
 
     S.Lam pats body -> do
       (envArgs, argTypes) <- bindLambdaPatterns pats
-      (s1, tBody) <- inferExpr (envArgs <> env) body
+      (s1, c1, tBody) <- inferExpr (envArgs <> env) body
       let argTypes' = map (applySubstType s1) argTypes
-      pure (s1, foldr TArrow tBody argTypes')
+          c = applySubstConstraints s1 c1
+      pure (s1, c, foldr TArrow tBody argTypes')
 
     S.LetIn name bound body -> do
-      (s1, t1) <- inferExpr env bound
+      (s1, c1, t1) <- inferExpr env bound
       let env1 = applySubstEnv s1 env
-          scheme = generalize env1 t1
+          scheme = generalize env1 c1 t1
           env2 = Map.insert name scheme env1
-      (s2, t2) <- inferExpr env2 body
-      pure (s2 `composeSubst` s1, t2)
+      (s2, c2, t2) <- inferExpr env2 body
+      let sFinal = s2 `composeSubst` s1
+      pure (sFinal, applySubstConstraints sFinal c2, applySubstType sFinal t2)
 
     S.Case scrut alts -> do
-      (s0, tScrut0) <- inferExpr env scrut
+      (s0, c0, tScrut0) <- inferExpr env scrut
       tvRes <- freshTypeVar
       let env0 = applySubstEnv s0 env
-      (sFinal, _) <- foldM (inferAlt tScrut0 tvRes env0) (s0, tvRes) alts
-      pure (sFinal, applySubstType sFinal tvRes)
+      (sFinal, cAlts) <- foldM (inferAlt tScrut0 tvRes env0) (s0, []) alts
+      let cFinal = applySubstConstraints sFinal (c0 <> cAlts)
+      pure (sFinal, cFinal, applySubstType sFinal tvRes)
 
     S.DoBlock _ ->
       throwInfer UnexpectedDoBlock
@@ -180,19 +184,21 @@ inferExpr env expr =
     S.FieldAccess base field ->
       inferFieldAccess env base field
   where
-    inferAlt :: Type -> Type -> TypeEnv -> (Subst, Type) -> Alt -> InferM (Subst, Type)
-    inferAlt scrutTy resTy envBase (sAcc, _) (Alt pat body) = do
+    inferAlt :: Type -> Type -> TypeEnv -> (Subst, [Constraint]) -> Alt -> InferM (Subst, [Constraint])
+    inferAlt scrutTy resTy envBase (sAcc, cAcc) (Alt pat body) = do
       let env1 = applySubstEnv sAcc envBase
           scrutTy' = applySubstType sAcc scrutTy
           resTy' = applySubstType sAcc resTy
-      (patEnv, patTy) <- inferPattern env1 pat
+      (patEnv, cPat, patTy) <- inferPattern env1 pat
       s1 <- unify scrutTy' patTy
       let env2 = applySubstEnv s1 (patEnv <> env1)
-      (sBody, bodyTy) <- inferExpr env2 body
+          c1 = applySubstConstraints s1 (cAcc <> cPat)
+      (sBody, cBody, bodyTy) <- inferExpr env2 body
       let s' = sBody `composeSubst` s1 `composeSubst` sAcc
+          c2 = applySubstConstraints s' (c1 <> cBody)
       sRes <- unify (applySubstType s' resTy') (applySubstType s' bodyTy)
       let sFinal = sRes `composeSubst` s'
-      pure (sFinal, applySubstType sFinal resTy)
+      pure (sFinal, applySubstConstraints sFinal c2)
 
 bindLambdaPatterns :: [S.Pattern] -> InferM (TypeEnv, [Type])
 bindLambdaPatterns pats =
@@ -202,7 +208,7 @@ bindLambdaPatterns pats =
       case pat of
         S.PVar name -> do
           tv <- freshTypeVar
-          let envAcc' = Map.insert name (Forall [] tv) envAcc
+          let envAcc' = Map.insert name (Forall [] [] tv) envAcc
           pure (envAcc', tys <> [tv])
         S.PWildcard -> do
           tv <- freshTypeVar
@@ -210,26 +216,26 @@ bindLambdaPatterns pats =
         _ ->
           throwInfer (UnsupportedPattern pat)
 
-inferPattern :: TypeEnv -> S.Pattern -> InferM (TypeEnv, Type)
+inferPattern :: TypeEnv -> S.Pattern -> InferM (TypeEnv, [Constraint], Type)
 inferPattern env pat =
   case pat of
     S.PVar name -> do
       tv <- freshTypeVar
-      pure (Map.singleton name (Forall [] tv), tv)
+      pure (Map.singleton name (Forall [] [] tv), [], tv)
 
     S.PWildcard -> do
       tv <- freshTypeVar
-      pure (Map.empty, tv)
+      pure (Map.empty, [], tv)
 
     S.PCon conName subpats -> do
       scheme <-
         case Map.lookup conName env of
           Nothing -> throwInfer (UnboundVariable conName)
           Just s -> pure s
-      conTy <- instantiate scheme
+      (conConstraints, conTy) <- instantiate scheme
       (argTys, resTy) <- peelArrows conName (length subpats) conTy
-      (sFinal, envFinal, resFinal) <- foldM (inferSubPattern env) (nullSubst, Map.empty, resTy) (zip subpats argTys)
-      pure (applySubstEnv sFinal envFinal, applySubstType sFinal resFinal)
+      (sFinal, cFinal, envFinal, resFinal) <- foldM (inferSubPattern env) (nullSubst, conConstraints, Map.empty, resTy) (zip subpats argTys)
+      pure (applySubstEnv sFinal envFinal, applySubstConstraints sFinal cFinal, applySubstType sFinal resFinal)
 
 peelArrows :: Text -> Int -> Type -> InferM ([Type], Type)
 peelArrows _ 0 ty =
@@ -242,62 +248,65 @@ peelArrows name n ty =
     _ ->
       throwInfer (ConstructorArityMismatch name n 0)
 
-inferSubPattern :: TypeEnv -> (Subst, TypeEnv, Type) -> (S.Pattern, Type) -> InferM (Subst, TypeEnv, Type)
-inferSubPattern env (sAcc, envAcc, resTy) (subPat, expectedTy) = do
+inferSubPattern :: TypeEnv -> (Subst, [Constraint], TypeEnv, Type) -> (S.Pattern, Type) -> InferM (Subst, [Constraint], TypeEnv, Type)
+inferSubPattern env (sAcc, cAcc, envAcc, resTy) (subPat, expectedTy) = do
   let expectedTy' = applySubstType sAcc expectedTy
-  (subEnv, subTy) <- inferPattern (applySubstEnv sAcc env) subPat
+  (subEnv, cSub, subTy) <- inferPattern (applySubstEnv sAcc env) subPat
   s1 <- unify (applySubstType sAcc subTy) expectedTy'
   let sFinal = s1 `composeSubst` sAcc
+      cFinal = applySubstConstraints sFinal (cAcc <> cSub)
       envAcc' = applySubstEnv s1 (envAcc <> subEnv)
       resTy' = applySubstType s1 resTy
-  pure (sFinal, envAcc', resTy')
+  pure (sFinal, cFinal, envAcc', resTy')
 
-inferRecordLiteral :: TypeEnv -> [(Text, S.Expr)] -> InferM (Subst, Type)
+inferRecordLiteral :: TypeEnv -> [(Text, S.Expr)] -> InferM (Subst, [Constraint], Type)
 inferRecordLiteral env fields = do
-  (s, fieldTypes) <- foldM inferField (nullSubst, []) fields
+  (s, c, fieldTypes) <- foldM inferField (nullSubst, [], []) fields
   let recordTy = TRecord (sortOn fst fieldTypes)
-  pure (s, applySubstType s recordTy)
+  pure (s, applySubstConstraints s c, applySubstType s recordTy)
   where
-    inferField (sAcc, acc) (name, e) = do
-      (s1, t1) <- inferExpr (applySubstEnv sAcc env) e
+    inferField (sAcc, cAcc, acc) (name, e) = do
+      (s1, c1, t1) <- inferExpr (applySubstEnv sAcc env) e
       let sFinal = s1 `composeSubst` sAcc
-      pure (sFinal, acc <> [(name, applySubstType sFinal t1)])
+          cFinal = applySubstConstraints sFinal (cAcc <> c1)
+      pure (sFinal, cFinal, acc <> [(name, applySubstType sFinal t1)])
 
-inferFieldAccess :: TypeEnv -> S.Expr -> Text -> InferM (Subst, Type)
+inferFieldAccess :: TypeEnv -> S.Expr -> Text -> InferM (Subst, [Constraint], Type)
 inferFieldAccess env base field = do
-  (s1, baseTy) <- inferExpr env base
+  (s1, c1, baseTy) <- inferExpr env base
   case applySubstType s1 baseTy of
     TRecord fields ->
       case lookup field fields of
         Nothing -> throwInfer (MissingRecordField field)
-        Just fieldTy -> pure (s1, fieldTy)
+        Just fieldTy -> pure (s1, applySubstConstraints s1 c1, fieldTy)
     other ->
       throwInfer (NotARecord other)
 
-inferRecordUpdate :: TypeEnv -> S.Expr -> [(Text, S.Expr)] -> InferM (Subst, Type)
+inferRecordUpdate :: TypeEnv -> S.Expr -> [(Text, S.Expr)] -> InferM (Subst, [Constraint], Type)
 inferRecordUpdate env base updates = do
-  (sBase, baseTy0) <- inferExpr env base
+  (sBase, cBase, baseTy0) <- inferExpr env base
   case applySubstType sBase baseTy0 of
     TRecord fields0 -> do
       let env1 = applySubstEnv sBase env
-      (sFinal, _) <- foldM (checkUpdate env1 fields0) (sBase, fields0) updates
-      pure (sFinal, applySubstType sFinal (TRecord fields0))
+      (sFinal, cFinal) <- foldM (checkUpdate env1 fields0) (sBase, cBase) updates
+      pure (sFinal, applySubstConstraints sFinal cFinal, applySubstType sFinal (TRecord fields0))
     other ->
       throwInfer (NotARecord other)
   where
-    checkUpdate env1 fields (sAcc, _) (name, expr) =
+    checkUpdate env1 fields (sAcc, cAcc) (name, expr) =
       case lookup name fields of
         Nothing ->
           throwInfer (MissingRecordField name)
         Just fieldTy -> do
-          (s1, exprTy) <- inferExpr (applySubstEnv sAcc env1) expr
+          (s1, c1, exprTy) <- inferExpr (applySubstEnv sAcc env1) expr
           let expectedTy = applySubstType sAcc fieldTy
           s2 <- unify (applySubstType s1 expectedTy) exprTy
           let sFinal = s2 `composeSubst` s1 `composeSubst` sAcc
-          pure (sFinal, fields)
+              cFinal = applySubstConstraints sFinal (cAcc <> c1)
+          pure (sFinal, cFinal)
 
 skolemize :: Scheme -> InferM Type
-skolemize (Forall vars ty) = do
+skolemize (Forall vars _ ty) = do
   subst <- foldM addSkolem Map.empty vars
   pure (applySubstType subst ty)
   where

@@ -17,7 +17,7 @@ data Import = Import
   deriving (Show)
 
 data Decl
-  = DeclTypeSig Text Type
+  = DeclTypeSig Text QualType
   | DeclValue Text [Pattern] Expr
   | DeclType Text [Text] [TypeCtor]
   | DeclTypeAlias Text [Text] Type
@@ -33,6 +33,18 @@ data Type
   | TypeApp Type Type
   | TypeArrow Type Type
   | TypeRecord [(Text, Type)]
+  deriving (Show)
+
+data Constraint = Constraint
+  { constraintClass :: Text
+  , constraintArgs :: [Type]
+  }
+  deriving (Show)
+
+data QualType = QualType
+  { qualConstraints :: [Constraint]
+  , qualType :: Type
+  }
   deriving (Show)
 
 data Expr

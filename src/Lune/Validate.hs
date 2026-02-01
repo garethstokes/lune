@@ -67,7 +67,8 @@ declaredArities =
 validateDecl :: ArityEnv -> Decl -> Either ValidateError ()
 validateDecl env decl =
   case decl of
-    DeclTypeSig _ ty ->
+    DeclTypeSig _ (QualType constraints ty) -> do
+      mapM_ (validateConstraint env) constraints
       validateType env ty
     DeclType _ _ ctors ->
       mapM_ (validateTypeCtor env) ctors
@@ -77,6 +78,10 @@ validateDecl env decl =
       validateType env ctorTy
     DeclValue {} ->
       Right ()
+
+validateConstraint :: ArityEnv -> Constraint -> Either ValidateError ()
+validateConstraint env constraint =
+  mapM_ (validateType env) (constraintArgs constraint)
 
 validateTypeCtor :: ArityEnv -> TypeCtor -> Either ValidateError ()
 validateTypeCtor env (TypeCtor _ args) =

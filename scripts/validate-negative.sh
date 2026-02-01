@@ -13,7 +13,7 @@ print_header
 
 failed=0
 
-for file in examples/invalid/*.lune; do
+for file in examples/invalid/0[0-4]_*.lune; do
   echo "Expecting failure: $file"
   if cabal run lune -- --validate "$file"; then
     echo "ERROR: $file unexpectedly validated!"

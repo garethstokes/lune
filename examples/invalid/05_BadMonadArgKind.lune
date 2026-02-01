@@ -1,0 +1,5 @@
+module Bad exposing (x)
+
+x : Monad Int => Int
+x = 1
+
