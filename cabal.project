@@ -1,0 +1,6 @@
+packages: .
+
+store-dir: .cabal-local/store
+logs-dir: .cabal-local/logs
+remote-repo-cache: .cabal-local/packages
+build-summary: .cabal-local/logs/build.log
