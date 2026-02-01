@@ -1,6 +1,7 @@
 # Haskell
 dist/
 dist-newstyle/
+.cabal-local/
 .cabal-sandbox/
 cabal.sandbox.config
 *.o

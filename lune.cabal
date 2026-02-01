@@ -1,0 +1,35 @@
+cabal-version:      3.0
+name:               lune
+version:            0.1.0.0
+license:            BSD-3-Clause
+author:             Gareth Stokes
+maintainer:         you@example.com
+build-type:         Simple
+
+-- Lune Compiler v0.1
+
+library
+  exposed-modules:
+      Lune.Syntax
+      Lune.Parser
+
+  hs-source-dirs:   src
+  build-depends:
+      base >=4.16 && <4.21,
+      text,
+      megaparsec,
+      parser-combinators
+
+  default-language: Haskell2010
+  default-extensions: OverloadedStrings
+
+executable lune
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:
+      base,
+      text,
+      lune
+
+  default-language: Haskell2010
+  default-extensions: OverloadedStrings
