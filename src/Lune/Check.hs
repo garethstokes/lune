@@ -12,6 +12,7 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Lune.Builtins as Builtins
 import Lune.Desugar (desugarModule)
 import qualified Lune.ClassEnv as CE
 import qualified Lune.InstanceEnv as IE
@@ -62,7 +63,7 @@ typecheckModule m = do
 
   checkSigKinds kindEnv (CE.classKindEnv classEnv) decls
 
-  let env0 = builtinEnv <> ctorEnv <> methodEnv <> sigEnv
+  let env0 = Builtins.builtinSchemes <> ctorEnv <> methodEnv <> sigEnv
 
   checkInstanceMethods env0 aliasEnv classEnv instanceEnv
   go env0 [] (valueDecls decls)
@@ -241,28 +242,6 @@ ctorsFromDecl aliasEnv decl =
       let argTys = map (expandAliases aliasEnv . convertType aliasEnv) args
           ty = foldr TArrow resultTy argTys
        in (name, Forall vars [] ty)
-
-builtinEnv :: TypeEnv
-builtinEnv =
-  Map.fromList
-    [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
-    , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
-    , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
-    , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
-    , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
-    , ("unit", Forall [] [] (TCon "Unit"))
-    , ("True", Forall [] [] (TCon "Bool"))
-    , ("False", Forall [] [] (TCon "Bool"))
-    , ("Nil", Forall ["a"] [] (TApp (TCon "List") (TVar "a")))
-    , ("Cons", Forall ["a"] [] (TArrow (TVar "a") (TArrow (TApp (TCon "List") (TVar "a")) (TApp (TCon "List") (TVar "a")))))
-    , ("Ok", Forall ["e", "a"] [] (TArrow (TVar "a") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    , ("Err", Forall ["e", "a"] [] (TArrow (TVar "e") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    , ("pureM", Forall ["m", "a"] [Constraint "Monad" [TVar "m"]] (TArrow (TVar "a") (TApp (TVar "m") (TVar "a"))))
-    , ("thenM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TApp (TVar "m") (TVar "b")) (TApp (TVar "m") (TVar "b")))))
-    , ("bindM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TVar "m") (TVar "b"))) (TApp (TVar "m") (TVar "b")))))
-    ]
 
 renderScheme :: Scheme -> Text
 renderScheme (Forall vars constraints ty) =

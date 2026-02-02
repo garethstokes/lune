@@ -1,9 +1,11 @@
 module Main where
 
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
+import System.Exit (ExitCode (..), exitFailure)
+import System.Process (readProcessWithExitCode)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
+import qualified Lune.Codegen.C as Codegen
 import Lune.Desugar (desugarModule)
 import qualified Lune.Elaborate as Elab
 import qualified Lune.Eval as Eval
@@ -15,11 +17,48 @@ import Lune.Validate (validateModule)
 main :: IO ()
 main = do
   args <- getArgs
-  case parseArgs args of
+  case parseCommand args of
     Left msg ->
       putStrLn msg
-    Right opts ->
+    Right cmd ->
+      runCommand cmd
+
+data Command
+  = CmdRun Options
+  | CmdBuild BuildOptions
+
+data BuildOptions = BuildOptions
+  { buildInput :: FilePath
+  , buildOutput :: FilePath
+  }
+
+parseCommand :: [String] -> Either String Command
+parseCommand args =
+  case args of
+    ("build" : rest) ->
+      CmdBuild <$> parseBuildArgs rest
+    _ ->
+      CmdRun <$> parseArgs args
+
+parseBuildArgs :: [String] -> Either String BuildOptions
+parseBuildArgs args =
+  case args of
+    [path, "-o", out] ->
+      Right (BuildOptions path out)
+    [path, "--output", out] ->
+      Right (BuildOptions path out)
+    _ ->
+      Left buildUsage
+  where
+    buildUsage = "Usage: lune build <file.lune> -o <exe>"
+
+runCommand :: Command -> IO ()
+runCommand cmd =
+  case cmd of
+    CmdRun opts ->
       run opts
+    CmdBuild opts ->
+      build opts
 
 data Options = Options
   { optPath :: FilePath
@@ -160,3 +199,55 @@ evalAndPrint env name =
       exitFailure
     Right v ->
       print v
+
+build :: BuildOptions -> IO ()
+build opts = do
+  surface <- parseFile (buildInput opts)
+  let mod' = desugarModule surface
+
+  case validateModule mod' of
+    Left err -> do
+      putStrLn (show err)
+      exitFailure
+    Right () ->
+      pure ()
+
+  case typecheckModule mod' of
+    Left err -> do
+      putStrLn (show err)
+      exitFailure
+    Right _ ->
+      pure ()
+
+  coreMod <-
+    case Elab.prepareTypedModule mod' >>= Elab.elaborateModule of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right coreMod ->
+        pure coreMod
+
+  cSource <-
+    case Codegen.codegenHelloModule coreMod of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right cSrc ->
+        pure cSrc
+
+  let cPath = buildOutput opts <> ".c"
+  writeFile cPath (T.unpack cSource)
+
+  (ec, ccOut, ccErr) <-
+    readProcessWithExitCode
+      "cc"
+      ["-std=c99", "-O2", "-o", buildOutput opts, cPath]
+      ""
+
+  case ec of
+    ExitSuccess ->
+      pure ()
+    ExitFailure _ -> do
+      putStrLn ccOut
+      putStrLn ccErr
+      exitFailure

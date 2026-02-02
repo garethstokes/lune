@@ -22,8 +22,14 @@ library
       Lune.ClassEnv
       Lune.InstanceEnv
       Lune.Core
+      Lune.Codegen.C
       Lune.Elaborate
       Lune.Eval
+
+  other-modules:
+      Lune.Builtins
+      Lune.Eval.Types
+      Lune.Eval.Runtime
 
   hs-source-dirs:   src
   build-depends:
@@ -43,6 +49,7 @@ executable lune
   build-depends:
       base,
       containers,
+      process,
       text,
       lune
 

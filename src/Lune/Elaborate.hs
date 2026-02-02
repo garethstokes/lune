@@ -11,6 +11,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Lune.Builtins as Builtins
 import qualified Lune.Check as Check
 import qualified Lune.ClassEnv as CE
 import Lune.Core
@@ -84,26 +85,16 @@ buildMethodIndex classEnv =
             Just _ ->
               Left (ElaborateDuplicateMethodName methodName)
 
-instanceDictName :: Text -> Text -> Text
-instanceDictName cls headCon =
-  "$dict" <> cls <> "_" <> headCon
-
 type InstanceDicts = Map (Text, Text) Text
 
 buildInstanceDicts :: IE.InstanceEnv -> InstanceDicts
 buildInstanceDicts instEnv =
-  fromInstances <> builtinInstanceDicts
+  fromInstances <> Builtins.builtinInstanceDicts
   where
     fromInstances =
       Map.fromList
-        [ ((IE.instanceInfoClass inst, IE.instanceInfoHeadCon inst), instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst))
+        [ ((IE.instanceInfoClass inst, IE.instanceInfoHeadCon inst), Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst))
         | inst <- Map.elems instEnv
-        ]
-
-    builtinInstanceDicts =
-      Map.fromList
-        [ (("Monad", "IO"), instanceDictName "Monad" "IO")
-        , (("Monad", "Result"), instanceDictName "Monad" "Result")
         ]
 
 elaborateModule :: TypedModule -> Either ElaborateError CoreModule
@@ -117,7 +108,7 @@ elaborateModule tm = do
   let decls = S.modDecls (tmModule tm)
       aliasEnv = buildAliasEnv decls
       ctorEnv = buildCtorEnv aliasEnv decls
-      env0 = builtinEnv <> ctorEnv <> methodEnv <> tmValueSchemes tm
+      env0 = Builtins.builtinSchemes <> ctorEnv <> methodEnv <> tmValueSchemes tm
       instanceDicts = buildInstanceDicts (tmInstanceEnv tm)
 
   dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts env0) (Map.elems (tmInstanceEnv tm))
@@ -126,7 +117,7 @@ elaborateModule tm = do
   pure
     CoreModule
       { coreName = S.modName (tmModule tm)
-      , coreDecls = dictDecls <> valueDecls
+      , coreDecls = Builtins.builtinCoreDecls <> dictDecls <> valueDecls
       }
 
 -- Exposed for debugging/smaller tests.
@@ -138,7 +129,7 @@ elaborateExpr env classEnv instanceEnv expr = do
       Left err -> Left (ElaborateClassError err)
       Right e -> Right e
   let instanceDicts = buildInstanceDicts instanceEnv
-      env0 = builtinEnv <> methodEnv <> env
+      env0 = Builtins.builtinSchemes <> methodEnv <> env
   case I.runInferM (inferCoreExpr methodIndex env0 expr) of
     Left err ->
       Left (ElaborateInferError "<expr>" err)
@@ -147,7 +138,7 @@ elaborateExpr env classEnv instanceEnv expr = do
 
 elabInstanceDict :: MethodIndex -> InstanceDicts -> TypeEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
 elabInstanceDict methodIndex instanceDicts env0 inst = do
-  let dictName = instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst)
+  let dictName = Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst)
   fields <- mapM elabMethod (Map.toList (IE.instanceInfoMethods inst))
   pure (CoreDecl dictName (CRecord fields))
   where
@@ -551,22 +542,3 @@ ctorsFromDecl aliasEnv decl =
       let argTys = map (expandAliases aliasEnv . convertType aliasEnv) args
           ty = foldr TArrow resultTy argTys
        in (name, Forall vars [] ty)
-
-builtinEnv :: TypeEnv
-builtinEnv =
-  Map.fromList
-    [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
-    , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
-    , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
-    , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
-    , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
-    , ("unit", Forall [] [] (TCon "Unit"))
-    , ("True", Forall [] [] (TCon "Bool"))
-    , ("False", Forall [] [] (TCon "Bool"))
-    , ("Nil", Forall ["a"] [] (TApp (TCon "List") (TVar "a")))
-    , ("Cons", Forall ["a"] [] (TArrow (TVar "a") (TArrow (TApp (TCon "List") (TVar "a")) (TApp (TCon "List") (TVar "a")))))
-    , ("Ok", Forall ["e", "a"] [] (TArrow (TVar "a") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    , ("Err", Forall ["e", "a"] [] (TArrow (TVar "e") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    ]
