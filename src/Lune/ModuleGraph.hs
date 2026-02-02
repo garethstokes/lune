@@ -13,7 +13,7 @@ import qualified Data.Text as T
 import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
 import System.Directory (doesFileExist)
-import System.FilePath (splitDirectories, (</>))
+import System.FilePath (splitDirectories, takeDirectory, (</>))
 
 data ModuleError
   = ModuleParseError FilePath String
@@ -39,6 +39,7 @@ data Program = Program
 
 loadProgram :: FilePath -> IO (Either ModuleError Program)
 loadProgram entryPath = do
+  let entryDir = takeDirectory entryPath
   entryResult <- Parser.parseFileEither entryPath
   case entryResult of
     Left err ->
@@ -51,7 +52,7 @@ loadProgram entryPath = do
               , lmPath = entryPath
               , lmModule = entryModule
               }
-      loaded <- loadModule [] Map.empty entryLoaded
+      loaded <- loadModule entryDir [] Map.empty entryLoaded
       case loaded of
         Left err ->
           pure (Left err)
@@ -65,8 +66,8 @@ loadProgram entryPath = do
                   }
             )
 
-loadModule :: [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
-loadModule stack loaded m =
+loadModule :: FilePath -> [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
+loadModule entryDir stack loaded m =
   case Map.lookup (lmName m) loaded of
     Just existing ->
       if lmPath existing == lmPath m
@@ -76,7 +77,7 @@ loadModule stack loaded m =
       if lmName m `elem` stack
         then pure (Left (ImportCycle (reverse (lmName m : stack))))
         else do
-          deps <- loadImports (lmName m : stack) loaded (implicitPreludeImports m (S.modImports (lmModule m)))
+          deps <- loadImports entryDir (lmName m : stack) loaded (implicitPreludeImports m (S.modImports (lmModule m)))
           case deps of
             Left err ->
               pure (Left err)
@@ -102,8 +103,8 @@ isPreludePath path =
     ("prelude" : _) -> True
     _ -> False
 
-loadImports :: [Text] -> Map Text LoadedModule -> [S.Import] -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
-loadImports stack loaded imports =
+loadImports :: FilePath -> [Text] -> Map Text LoadedModule -> [S.Import] -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
+loadImports entryDir stack loaded imports =
   go loaded [] imports
   where
     go accLoaded accOrder [] =
@@ -114,7 +115,7 @@ loadImports stack loaded imports =
         Just _ ->
           go accLoaded accOrder rest
         Nothing -> do
-          resolved <- resolveModulePath modName
+          resolved <- resolveModulePath entryDir modName
           case resolved of
             Left err ->
               pure (Left err)
@@ -133,17 +134,24 @@ loadImports stack loaded imports =
                               , lmPath = path
                               , lmModule = m
                               }
-                      loadedRes <- loadModule stack accLoaded modInfo
+                      loadedRes <- loadModule entryDir stack accLoaded modInfo
                       case loadedRes of
                         Left err ->
                           pure (Left err)
                         Right (loaded', order') ->
                           go loaded' (accOrder <> order') rest
 
-resolveModulePath :: Text -> IO (Either ModuleError FilePath)
-resolveModulePath modName = do
-  let rel = moduleNameToPath modName
-      candidates = ["." </> rel, "prelude" </> rel]
+resolveModulePath :: FilePath -> Text -> IO (Either ModuleError FilePath)
+resolveModulePath entryDir modName = do
+  let (relDir, relDot) = moduleNameToPaths modName
+      localCandidates =
+        [ entryDir </> relDir
+        , entryDir </> relDot
+        , "." </> relDir
+        , "." </> relDot
+        ]
+      candidates =
+        dedupePaths (localCandidates <> ["prelude" </> relDir])
   found <- firstExisting candidates
   case found of
     Nothing ->
@@ -161,6 +169,27 @@ firstExisting paths =
       exists <- doesFileExist p
       if exists then pure (Just p) else go ps
 
-moduleNameToPath :: Text -> FilePath
-moduleNameToPath name =
+moduleNameToPaths :: Text -> (FilePath, FilePath)
+moduleNameToPaths name =
+  (moduleNameToDirPath name, moduleNameToDotPath name)
+
+moduleNameToDirPath :: Text -> FilePath
+moduleNameToDirPath name =
   foldl (</>) "" (splitDirectories (T.unpack (T.replace "." "/" name))) <> ".lune"
+
+moduleNameToDotPath :: Text -> FilePath
+moduleNameToDotPath name =
+  T.unpack name <> ".lune"
+
+dedupePaths :: [FilePath] -> [FilePath]
+dedupePaths =
+  go Map.empty
+  where
+    go _ [] =
+      []
+    go seen (p : ps) =
+      case Map.lookup p seen of
+        Just () ->
+          go seen ps
+        Nothing ->
+          p : go (Map.insert p () seen) ps

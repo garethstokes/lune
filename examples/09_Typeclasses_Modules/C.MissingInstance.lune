@@ -1,0 +1,16 @@
+module C.MissingInstance exposing (main)
+
+import A.Show exposing (Show(..))
+import Lune.IO
+import Lune.Prelude exposing (IO, Unit)
+
+printTwice : Show a => a -> IO Unit
+printTwice x =
+  do
+    IO.println (show x)
+    IO.println (show x)
+
+main : IO Unit
+main =
+  printTwice True
+

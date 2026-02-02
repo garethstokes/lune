@@ -194,10 +194,23 @@ runProgramPipeline opts = do
                       Right v ->
                         print v
                   Nothing ->
-                    let names = filter (`Map.member` env) (map qualify ["demo", "demo2"])
-                     in if null names
-                          then print (Map.keys env)
-                          else mapM_ (evalAndPrint env) names
+                    let demoNames = filter (`Map.member` env) (map qualify ["demo", "demo2"])
+                        mainName = qualify "main"
+                     in if not (null demoNames)
+                          then mapM_ (evalAndPrint env) demoNames
+                          else
+                            if Map.member mainName env
+                              then case Eval.evalExpr env (Core.CVar mainName) of
+                                Left err -> do
+                                  putStrLn (show err)
+                                  exitFailure
+                                Right v ->
+                                  case Eval.runIO v of
+                                    Left _ ->
+                                      print v
+                                    Right (world, _) ->
+                                      mapM_ (putStrLn . T.unpack) (Eval.worldStdout world)
+                              else print (Map.keys env)
         else
           if optCore opts
             then case Elab.prepareTypedModule mod' >>= Elab.elaborateModule of

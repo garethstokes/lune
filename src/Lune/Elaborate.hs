@@ -30,6 +30,7 @@ data ElaborateError
   | ElaborateMissingScheme Text
   | ElaborateInferError Text I.InferError
   | ElaborateUnresolvedConstraint Constraint
+  | ElaborateOverlappingInstances Constraint [Text]
   deriving (Show)
 
 data TypedModule = TypedModule
@@ -110,9 +111,10 @@ elaborateModule tm = do
       ctorEnv = buildCtorEnv aliasEnv decls
       env0 = Builtins.builtinSchemes <> ctorEnv <> methodEnv <> tmValueSchemes tm
       instanceDicts = buildInstanceDicts (tmInstanceEnv tm)
+      dictCandidates = buildDictCandidates aliasEnv (tmInstanceEnv tm)
 
-  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts env0 (tmClassEnv tm)) (Map.elems (tmInstanceEnv tm))
-  valueDecls <- mapM (elabValueDecl methodIndex instanceDicts env0 (tmClassEnv tm)) (valueDeclsOf decls)
+  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm)) (Map.elems (tmInstanceEnv tm))
+  valueDecls <- mapM (elabValueDecl methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm)) (valueDeclsOf decls)
 
   pure
     CoreModule
@@ -134,10 +136,10 @@ elaborateExpr env classEnv instanceEnv expr = do
     Left err ->
       Left (ElaborateInferError "<expr>" err)
     Right (s, _cs, _ty, core0) ->
-      resolveInstanceDicts s instanceDicts core0
+      resolveInstanceDicts s (buildDictCandidates Map.empty instanceEnv) core0
 
-elabInstanceDict :: MethodIndex -> InstanceDicts -> TypeEnv -> CE.ClassEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
-elabInstanceDict methodIndex instanceDicts env0 classEnv inst = do
+elabInstanceDict :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
+elabInstanceDict methodIndex instanceDicts dictCandidates env0 classEnv inst = do
   let dictName = Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst)
   fields <- mapM elabMethod (Map.toList (IE.instanceInfoMethods inst))
   superFields <- elabSuperDictFields classEnv instanceDicts inst
@@ -148,11 +150,11 @@ elabInstanceDict methodIndex instanceDicts env0 classEnv inst = do
         Left err ->
           Left (ElaborateInferError (IE.instanceInfoClass inst <> " " <> IE.instanceInfoHeadCon inst <> "." <> methodName) err)
         Right (s, _cs, _ty, core0) -> do
-          core <- resolveInstanceDicts s instanceDicts core0
+          core <- resolveInstanceDicts s dictCandidates core0
           Right (methodName, core)
 
-elabValueDecl :: MethodIndex -> InstanceDicts -> TypeEnv -> CE.ClassEnv -> S.Decl -> Either ElaborateError CoreDecl
-elabValueDecl methodIndex instanceDicts env0 classEnv decl =
+elabValueDecl :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> S.Decl -> Either ElaborateError CoreDecl
+elabValueDecl methodIndex instanceDicts dictCandidates env0 classEnv decl =
   case decl of
     S.DeclValue name args body -> do
       scheme <-
@@ -164,7 +166,7 @@ elabValueDecl methodIndex instanceDicts env0 classEnv decl =
         Left err ->
           Left (ElaborateInferError name err)
         Right (s, core0) -> do
-          core <- resolveInstanceDicts s instanceDicts core0
+          core <- resolveInstanceDicts s dictCandidates core0
           Right (CoreDecl name core)
     _ ->
       Left (ElaborateMissingScheme "<non-value decl>")
@@ -530,8 +532,8 @@ elabSuperDictFields classEnv instanceDicts inst = do
       let fieldName = "$super" <> superCls
       Right (fieldName, CVar dictName)
 
-resolveInstanceDicts :: Subst -> InstanceDicts -> CoreExpr -> Either ElaborateError CoreExpr
-resolveInstanceDicts subst instanceDicts =
+resolveInstanceDicts :: Subst -> [DictCandidate] -> CoreExpr -> Either ElaborateError CoreExpr
+resolveInstanceDicts subst dictCandidates =
   go
   where
     go expr =
@@ -564,16 +566,31 @@ resolveInstanceDicts subst instanceDicts =
       case constraintArgs c of
         [argTy] ->
           case headTypeCon argTy of
-            Just headCon ->
-              case Map.lookup (constraintClass c, headCon) instanceDicts of
-                Just dictName ->
-                  Right (CVar dictName)
-                Nothing ->
-                  Left (ElaborateUnresolvedConstraint c)
             Nothing ->
               Left (ElaborateUnresolvedConstraint c)
+            Just _ -> do
+              let matches =
+                    [ dictName
+                    | DictCandidate cls headTy dictName <- dictCandidates
+                    , cls == constraintClass c
+                    , instanceMatches headTy argTy
+                    ]
+              case matches of
+                [] ->
+                  Left (ElaborateUnresolvedConstraint c)
+                [dictName] ->
+                  Right (CVar dictName)
+                many ->
+                  Left (ElaborateOverlappingInstances c many)
         _ ->
           Left (ElaborateUnresolvedConstraint c)
+
+    instanceMatches instHead wanted =
+      case I.runInferM (I.unify instHead wanted) of
+        Left _ ->
+          False
+        Right _ ->
+          True
 
     headTypeCon ty =
       case ty of
@@ -583,6 +600,30 @@ resolveInstanceDicts subst instanceDicts =
           headTypeCon f
         _ ->
           Nothing
+
+data DictCandidate = DictCandidate Text Type Text
+
+buildDictCandidates :: AliasEnv -> IE.InstanceEnv -> [DictCandidate]
+buildDictCandidates aliasEnv instanceEnv =
+  builtinCandidates <> userCandidates
+  where
+    userCandidates =
+      [ DictCandidate (IE.instanceInfoClass inst) headTy (Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst))
+      | inst <- Map.elems instanceEnv
+      , let headTy = expandAliases aliasEnv (convertType aliasEnv (IE.instanceInfoHead inst))
+      ]
+
+    builtinCandidates =
+      [ DictCandidate cls (builtinHeadType headCon) dictName
+      | ((cls, headCon), dictName) <- Map.toList Builtins.builtinInstanceDicts
+      ]
+
+    builtinHeadType headCon =
+      case headCon of
+        "Result" ->
+          TApp (TCon "Result") (TVar "e")
+        other ->
+          TCon other
 
 buildCtorEnv :: AliasEnv -> [S.Decl] -> TypeEnv
 buildCtorEnv aliasEnv decls =

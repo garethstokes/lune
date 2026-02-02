@@ -1,0 +1,7 @@
+module A.Show exposing (Show(..))
+
+import Lune.Prelude exposing (String)
+
+class Show a where
+  show : a -> String
+

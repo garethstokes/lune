@@ -1,0 +1,5 @@
+module B.OrphanShowInt exposing ()
+
+instance Show Int where
+  show = \_ -> "x"
+

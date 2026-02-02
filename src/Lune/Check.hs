@@ -23,12 +23,23 @@ import Lune.Infer
 import Lune.Type
 import Lune.TypeConvert (AliasEnv, buildAliasEnv, convertType, expandAliases, schemeFromQualType)
 
+data InstanceCandidate = InstanceCandidate
+  { instanceCandidateClass :: Text
+  , instanceCandidateHead :: Type
+  , instanceCandidateLabel :: Text
+  }
+  deriving (Eq, Show)
+
 data TypecheckError
   = InValue Text InferError
   | InTypeSig Text KindError
   | InClass CE.ClassError
   | InInstance IE.InstanceError
   | InInstanceMethod Text InferError
+  | MissingInstance Text Constraint
+  | AmbiguousConstraint Text Constraint
+  | UnsupportedConstraint Text Constraint
+  | OverlappingInstances Text Constraint [Text]
 
 instance Show TypecheckError where
   show err =
@@ -43,6 +54,14 @@ instance Show TypecheckError where
         show instErr
       InInstanceMethod label inferErr ->
         T.unpack label <> ": " <> show inferErr
+      MissingInstance label c ->
+        T.unpack label <> ": missing instance for " <> T.unpack (renderConstraint c)
+      AmbiguousConstraint label c ->
+        T.unpack label <> ": cannot resolve constraint " <> T.unpack (renderConstraint c)
+      UnsupportedConstraint label c ->
+        T.unpack label <> ": unsupported constraint form " <> T.unpack (renderConstraint c)
+      OverlappingInstances label c matches ->
+        T.unpack label <> ": overlapping instances for " <> T.unpack (renderConstraint c) <> " (" <> T.unpack (T.intercalate ", " matches) <> ")"
 
 typecheckModule :: S.Module -> Either TypecheckError [(Text, Scheme)]
 typecheckModule m = do
@@ -64,9 +83,10 @@ typecheckModule m = do
   checkSigKinds kindEnv (CE.classKindEnv classEnv) decls
 
   let env0 = Builtins.builtinSchemes <> ctorEnv <> methodEnv <> sigEnv
+      instanceCandidates = builtinInstanceCandidates <> instanceCandidatesFromEnv aliasEnv instanceEnv
 
-  checkInstanceMethods env0 aliasEnv classEnv instanceEnv
-  go env0 [] (valueDecls decls)
+  checkInstanceMethods env0 aliasEnv classEnv instanceCandidates instanceEnv
+  go classEnv env0 [] instanceCandidates (valueDecls decls)
   where
     m' = desugarModule m
     decls = S.modDecls m'
@@ -75,15 +95,12 @@ typecheckModule m = do
     sigEnv = buildSigEnv aliasEnv decls
     ctorEnv = buildCtorEnv aliasEnv decls
 
-    go _ acc [] =
+    go _ _ acc _ [] =
       Right (reverse acc)
-    go env acc (decl : rest) =
-      case runInferM (checkDecl env sigEnv decl) of
-        Left err ->
-          Left (InValue (nameOf decl) err)
-        Right (name, scheme) ->
-          let env' = Map.insert name scheme env
-           in go env' ((name, scheme) : acc) rest
+    go classEnv0 env acc instances (decl : rest) = do
+      (name, scheme) <- checkDecl classEnv0 instances env sigEnv decl
+      let env' = Map.insert name scheme env
+      go classEnv0 env' ((name, scheme) : acc) instances rest
 
     nameOf (n, _, _) = n
 
@@ -102,8 +119,8 @@ checkSigKinds kindEnv classKinds =
         _ ->
           Right ()
 
-checkInstanceMethods :: TypeEnv -> AliasEnv -> CE.ClassEnv -> IE.InstanceEnv -> Either TypecheckError ()
-checkInstanceMethods env0 aliasEnv classEnv instanceEnv =
+checkInstanceMethods :: TypeEnv -> AliasEnv -> CE.ClassEnv -> [InstanceCandidate] -> IE.InstanceEnv -> Either TypecheckError ()
+checkInstanceMethods env0 aliasEnv classEnv instanceCandidates instanceEnv =
   mapM_ checkInstance (Map.elems instanceEnv)
   where
     checkInstance inst = do
@@ -137,11 +154,11 @@ checkInstanceMethods env0 aliasEnv classEnv instanceEnv =
         Nothing ->
           pure ()
         Just scheme ->
-          case runInferM (checkAgainstScheme instEnv methodName [] methodExpr scheme) of
+          case runInferM (inferAgainstScheme instEnv (methodLabel inst methodName) [] methodExpr scheme) of
             Left err ->
               Left (InInstanceMethod (methodLabel inst methodName) err)
-            Right () ->
-              Right ()
+            Right (givenConstraints, wantedConstraints) ->
+              solveWantedConstraints classEnv instanceCandidates (methodLabel inst methodName) givenConstraints wantedConstraints
 
     methodLabel inst methodName =
       IE.instanceInfoClass inst <> " " <> IE.instanceInfoHeadCon inst <> "." <> methodName
@@ -157,26 +174,146 @@ specializeMethodScheme className classParam instTy instVars (Forall vars constra
     constraintsFinal = filter (/= Constraint className [instTy]) constraintsSub
     varsFinal = Set.toList (Set.fromList (instVars <> vars'))
 
-checkDecl :: TypeEnv -> TypeEnv -> (Text, [S.Pattern], S.Expr) -> InferM (Text, Scheme)
-checkDecl env sigEnv (name, args, body) =
+checkDecl :: CE.ClassEnv -> [InstanceCandidate] -> TypeEnv -> TypeEnv -> (Text, [S.Pattern], S.Expr) -> Either TypecheckError (Text, Scheme)
+checkDecl classEnv instanceCandidates env sigEnv (name, args, body) =
   case Map.lookup name sigEnv of
     Just scheme -> do
-      checkAgainstScheme env name args body scheme
+      checkAgainstScheme classEnv instanceCandidates env name args body scheme
       pure (name, scheme)
-    Nothing -> do
-      (s, constraints, ty) <- inferExpr env (S.Lam args body)
-      let env' = applySubstEnv s env
-          scheme = generalize env' constraints ty
-      pure (name, scheme)
+    Nothing ->
+      case runInferM (inferExpr env (S.Lam args body)) of
+        Left err ->
+          Left (InValue name err)
+        Right (s, constraints, ty) ->
+          let env' = applySubstEnv s env
+              scheme = generalize env' constraints ty
+           in Right (name, scheme)
 
-checkAgainstScheme :: TypeEnv -> Text -> [S.Pattern] -> S.Expr -> Scheme -> InferM ()
-checkAgainstScheme env name args body scheme = do
-  skTy <- skolemize scheme
+checkAgainstScheme :: CE.ClassEnv -> [InstanceCandidate] -> TypeEnv -> Text -> [S.Pattern] -> S.Expr -> Scheme -> Either TypecheckError ()
+checkAgainstScheme classEnv instanceCandidates env label args body scheme =
+  case runInferM (inferAgainstScheme env label args body scheme) of
+    Left err ->
+      Left (InValue label err)
+    Right (givenConstraints, wantedConstraints) ->
+      solveWantedConstraints classEnv instanceCandidates label givenConstraints wantedConstraints
+
+inferAgainstScheme :: TypeEnv -> Text -> [S.Pattern] -> S.Expr -> Scheme -> InferM ([Constraint], [Constraint])
+inferAgainstScheme env name args body scheme = do
+  (givenConstraints0, skTy) <- skolemizeScheme scheme
   (argTys, resTy) <- peelFunctionType name (length args) skTy
   argEnv <- bindTopLevelArgs args argTys
-  (sBody, _constraints, bodyTy) <- inferExpr (argEnv <> env) body
-  _ <- unify (applySubstType sBody bodyTy) (applySubstType sBody resTy)
-  pure ()
+  (sBody, wanted0, bodyTy) <- inferExpr (argEnv <> env) body
+  sRes <- unify (applySubstType sBody bodyTy) (applySubstType sBody resTy)
+  let sFinal = sRes `composeSubst` sBody
+      givenConstraints = applySubstConstraints sFinal givenConstraints0
+      wantedConstraints = applySubstConstraints sFinal wanted0
+  pure (givenConstraints, wantedConstraints)
+
+builtinInstanceCandidates :: [InstanceCandidate]
+builtinInstanceCandidates =
+  [ InstanceCandidate
+      { instanceCandidateClass = cls
+      , instanceCandidateHead = builtinHeadType headCon
+      , instanceCandidateLabel = cls <> " " <> renderType (builtinHeadType headCon)
+      }
+  | ((cls, headCon), _) <- Map.toList Builtins.builtinInstanceDicts
+  ]
+  where
+    builtinHeadType headCon =
+      case headCon of
+        "Result" ->
+          TApp (TCon "Result") (TVar "e")
+        other ->
+          TCon other
+
+instanceCandidatesFromEnv :: AliasEnv -> IE.InstanceEnv -> [InstanceCandidate]
+instanceCandidatesFromEnv aliasEnv instanceEnv =
+  [ InstanceCandidate
+      { instanceCandidateClass = IE.instanceInfoClass inst
+      , instanceCandidateHead = headTy
+      , instanceCandidateLabel = IE.instanceInfoClass inst <> " " <> renderType headTy
+      }
+  | inst <- Map.elems instanceEnv
+  , let headTy = expandAliases aliasEnv (convertType aliasEnv (IE.instanceInfoHead inst))
+  ]
+
+solveWantedConstraints :: CE.ClassEnv -> [InstanceCandidate] -> Text -> [Constraint] -> [Constraint] -> Either TypecheckError ()
+solveWantedConstraints classEnv instanceCandidates label givenConstraints wantedConstraints = do
+  let givenSet = deriveSuperConstraints classEnv (Set.fromList givenConstraints)
+      wantedUnique = Set.toList (Set.fromList wantedConstraints)
+  mapM_ (solveOne givenSet) wantedUnique
+  where
+    solveOne givenSet c
+      | c `Set.member` givenSet =
+          Right ()
+      | otherwise =
+          solveViaInstances c
+
+    solveViaInstances c =
+      case constraintArgs c of
+        [argTy] ->
+          case headTypeCon argTy of
+            Nothing ->
+              Left (AmbiguousConstraint label c)
+            Just _ -> do
+              let matches =
+                    [ instanceCandidateLabel inst
+                    | inst <- instanceCandidates
+                    , instanceCandidateClass inst == constraintClass c
+                    , instanceMatches (instanceCandidateHead inst) argTy
+                    ]
+              case matches of
+                [] ->
+                  Left (MissingInstance label c)
+                [_one] ->
+                  Right ()
+                many ->
+                  Left (OverlappingInstances label c many)
+        _ ->
+          Left (UnsupportedConstraint label c)
+
+    instanceMatches instHead wantedHead =
+      case runInferM (unify instHead wantedHead) of
+        Left _ ->
+          False
+        Right _ ->
+          True
+
+headTypeCon :: Type -> Maybe Text
+headTypeCon ty =
+  case ty of
+    TCon n ->
+      Just n
+    TApp f _ ->
+      headTypeCon f
+    _ ->
+      Nothing
+
+deriveSuperConstraints :: CE.ClassEnv -> Set Constraint -> Set Constraint
+deriveSuperConstraints classEnv direct =
+  go (Set.toList direct) direct
+  where
+    go [] acc =
+      acc
+    go (c : cs) acc =
+      case Map.lookup (constraintClass c) classEnv of
+        Nothing ->
+          go cs acc
+        Just info ->
+          let params = CE.classInfoParams info
+              args = constraintArgs c
+           in if length params /= length args
+                then go cs acc
+                else
+                  let subst = Map.fromList (zip params args)
+                      supers = map (applySubstConstraint subst) (CE.classInfoSupers info)
+                      (acc', newWork) = foldl addOne (acc, []) supers
+                   in go (cs <> newWork) acc'
+
+    addOne (accSet, work) superC =
+      if superC `Set.member` accSet
+        then (accSet, work)
+        else (Set.insert superC accSet, work <> [superC])
 
 peelFunctionType :: Text -> Int -> Type -> InferM ([Type], Type)
 peelFunctionType _ 0 ty =

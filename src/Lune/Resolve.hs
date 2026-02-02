@@ -72,29 +72,36 @@ checkProgramCoherence prog =
       let m = MG.lmModule lm
           modName = S.modName m
           decls = S.modDecls m
-          definedClasses =
-            Set.fromList
-              [ name
-              | S.DeclClass name _ _ _ <- decls
-              ]
-          definedTypeCons =
-            Set.fromList
-              [ name
-              | decl <- decls
-              , name <-
-                  case decl of
-                    S.DeclType n _ _ -> [n]
-                    S.DeclTypeAlias n _ _ -> [n]
-                    S.DeclNewtype n _ _ _ -> [n]
-                    _ -> []
-              ]
           instanceDecls =
             [ (cls, headTy)
             | S.DeclInstance cls headTy _ <- decls
             ]
-       in mapM_ (checkInstance modName definedClasses definedTypeCons) instanceDecls
+          importedModules =
+            Set.fromList (map S.impName (S.modImports m))
+              <> if shouldImplicitPreludeImport lm then Set.singleton "Lune.Prelude" else Set.empty
+       in mapM_ (checkInstance modName importedModules) instanceDecls
 
-    checkInstance modName definedClasses definedTypeCons (cls, headTy) =
+    classDefs =
+      Map.fromListWith (<>)
+        [ (clsName, Set.singleton (MG.lmName lm))
+        | lm <- Map.elems (MG.progModules prog)
+        , S.DeclClass clsName _ _ _ <- S.modDecls (MG.lmModule lm)
+        ]
+
+    typeDefs =
+      Map.fromListWith (<>)
+        [ (typeName, Set.singleton (MG.lmName lm))
+        | lm <- Map.elems (MG.progModules prog)
+        , decl <- S.modDecls (MG.lmModule lm)
+        , typeName <-
+            case decl of
+              S.DeclType n _ _ -> [n]
+              S.DeclTypeAlias n _ _ -> [n]
+              S.DeclNewtype n _ _ _ -> [n]
+              _ -> []
+        ]
+
+    checkInstance modName importedModules (cls, headTy) =
       case instanceHeadCon headTy of
         Nothing ->
           Right ()
@@ -103,7 +110,9 @@ checkProgramCoherence prog =
             then Left (OverlappingBuiltinInstance modName cls headCon)
             else Right ()
 
-          if cls `Set.member` definedClasses || headCon `Set.member` definedTypeCons
+          let classOk = moduleMentions importedModules modName (Map.findWithDefault Set.empty cls classDefs)
+              typeOk = moduleMentions importedModules modName (Map.findWithDefault Set.empty headCon typeDefs)
+          if classOk && typeOk
             then Right ()
             else Left (OrphanInstance modName cls headCon)
 
@@ -121,6 +130,10 @@ checkProgramCoherence prog =
               go (x : args) f
             _ ->
               (t, args)
+
+    moduleMentions importedModules modName definingModules =
+      let available = Set.insert modName importedModules
+       in not (Set.null (available `Set.intersection` definingModules))
 
 buildExportTable :: Map Text MG.LoadedModule -> Either ResolveError (Map Text ModuleExports)
 buildExportTable modules =

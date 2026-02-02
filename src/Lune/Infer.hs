@@ -10,6 +10,7 @@ module Lune.Infer
   , inferExpr
   , inferPattern
   , skolemize
+  , skolemizeScheme
   ) where
 
 import Control.Monad (foldM)
@@ -309,6 +310,15 @@ skolemize :: Scheme -> InferM Type
 skolemize (Forall vars _ ty) = do
   subst <- foldM addSkolem Map.empty vars
   pure (applySubstType subst ty)
+  where
+    addSkolem subst v = do
+      sk <- freshSkolem
+      pure (Map.insert v sk subst)
+
+skolemizeScheme :: Scheme -> InferM ([Constraint], Type)
+skolemizeScheme (Forall vars constraints ty) = do
+  subst <- foldM addSkolem Map.empty vars
+  pure (applySubstConstraints subst constraints, applySubstType subst ty)
   where
     addSkolem subst v = do
       sk <- freshSkolem

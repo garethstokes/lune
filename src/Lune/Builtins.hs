@@ -230,6 +230,7 @@ builtinEvalPrims =
     [ ("prim_putStrLn", BuiltinPrim 1 primPutStrLn)
     , ("prim_parseInt", BuiltinPrim 1 primParseInt)
     , ("prim_addInt", BuiltinPrim 2 primAddInt)
+    , ("prim_showInt", BuiltinPrim 1 primShowInt)
     , ("prim_and", BuiltinPrim 2 primAnd)
     , ("prim_leInt", BuiltinPrim 2 primLeInt)
     , ("prim_geInt", BuiltinPrim 2 primGeInt)
@@ -258,6 +259,14 @@ primPutStrLn args =
       Left (NotAFunction (VPrim 1 primPutStrLn args))
   where
     preludeCon n = "Lune.Prelude." <> n
+
+primShowInt :: [Value] -> Either EvalError Value
+primShowInt args =
+  case args of
+    [VInt n] ->
+      Right (VString (T.pack (show n)))
+    _ ->
+      Left (NotAFunction (VPrim 1 primShowInt args))
 
 primParseInt :: [Value] -> Either EvalError Value
 primParseInt args =

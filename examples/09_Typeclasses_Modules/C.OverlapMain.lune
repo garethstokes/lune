@@ -1,0 +1,13 @@
+module C.OverlapMain exposing (main)
+
+import A.Show exposing (Show(..))
+import B.ShowInt
+import B.ShowInt2
+import Lune.IO
+import Lune.Int
+import Lune.Prelude exposing (IO, Unit)
+
+main : IO Unit
+main =
+  IO.println (show (Int.add 1 2))
+

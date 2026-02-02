@@ -1,0 +1,8 @@
+module B.ShowInt2 exposing ()
+
+import A.Show exposing (Show(..))
+import Lune.String
+
+instance Show Int where
+  show = \x -> String.fromInt x
+

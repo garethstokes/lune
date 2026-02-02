@@ -1,0 +1,11 @@
+module C.OrphanMain exposing (main)
+
+import A.Show exposing (Show(..))
+import B.OrphanShowInt
+import Lune.IO
+import Lune.Prelude exposing (IO, Unit)
+
+main : IO Unit
+main =
+  IO.println "ok"
+
