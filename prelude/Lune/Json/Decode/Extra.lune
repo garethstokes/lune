@@ -1,0 +1,55 @@
+module Lune.Json.Decode.Extra exposing (
+  value, tag, fields, tagged0, tagged1
+)
+
+import Lune.Prelude exposing (
+  Result(..), String, Int, Bool(..), List(..), Maybe(..), Unit, unit
+)
+import Lune.Json exposing (Json)
+import Lune.Json.Decode as D
+import Lune.String as Str
+
+value : D.Decoder Json
+value =
+  \json -> Ok json
+
+tag : D.Decoder String
+tag =
+  D.field "tag" D.string
+
+fields : D.Decoder (List Json)
+fields =
+  D.field "fields" (D.list value)
+
+tagged0 : String -> a -> D.Decoder a
+tagged0 expectedTag result =
+  \json ->
+    case D.decodeValue tag json of
+      Err err -> Err err
+      Ok actualTag ->
+        case Str.eq actualTag expectedTag of
+          True -> Ok result
+          False -> Err { message = Str.append "expected tag: " expectedTag, path = Cons (D.Field "tag") Nil }
+
+tagged1 : String -> (a -> b) -> D.Decoder a -> D.Decoder b
+tagged1 expectedTag ctor decoder =
+  \json ->
+    case D.decodeValue tag json of
+      Err err -> Err err
+      Ok actualTag ->
+        case Str.eq actualTag expectedTag of
+          False -> Err { message = Str.append "expected tag: " expectedTag, path = Cons (D.Field "tag") Nil }
+          True ->
+            case D.decodeValue (D.index 0 decoder) (fieldsOf json) of
+              Err err -> Err (prependFieldsPath err)
+              Ok a -> Ok (ctor a)
+
+fieldsOf : Json -> Json
+fieldsOf json =
+  case prim_jsonGetField "fields" json of
+    Ok arr -> arr
+    Err _ -> json
+
+prependFieldsPath : D.DecodeError -> D.DecodeError
+prependFieldsPath err =
+  { message = err.message, path = Cons (D.Field "fields") err.path }

@@ -1,11 +1,14 @@
-module Lune.String exposing (append, fromInt, toInt)
+module Lune.String exposing (append, eq, fromInt, toInt)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
-import Lune.Prelude exposing (Int, Result(..), String)
+import Lune.Prelude exposing (Bool(..), Int, Result(..), String)
 
 append : String -> String -> String
 append = prim_appendString
+
+eq : String -> String -> Bool
+eq = prim_eqString
 
 fromInt : Int -> String
 fromInt = prim_showInt

@@ -1,0 +1,54 @@
+module JsonParseDemo exposing (main, testParse, testInvalid, encodeDemo)
+
+{-| JSON Parse/Stringify smoke test. -}
+
+import Lune.Prelude exposing (
+  IO, Result(..), Unit, unit, List(..), Bool(..), String
+)
+import Lune.IO as IO
+import Lune.String as Str
+import Lune.Json as Json
+import Lune.Json exposing (Json)
+import Lune.Json.Encode as E
+
+main : IO Unit
+main =
+  do
+    _ <- IO.println "=== Parse Tests ==="
+    _ <- testParse
+    _ <- testInvalid
+    _ <- IO.println "=== Encode Tests ==="
+    _ <- testEncode
+    pure unit
+
+testParse : IO Unit
+testParse =
+  case Json.parse "{\"name\":\"Alice\",\"age\":30}" of
+    Ok json ->
+      IO.println (Str.append "Parsed: " (Json.stringify json))
+    Err msg ->
+      IO.println (Str.append "Error: " msg)
+
+testInvalid : IO Unit
+testInvalid =
+  case Json.parse "{invalid json}" of
+    Ok _ ->
+      IO.println "Unexpected success"
+    Err msg ->
+      IO.println (Str.append "Expected error: " msg)
+
+testEncode : IO Unit
+testEncode =
+  do
+    _ <- IO.println (Str.append "Encoded object: " (Json.stringify encodeDemo))
+    _ <- IO.println (Str.append "Encoded array: " (Json.stringify arrDemo))
+    _ <- IO.println (Str.append "Encoded null: " (Json.stringify E.null))
+    pure unit
+
+encodeDemo : Json
+encodeDemo =
+  E.object (Cons { key = "name", value = E.string "Bob" } (Cons { key = "active", value = E.bool True } (Cons { key = "score", value = E.int 42 } Nil)))
+
+arrDemo : Json
+arrDemo =
+  E.list E.int (Cons 1 (Cons 2 (Cons 3 Nil)))

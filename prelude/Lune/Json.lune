@@ -1,0 +1,24 @@
+module Lune.Json exposing (
+  Json,
+  parse,
+  stringify
+)
+
+{-| Core JSON module providing parsing and serialization.
+
+Per spec/lune_json_v0_1.md section 2.
+-}
+
+import Lune.Prelude exposing (Result(..), String)
+
+-- | Opaque JSON type backed by runtime.
+type Json = Json#
+
+-- | Parse a JSON string into a Json value.
+-- Returns Err with a message on invalid JSON.
+parse : String -> Result String Json
+parse = prim_jsonParse
+
+-- | Serialize a Json value to a JSON string.
+stringify : Json -> String
+stringify = prim_jsonStringify

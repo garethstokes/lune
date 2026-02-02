@@ -1,0 +1,205 @@
+module Lune.Json.Decode exposing (
+  Decoder, PathItem(..), DecodeError,
+  decodeValue, succeed, fail, bool, int, string, null,
+  list, maybe, field, index, at,
+  map, map2, map3, map4, map5, andThen, oneOf
+)
+
+import Lune.Prelude exposing (
+  Result(..), String, Int, Bool(..), List(..), Maybe(..), Unit, unit
+)
+import Lune.Json exposing (Json)
+import Lune.Int as Int
+
+type PathItem =
+  Field String
+  | Index Int
+
+type alias DecodeError = { message : String, path : List PathItem }
+
+type alias Decoder a = Json -> Result DecodeError a
+
+decodeValue : Decoder a -> Json -> Result DecodeError a
+decodeValue decoder json =
+  decoder json
+
+succeed : a -> Decoder a
+succeed value =
+  \_ -> Ok value
+
+fail : String -> Decoder a
+fail message =
+  \_ -> Err { message = message, path = Nil }
+
+bool : Decoder Bool
+bool =
+  \json ->
+    case prim_jsonToBool json of
+      Ok b -> Ok b
+      Err msg -> Err { message = msg, path = Nil }
+
+int : Decoder Int
+int =
+  \json ->
+    case prim_jsonToInt json of
+      Ok n -> Ok n
+      Err msg -> Err { message = msg, path = Nil }
+
+string : Decoder String
+string =
+  \json ->
+    case prim_jsonToString json of
+      Ok s -> Ok s
+      Err msg -> Err { message = msg, path = Nil }
+
+null : a -> Decoder a
+null defaultValue =
+  \json ->
+    case prim_jsonIsNull json of
+      True -> Ok defaultValue
+      False -> Err { message = "expected null", path = Nil }
+
+list : Decoder a -> Decoder (List a)
+list elemDecoder =
+  \json ->
+    case prim_jsonToArray json of
+      Err msg -> Err { message = msg, path = Nil }
+      Ok elements -> decodeList elemDecoder 0 elements
+
+decodeList : Decoder a -> Int -> List Json -> Result DecodeError (List a)
+decodeList decoder idx elements =
+  case elements of
+    Nil -> Ok Nil
+    Cons x xs ->
+      case decoder x of
+        Err err -> Err (prependPath (Index idx) err)
+        Ok a ->
+          case decodeList decoder (Int.add idx 1) xs of
+            Err err -> Err err
+            Ok rest -> Ok (Cons a rest)
+
+maybe : Decoder a -> Decoder (Maybe a)
+maybe decoder =
+  \json ->
+    case prim_jsonIsNull json of
+      True -> Ok Nothing
+      False ->
+        case decoder json of
+          Ok a -> Ok (Just a)
+          Err err -> Err err
+
+field : String -> Decoder a -> Decoder a
+field name decoder =
+  \json ->
+    case prim_jsonGetField name json of
+      Err msg -> Err { message = msg, path = Cons (Field name) Nil }
+      Ok fieldJson ->
+        case decoder fieldJson of
+          Err err -> Err (prependPath (Field name) err)
+          Ok a -> Ok a
+
+index : Int -> Decoder a -> Decoder a
+index idx decoder =
+  \json ->
+    case prim_jsonGetIndex idx json of
+      Err msg -> Err { message = msg, path = Cons (Index idx) Nil }
+      Ok elemJson ->
+        case decoder elemJson of
+          Err err -> Err (prependPath (Index idx) err)
+          Ok a -> Ok a
+
+at : List String -> Decoder a -> Decoder a
+at path decoder =
+  case path of
+    Nil -> decoder
+    Cons name rest -> field name (at rest decoder)
+
+map : (a -> b) -> Decoder a -> Decoder b
+map f decoder =
+  \json ->
+    case decoder json of
+      Err err -> Err err
+      Ok a -> Ok (f a)
+
+map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+map2 f decoderA decoderB =
+  \json ->
+    case decoderA json of
+      Err err -> Err err
+      Ok a ->
+        case decoderB json of
+          Err err -> Err err
+          Ok b -> Ok (f a b)
+
+map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+map3 f da db dc =
+  \json ->
+    case da json of
+      Err err -> Err err
+      Ok a ->
+        case db json of
+          Err err -> Err err
+          Ok b ->
+            case dc json of
+              Err err -> Err err
+              Ok c -> Ok (f a b c)
+
+map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+map4 f da db dc dd =
+  \json ->
+    case da json of
+      Err err -> Err err
+      Ok a ->
+        case db json of
+          Err err -> Err err
+          Ok b ->
+            case dc json of
+              Err err -> Err err
+              Ok c ->
+                case dd json of
+                  Err err -> Err err
+                  Ok d -> Ok (f a b c d)
+
+map5 : (a -> b -> c -> d -> e -> g) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder g
+map5 fn da db dc dd de =
+  \json ->
+    case da json of
+      Err err -> Err err
+      Ok a ->
+        case db json of
+          Err err -> Err err
+          Ok b ->
+            case dc json of
+              Err err -> Err err
+              Ok c ->
+                case dd json of
+                  Err err -> Err err
+                  Ok d ->
+                    case de json of
+                      Err err -> Err err
+                      Ok e -> Ok (fn a b c d e)
+
+andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+andThen continuation decoder =
+  \json ->
+    case decoder json of
+      Err err -> Err err
+      Ok a -> continuation a json
+
+oneOf : List (Decoder a) -> Decoder a
+oneOf decoders =
+  \json ->
+    tryDecoders decoders { message = "oneOf: no decoders provided", path = Nil } json
+
+tryDecoders : List (Decoder a) -> DecodeError -> Json -> Result DecodeError a
+tryDecoders decoders lastErr json =
+  case decoders of
+    Nil -> Err lastErr
+    Cons decoder rest ->
+      case decoder json of
+        Ok a -> Ok a
+        Err err -> tryDecoders rest err json
+
+prependPath : PathItem -> DecodeError -> DecodeError
+prependPath item err =
+  { message = err.message, path = Cons item err.path }

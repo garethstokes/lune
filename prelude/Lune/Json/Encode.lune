@@ -1,0 +1,48 @@
+module Lune.Json.Encode exposing (
+  Value,
+  null,
+  bool,
+  int,
+  string,
+  list,
+  object
+)
+
+{-| JSON Encoding module.
+
+Per spec/lune_json_v0_1.md section 4.
+-}
+
+import Lune.Prelude exposing (Bool(..), Int, String, List(..))
+import Lune.Json exposing (Json)
+import Lune.List as List
+
+-- | Alias for Json, matching Elm's convention for encoders.
+type alias Value = Json
+
+-- | Encode a JSON null.
+null : Value
+null = prim_jsonNull
+
+-- | Encode a boolean.
+bool : Bool -> Value
+bool = prim_jsonBool
+
+-- | Encode an integer.
+int : Int -> Value
+int = prim_jsonInt
+
+-- | Encode a string.
+string : String -> Value
+string = prim_jsonString
+
+-- | Encode a list using the provided encoder function.
+list : (a -> Value) -> List a -> Value
+list encoder items =
+  prim_jsonArray (List.map encoder items)
+
+-- | Encode an object from a list of key-value pairs.
+-- If duplicate keys exist, last writer wins.
+object : List { key : String, value : Value } -> Value
+object pairs =
+  prim_jsonObject pairs

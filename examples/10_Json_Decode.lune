@@ -1,0 +1,120 @@
+module JsonDecodeDemo exposing (main, demo, demoMissing, demoNested)
+
+{-| JSON Decode tests demonstrating:
+- Missing field path
+- Wrong list element index path
+- Nested at paths
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, unit, List(..), Bool(..), String, Int, Maybe(..))
+import Lune.IO as IO
+import Lune.String as Str
+import Lune.Json as Json
+import Lune.Json exposing (Json)
+import Lune.Json.Decode as D
+
+main : IO Unit
+main =
+  do
+    _ <- IO.println "=== Decode Tests ==="
+    _ <- testBasicDecode
+    _ <- testMissingField
+    _ <- testListIndexError
+    _ <- testNestedAt
+    _ <- testOneOf
+    _ <- testMaybe
+    pure unit
+
+testBasicDecode : IO Unit
+testBasicDecode =
+  case Json.parse "{\"name\":\"Alice\",\"age\":30}" of
+    Err _ -> IO.println "Parse failed"
+    Ok json ->
+      case D.decodeValue (D.field "name" D.string) json of
+        Ok name -> IO.println (Str.append "Name: " name)
+        Err err -> IO.println (Str.append "Decode error: " err.message)
+
+testMissingField : IO Unit
+testMissingField =
+  case Json.parse "{\"name\":\"Bob\"}" of
+    Err _ -> IO.println "Parse failed"
+    Ok json ->
+      case D.decodeValue (D.field "email" D.string) json of
+        Ok _ -> IO.println "Unexpected success"
+        Err err -> IO.println (Str.append "Expected error (missing field): " err.message)
+
+testListIndexError : IO Unit
+testListIndexError =
+  case Json.parse "[1,2,\"bad\"]" of
+    Err _ -> IO.println "Parse failed"
+    Ok json ->
+      case D.decodeValue (D.list D.int) json of
+        Ok _ -> IO.println "Unexpected success"
+        Err err -> IO.println (Str.append "Expected error (list element): " err.message)
+
+testNestedAt : IO Unit
+testNestedAt =
+  case Json.parse "{\"user\":{\"profile\":{\"email\":\"test@example.com\"}}}" of
+    Err _ -> IO.println "Parse failed"
+    Ok json ->
+      case D.decodeValue (D.at (Cons "user" (Cons "profile" (Cons "email" Nil))) D.string) json of
+        Ok email -> IO.println (Str.append "Nested email: " email)
+        Err err -> IO.println (Str.append "Decode error: " err.message)
+
+testOneOf : IO Unit
+testOneOf =
+  case Json.parse "42" of
+    Err _ -> IO.println "Parse failed"
+    Ok json -> runOneOfDecoder json
+
+runOneOfDecoder : Json -> IO Unit
+runOneOfDecoder json =
+  case D.decodeValue (D.oneOf (Cons (D.map showBool D.bool) (Cons (D.map showInt D.int) Nil))) json of
+    Ok s -> IO.println (Str.append "oneOf result: " s)
+    Err err -> IO.println (Str.append "oneOf error: " err.message)
+
+testMaybe : IO Unit
+testMaybe =
+  case Json.parse "null" of
+    Err _ -> IO.println "Parse failed"
+    Ok json ->
+      case D.decodeValue (D.maybe D.string) json of
+        Ok Nothing -> IO.println "Maybe null -> Nothing"
+        Ok (Just s) -> IO.println (Str.append "Maybe value: " s)
+        Err err -> IO.println (Str.append "Decode error: " err.message)
+
+showBool : Bool -> String
+showBool b =
+  case b of
+    True -> "true"
+    False -> "false"
+
+showInt : Int -> String
+showInt = Str.fromInt
+
+demo : String
+demo =
+  case Json.parse "{\"name\":\"Test\"}" of
+    Err _ -> "parse failed"
+    Ok json ->
+      case D.decodeValue (D.field "name" D.string) json of
+        Ok s -> s
+        Err _ -> "decode failed"
+
+demoMissing : String
+demoMissing =
+  case Json.parse "{\"name\":\"Test\"}" of
+    Err _ -> "parse failed"
+    Ok json ->
+      case D.decodeValue (D.field "missing" D.string) json of
+        Ok s -> s
+        Err err -> err.message
+
+demoNested : String
+demoNested =
+  case Json.parse "{\"a\":{\"b\":{\"c\":\"deep\"}}}" of
+    Err _ -> "parse failed"
+    Ok json ->
+      case D.decodeValue (D.at (Cons "a" (Cons "b" (Cons "c" Nil))) D.string) json of
+        Ok s -> s
+        Err err -> err.message

@@ -2,6 +2,7 @@ module Lune.Eval.Types
   ( Env
   , World (..)
   , Value (..)
+  , JsonValue (..)
   , EvalError (..)
   ) where
 
@@ -20,10 +21,20 @@ data World = World
   }
   deriving (Show)
 
+data JsonValue
+  = JNull
+  | JBool Bool
+  | JInt Integer
+  | JString Text
+  | JArray [JsonValue]
+  | JObject [(Text, JsonValue)]
+  deriving (Eq, Ord, Show)
+
 data Value
   = VInt Integer
   | VString Text
   | VCon Text [Value]
+  | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
   | VRecord (Map Text Value)
   | VThunk Env C.CoreExpr
@@ -35,6 +46,7 @@ data EvalError
   | NotAFunction Value
   | NotAnIO Value
   | NotAResult Value
+  | ExpectedJson Value
   | ExpectedString Value
   | PatternMatchFailure S.Pattern Value
   | NonExhaustiveCase Value
@@ -52,6 +64,8 @@ instance Show Value where
         show (T.unpack s)
       VCon name args ->
         unwords (T.unpack (renderCtor name) : map showAtom args)
+      VJson _ ->
+        "<json>"
       VClosure {} ->
         "<closure>"
       VRecord fields ->
