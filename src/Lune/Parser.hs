@@ -148,8 +148,8 @@ newtypeDecl = do
   name <- typeConstructor
   vars <- many typeVar
   symbol "="
+  scnOptional  -- Allow newline after =
   ctorName <- typeConstructor
-  scnOptional
   ctorType <- parseType
   scn
   pure (DeclNewtype name vars ctorName ctorType)

@@ -1,9 +1,9 @@
-lune: examples/05_Parser_Newtype.lune:16:1:
+lune: examples/05_Parser_Newtype.lune:38:38:
    |
-16 | newtype Parser a =
-   | ^
-unexpected 'n'
-expecting end of input
+38 |               False -> Err "mismatch"
+   |                                      ^
+unexpected newline
+expecting "do", '"', '(', ')', '.', '{', integer, or letter
 
 CallStack (from HasCallStack):
   error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
