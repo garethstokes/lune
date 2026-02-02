@@ -64,11 +64,11 @@ type TVar a = TVar#
 type Fiber a = Fiber#
 
 -- Atomic vibe: surface aliases over STM/TVar.
-type Atomic a = STM a
-type Shared a = TVar a
+type alias Atomic a = STM a
+type alias Shared a = TVar a
 
 -- Task vibe: surface alias over Fiber.
-type Task a = Fiber a
+type alias Task a = Fiber a
 
 -- ===== Typeclasses =====
 

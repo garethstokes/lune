@@ -21,8 +21,8 @@ import Lune.Prelude exposing (IO, Unit)
 type STM a = STM#
 type TVar a = TVar#
 
-type Atomic a = STM a
-type Shared a = TVar a
+type alias Atomic a = STM a
+type alias Shared a = TVar a
 
 commit : Atomic a -> IO a
 commit = prim_atomically

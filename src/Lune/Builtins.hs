@@ -42,6 +42,8 @@ builtinSchemes =
     , ("False", Forall [] [] (TCon "Bool"))
     , ("Nil", Forall ["a"] [] (TApp (TCon "List") (TVar "a")))
     , ("Cons", Forall ["a"] [] (TArrow (TVar "a") (TArrow (TApp (TCon "List") (TVar "a")) (TApp (TCon "List") (TVar "a")))))
+    , ("Nothing", Forall ["a"] [] (TApp (TCon "Maybe") (TVar "a")))
+    , ("Just", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "Maybe") (TVar "a"))))
     , ("Ok", Forall ["e", "a"] [] (TArrow (TVar "a") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
     , ("Err", Forall ["e", "a"] [] (TArrow (TVar "e") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
     -- Monad method names are present via ClassEnv too; keep them here for now so older code remains stable.

@@ -12,7 +12,7 @@ import Lune.Prelude exposing (IO, Unit)
 -- Internal runtime type (not part of the standard library surface).
 type Fiber a = Fiber#
 
-type Task a = Fiber a
+type alias Task a = Fiber a
 
 start : IO a -> IO (Task a)
 start = prim_spawn

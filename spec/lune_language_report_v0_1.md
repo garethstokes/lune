@@ -112,6 +112,8 @@ A package is a collection of modules compiled together.
 
 Cross-package linking uses interface files (§15).
 
+Standard library surface API is defined in `spec/lune_standard_library_v0_1.md`.
+
 ---
 
 ## 4. Names, Imports, Exports
