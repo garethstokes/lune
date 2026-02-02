@@ -246,7 +246,12 @@ builtinEnv :: TypeEnv
 builtinEnv =
   Map.fromList
     [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
     , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
+    , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
     , ("unit", Forall [] [] (TCon "Unit"))
     , ("True", Forall [] [] (TCon "Bool"))
     , ("False", Forall [] [] (TCon "Bool"))

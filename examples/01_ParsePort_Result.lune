@@ -3,12 +3,8 @@ module ParseDemo exposing (Result(..), parsePort)
 import Lune.Prelude exposing (
   Unit, unit, Bool(..), Int, String,
   Result(..),
-  and, geInt, leInt
+  and, geInt, leInt, parseInt
 )
-
-parseInt : String -> Result String Int
-parseInt s =
-  Err "parseInt not implemented"
 
 guard : Bool -> e -> Result e Unit
 guard cond err =
@@ -24,3 +20,11 @@ parsePort s =
     pure n
 
 -- NOTE: `pure` for Result is assumed to be provided by the stdlib as part of Monad Result.
+
+demo : Result String Int
+demo =
+  parsePort "80"
+
+demo2 : Result String Int
+demo2 =
+  parsePort "99999"

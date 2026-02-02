@@ -91,13 +91,20 @@ instanceDictName cls headCon =
 type InstanceDicts = Map (Text, Text) Text
 
 buildInstanceDicts :: IE.InstanceEnv -> InstanceDicts
-buildInstanceDicts =
-  Map.fromList
-    . map toEntry
-    . Map.elems
+buildInstanceDicts instEnv =
+  fromInstances <> builtinInstanceDicts
   where
-    toEntry inst =
-      ((IE.instanceInfoClass inst, IE.instanceInfoHeadCon inst), instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst))
+    fromInstances =
+      Map.fromList
+        [ ((IE.instanceInfoClass inst, IE.instanceInfoHeadCon inst), instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst))
+        | inst <- Map.elems instEnv
+        ]
+
+    builtinInstanceDicts =
+      Map.fromList
+        [ (("Monad", "IO"), instanceDictName "Monad" "IO")
+        , (("Monad", "Result"), instanceDictName "Monad" "Result")
+        ]
 
 elaborateModule :: TypedModule -> Either ElaborateError CoreModule
 elaborateModule tm = do
@@ -505,14 +512,27 @@ resolveInstanceDicts subst instanceDicts =
 
     resolveConstraint c =
       case constraintArgs c of
-        [TCon headCon] ->
-          case Map.lookup (constraintClass c, headCon) instanceDicts of
-            Just dictName ->
-              Right (CVar dictName)
+        [argTy] ->
+          case headTypeCon argTy of
+            Just headCon ->
+              case Map.lookup (constraintClass c, headCon) instanceDicts of
+                Just dictName ->
+                  Right (CVar dictName)
+                Nothing ->
+                  Left (ElaborateUnresolvedConstraint c)
             Nothing ->
               Left (ElaborateUnresolvedConstraint c)
         _ ->
           Left (ElaborateUnresolvedConstraint c)
+
+    headTypeCon ty =
+      case ty of
+        TCon name ->
+          Just name
+        TApp f _ ->
+          headTypeCon f
+        _ ->
+          Nothing
 
 buildCtorEnv :: AliasEnv -> [S.Decl] -> TypeEnv
 buildCtorEnv aliasEnv decls =
@@ -536,7 +556,12 @@ builtinEnv :: TypeEnv
 builtinEnv =
   Map.fromList
     [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
     , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
+    , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
     , ("unit", Forall [] [] (TCon "Unit"))
     , ("True", Forall [] [] (TCon "Bool"))
     , ("False", Forall [] [] (TCon "Bool"))
