@@ -1,0 +1,56 @@
+module Lune.IO exposing (
+  println,
+  readLine,
+  readInt,
+  sleepMs,
+  readFile,
+  writeFile,
+  Error
+)
+
+{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
+
+import Lune.Prelude exposing (IO, Int, Result(..), String, Unit)
+
+type Error = Error#
+
+println : String -> IO Unit
+println = prim_putStrLn
+
+readLine : IO String
+readLine = prim_readLine
+
+readInt : IO Int
+readInt = prim_readInt
+
+sleepMs : Int -> IO Unit
+sleepMs = prim_sleepMs
+
+readFile : String -> IO (Result Error String)
+readFile = prim_readFile
+
+writeFile : String -> String -> IO (Result Error Unit)
+writeFile = prim_writeFile
+
+-- Internal prim hooks (compiler/runtime provided). Not exported.
+
+prim_putStrLn : String -> IO Unit
+prim_putStrLn = extern
+
+prim_readLine : IO String
+prim_readLine = extern
+
+prim_readInt : IO Int
+prim_readInt = extern
+
+prim_sleepMs : Int -> IO Unit
+prim_sleepMs = extern
+
+prim_readFile : String -> IO (Result Error String)
+prim_readFile = extern
+
+prim_writeFile : String -> String -> IO (Result Error Unit)
+prim_writeFile = extern
+
+extern : a
+extern = extern

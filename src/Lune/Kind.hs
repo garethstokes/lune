@@ -77,6 +77,9 @@ builtinKindEnv =
     , ("IO", KArr KType KType)
     , ("Result", KArr KType (KArr KType KType))
     , ("Validation", KArr KType (KArr KType KType))
+    , ("Atomic", KArr KType KType)
+    , ("Shared", KArr KType KType)
+    , ("Task", KArr KType KType)
     ]
 
 builtinClassEnv :: ClassEnv

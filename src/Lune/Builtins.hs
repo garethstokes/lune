@@ -25,11 +25,17 @@ builtinSchemes :: Map Text Scheme
 builtinSchemes =
   Map.fromList
     [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
     , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
+    , ("prim_and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
     , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("prim_geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    , ("prim_leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    , ("prim_parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
     , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
+    , ("prim_putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
     , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
     , ("unit", Forall [] [] (TCon "Unit"))
     , ("True", Forall [] [] (TCon "Bool"))
@@ -87,11 +93,17 @@ builtinEvalPrims :: Map Text BuiltinPrim
 builtinEvalPrims =
   Map.fromList
     [ ("putStrLn", BuiltinPrim 1 primPutStrLn)
+    , ("prim_putStrLn", BuiltinPrim 1 primPutStrLn)
     , ("parseInt", BuiltinPrim 1 primParseInt)
+    , ("prim_parseInt", BuiltinPrim 1 primParseInt)
     , ("addInt", BuiltinPrim 2 primAddInt)
+    , ("prim_addInt", BuiltinPrim 2 primAddInt)
     , ("and", BuiltinPrim 2 primAnd)
+    , ("prim_and", BuiltinPrim 2 primAnd)
     , ("leInt", BuiltinPrim 2 primLeInt)
+    , ("prim_leInt", BuiltinPrim 2 primLeInt)
     , ("geInt", BuiltinPrim 2 primGeInt)
+    , ("prim_geInt", BuiltinPrim 2 primGeInt)
     , ("$primIOPure", BuiltinPrim 1 primIOPure)
     , ("$primIOBind", BuiltinPrim 2 primIOBind)
     , ("$primIOThen", BuiltinPrim 2 primIOThen)
@@ -243,4 +255,3 @@ primIOThen args =
           Left (NotAnIO other)
     _ ->
       Left (NotAFunction (VPrim 2 primIOThen args))
-

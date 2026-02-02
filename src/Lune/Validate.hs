@@ -43,10 +43,15 @@ builtinArities =
   , ("Bool", 0)
   , ("String", 0)
   , ("Unit", 0)
+  , ("Char", 0)
   , ("List", 1)
   , ("Maybe", 1)
   , ("Result", 2)
   , ("IO", 1)
+  , ("Validation", 2)
+  , ("Atomic", 1)
+  , ("Shared", 1)
+  , ("Task", 1)
   ]
 
 declaredArities :: [Decl] -> ArityEnv

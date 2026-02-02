@@ -1,0 +1,84 @@
+module Lune.Prelude exposing (
+  Unit, unit,
+  Bool(..),
+  Int, Char, String,
+  List(..),
+  Maybe(..),
+  Result(..),
+
+  IO,
+  Atomic, Shared,
+  Task,
+
+  Functor(..),
+  Applicative(..),
+  Monad(..)
+)
+
+{-|
+Surface API per `spec/lune_standard_library_v0_1.md`.
+
+This module intentionally exports no domain functions (only core types and
+typeclasses). See modules like `Lune.Int`, `Lune.String`, `Lune.IO`, etc.
+-}
+
+-- ===== Core types =====
+
+type Unit =
+  Unit
+
+unit : Unit
+unit =
+  Unit
+
+type Bool =
+  True
+  | False
+
+-- Int, Char, String are primitive types provided by the runtime/codegen.
+-- They are declared here as abstract type names for the typechecker.
+
+type Int = Int#
+type Char = Char#
+type String = String#
+
+type List a =
+  Nil
+  | Cons a (List a)
+
+type Maybe a =
+  Nothing
+  | Just a
+
+type Result e a =
+  Err e
+  | Ok a
+
+-- ===== Effects / concurrency =====
+
+type IO a = IO#
+
+-- Internal runtime types (not part of the standard library surface).
+type STM a = STM#
+type TVar a = TVar#
+type Fiber a = Fiber#
+
+-- Atomic vibe: surface aliases over STM/TVar.
+type Atomic a = STM a
+type Shared a = TVar a
+
+-- Task vibe: surface alias over Fiber.
+type Task a = Fiber a
+
+-- ===== Typeclasses =====
+
+class Functor (f : Type -> Type) where
+  map : (a -> b) -> f a -> f b
+
+class Functor f => Applicative (f : Type -> Type) where
+  pure : a -> f a
+  apply : f (a -> b) -> f a -> f b
+
+class Applicative m => Monad (m : Type -> Type) where
+  andThen : m a -> (a -> m b) -> m b
+  then : m a -> m b -> m b

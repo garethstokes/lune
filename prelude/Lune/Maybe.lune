@@ -1,0 +1,23 @@
+module Lune.Maybe exposing (map, andThen, withDefault)
+
+{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
+
+import Lune.Prelude exposing (Maybe(..))
+
+map : (a -> b) -> Maybe a -> Maybe b
+map f m =
+  case m of
+    Nothing -> Nothing
+    Just a -> Just (f a)
+
+andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+andThen k m =
+  case m of
+    Nothing -> Nothing
+    Just a -> k a
+
+withDefault : a -> Maybe a -> a
+withDefault def m =
+  case m of
+    Nothing -> def
+    Just a -> a

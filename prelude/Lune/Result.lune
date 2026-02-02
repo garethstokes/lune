@@ -1,0 +1,29 @@
+module Lune.Result exposing (map, mapError, andThen, withDefault)
+
+{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
+
+import Lune.Prelude exposing (Result(..))
+
+map : (a -> b) -> Result e a -> Result e b
+map f r =
+  case r of
+    Err e -> Err e
+    Ok a -> Ok (f a)
+
+mapError : (e -> f) -> Result e a -> Result f a
+mapError f r =
+  case r of
+    Err e -> Err (f e)
+    Ok a -> Ok a
+
+andThen : (a -> Result e b) -> Result e a -> Result e b
+andThen k r =
+  case r of
+    Err e -> Err e
+    Ok a -> k a
+
+withDefault : a -> Result e a -> a
+withDefault def r =
+  case r of
+    Err _ -> def
+    Ok a -> a

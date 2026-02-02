@@ -1,0 +1,46 @@
+module Lune.Int exposing (add, sub, mul, eq, gte, lte)
+
+{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
+
+import Lune.Prelude exposing (Bool(..), Int)
+
+add : Int -> Int -> Int
+add = prim_addInt
+
+sub : Int -> Int -> Int
+sub = prim_subInt
+
+mul : Int -> Int -> Int
+mul = prim_mulInt
+
+eq : Int -> Int -> Bool
+eq = prim_eqInt
+
+gte : Int -> Int -> Bool
+gte = prim_geInt
+
+lte : Int -> Int -> Bool
+lte = prim_leInt
+
+-- Internal prim hooks (compiler/runtime provided). Not exported.
+
+prim_addInt : Int -> Int -> Int
+prim_addInt = extern
+
+prim_subInt : Int -> Int -> Int
+prim_subInt = extern
+
+prim_mulInt : Int -> Int -> Int
+prim_mulInt = extern
+
+prim_eqInt : Int -> Int -> Bool
+prim_eqInt = extern
+
+prim_geInt : Int -> Int -> Bool
+prim_geInt = extern
+
+prim_leInt : Int -> Int -> Bool
+prim_leInt = extern
+
+extern : a
+extern = extern
