@@ -1,0 +1,13 @@
+lune: examples/06_STM_Counter.lune:28:7:
+   |
+28 |       (do
+   |       ^
+unexpected '('
+expecting "class", "instance", "newtype", "type", end of input, or letter
+
+CallStack (from HasCallStack):
+  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
+HasCallStack backtrace:
+  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:204:5 in ghc-internal:GHC.Internal.Exception
+  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser

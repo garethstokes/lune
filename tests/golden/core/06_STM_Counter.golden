@@ -1,0 +1,1 @@
+ModuleParseError "examples/06_STM_Counter.lune" "examples/06_STM_Counter.lune:28:7:\n   |\n28 |       (do\n   |       ^\nunexpected '('\nexpecting \"class\", \"instance\", \"newtype\", \"type\", end of input, or letter\n"

@@ -1,0 +1,7 @@
+=== Parse Tests ===
+Parsed: {"name":"Alice","age":30}
+Expected error: expected string key in object
+=== Encode Tests ===
+Encoded object: {"name":"Bob","active":true,"score":42}
+Encoded array: [1,2,3]
+Encoded null: null

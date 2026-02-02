@@ -1,8 +1,0 @@
-module Main exposing (main)
-
-import Prelude exposing (..)
-
-main : IO Unit
-main =
-  do
-    putStrLn "Hello, world!"

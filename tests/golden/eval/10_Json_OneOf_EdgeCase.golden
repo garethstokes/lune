@@ -1,0 +1,2 @@
+=== oneOf Edge Case Test ===
+PASS: Got expected error with path [Field "b"]: missing field: b
