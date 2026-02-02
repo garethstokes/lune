@@ -155,7 +155,14 @@ matchPattern pat v =
 
 isConstructorName :: Text -> Bool
 isConstructorName name =
-  case T.uncons name of
+  case lastSegment name of
     Nothing -> False
-    Just (c, _) -> isUpper c
-
+    Just seg ->
+      case T.uncons seg of
+        Nothing -> False
+        Just (c, _) -> isUpper c
+  where
+    lastSegment t =
+      case reverse (T.splitOn "." t) of
+        [] -> Nothing
+        (x : _) -> Just x

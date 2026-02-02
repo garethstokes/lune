@@ -22,17 +22,3 @@ await = prim_await
 
 yield : IO Unit
 yield = prim_yield
-
--- Internal prim hooks (compiler/runtime provided). Not exported.
-
-prim_spawn : IO a -> IO (Fiber a)
-prim_spawn = extern
-
-prim_await : Fiber a -> IO a
-prim_await = extern
-
-prim_yield : IO Unit
-prim_yield = extern
-
-extern : a
-extern = extern

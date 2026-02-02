@@ -12,17 +12,3 @@ or = prim_or
 
 not : Bool -> Bool
 not = prim_not
-
--- Internal prim hooks (compiler/runtime provided). Not exported.
-
-prim_and : Bool -> Bool -> Bool
-prim_and = extern
-
-prim_or : Bool -> Bool -> Bool
-prim_or = extern
-
-prim_not : Bool -> Bool
-prim_not = extern
-
-extern : a
-extern = extern

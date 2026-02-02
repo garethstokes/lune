@@ -4,7 +4,7 @@ import Data.Text (Text)
 
 data Module = Module
   { modName :: Text
-  , modExports :: [Text]
+  , modExports :: [Expose]
   , modImports :: [Import]
   , modDecls :: [Decl]
   }
@@ -12,9 +12,20 @@ data Module = Module
 
 data Import = Import
   { impName :: Text
-  , impExposing :: [Text]
+  , impAs :: Maybe Text
+  , impExposing :: Maybe [Expose]
   }
   deriving (Show)
+
+data Expose
+  = ExposeValue Text
+  | ExposeType Text ExposeMembers
+  deriving (Eq, Ord, Show)
+
+data ExposeMembers
+  = ExposeOpaque
+  | ExposeAll
+  deriving (Eq, Ord, Show)
 
 data Decl
   = DeclTypeSig Text QualType

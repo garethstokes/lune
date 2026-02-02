@@ -12,17 +12,3 @@ fromInt = prim_showInt
 
 toInt : String -> Result String Int
 toInt = prim_parseInt
-
--- Internal prim hooks (compiler/runtime provided). Not exported.
-
-prim_appendString : String -> String -> String
-prim_appendString = extern
-
-prim_showInt : Int -> String
-prim_showInt = extern
-
-prim_parseInt : String -> Result String Int
-prim_parseInt = extern
-
-extern : a
-extern = extern

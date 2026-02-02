@@ -111,8 +111,8 @@ elaborateModule tm = do
       env0 = Builtins.builtinSchemes <> ctorEnv <> methodEnv <> tmValueSchemes tm
       instanceDicts = buildInstanceDicts (tmInstanceEnv tm)
 
-  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts env0) (Map.elems (tmInstanceEnv tm))
-  valueDecls <- mapM (elabValueDecl methodIndex instanceDicts env0) (valueDeclsOf decls)
+  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts env0 (tmClassEnv tm)) (Map.elems (tmInstanceEnv tm))
+  valueDecls <- mapM (elabValueDecl methodIndex instanceDicts env0 (tmClassEnv tm)) (valueDeclsOf decls)
 
   pure
     CoreModule
@@ -136,11 +136,12 @@ elaborateExpr env classEnv instanceEnv expr = do
     Right (s, _cs, _ty, core0) ->
       resolveInstanceDicts s instanceDicts core0
 
-elabInstanceDict :: MethodIndex -> InstanceDicts -> TypeEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
-elabInstanceDict methodIndex instanceDicts env0 inst = do
+elabInstanceDict :: MethodIndex -> InstanceDicts -> TypeEnv -> CE.ClassEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
+elabInstanceDict methodIndex instanceDicts env0 classEnv inst = do
   let dictName = Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst)
   fields <- mapM elabMethod (Map.toList (IE.instanceInfoMethods inst))
-  pure (CoreDecl dictName (CRecord fields))
+  superFields <- elabSuperDictFields classEnv instanceDicts inst
+  pure (CoreDecl dictName (CRecord (superFields <> fields)))
   where
     elabMethod (methodName, methodExpr) =
       case I.runInferM (inferCoreExpr methodIndex env0 methodExpr) of
@@ -150,8 +151,8 @@ elabInstanceDict methodIndex instanceDicts env0 inst = do
           core <- resolveInstanceDicts s instanceDicts core0
           Right (methodName, core)
 
-elabValueDecl :: MethodIndex -> InstanceDicts -> TypeEnv -> S.Decl -> Either ElaborateError CoreDecl
-elabValueDecl methodIndex instanceDicts env0 decl =
+elabValueDecl :: MethodIndex -> InstanceDicts -> TypeEnv -> CE.ClassEnv -> S.Decl -> Either ElaborateError CoreDecl
+elabValueDecl methodIndex instanceDicts env0 classEnv decl =
   case decl of
     S.DeclValue name args body -> do
       scheme <-
@@ -159,7 +160,7 @@ elabValueDecl methodIndex instanceDicts env0 decl =
           Just s -> Right s
           Nothing -> Left (ElaborateMissingScheme name)
 
-      case I.runInferM (inferTopLevel methodIndex env0 scheme args body) of
+      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme args body) of
         Left err ->
           Left (ElaborateInferError name err)
         Right (s, core0) -> do
@@ -177,8 +178,8 @@ valueDeclsOf =
         S.DeclValue {} -> True
         _ -> False
 
-inferTopLevel :: MethodIndex -> TypeEnv -> Scheme -> [S.Pattern] -> S.Expr -> I.InferM (Subst, CoreExpr)
-inferTopLevel methodIndex env0 scheme args body = do
+inferTopLevel :: CE.ClassEnv -> MethodIndex -> TypeEnv -> Scheme -> [S.Pattern] -> S.Expr -> I.InferM (Subst, CoreExpr)
+inferTopLevel classEnv methodIndex env0 scheme args body = do
   (topConstraints, topTy) <- instantiate scheme
   let dictParams = zipWith (dictParamPattern "dict") [0 :: Int ..] topConstraints
 
@@ -187,8 +188,13 @@ inferTopLevel methodIndex env0 scheme args body = do
   (sBody, _cBody, bodyTy, coreBody0) <- inferCoreExpr methodIndex (argEnv <> env0) body
   sRes <- I.unify (applySubstType sBody bodyTy) (applySubstType sBody resTy)
   let sFinal = sRes `composeSubst` sBody
-      givenMapSub = Map.fromList (zip (map (applySubstConstraint sFinal) topConstraints) (map patName dictParams))
-      coreBody1 = replaceGivenDicts sFinal givenMapSub coreBody0
+      givenDirect =
+        Map.fromList
+          [ (applySubstConstraint sFinal c, CVar (patName dictPat))
+          | (c, dictPat) <- zip topConstraints dictParams
+          ]
+      givenAll = deriveSuperDicts classEnv givenDirect
+      coreBody1 = replaceGivenDicts sFinal givenAll coreBody0
 
   let allParams = dictParams <> args
       coreExpr =
@@ -267,7 +273,11 @@ inferCoreExpr methodIndex env expr =
 
       -- Always abstract over all constraints for now.
       let dictParams = zipWith (dictParamPattern "letDict") [0 :: Int ..] c1
-          givenMap = Map.fromList (zip (map (applySubstConstraint s1) c1) (map patName dictParams))
+          givenMap =
+            Map.fromList
+              [ (applySubstConstraint s1 c, CVar (patName dictPat))
+              | (c, dictPat) <- zip c1 dictParams
+              ]
           cBound1 = replaceGivenDicts s1 givenMap cBound0
           cBoundFinal =
             if null dictParams
@@ -437,7 +447,7 @@ inferRecordUpdate methodIndex env base updates = do
               cFinal = applySubstConstraints sFinal (cAcc <> c1)
           pure (sFinal, cFinal, Map.insert name cExpr exprAcc)
 
-replaceGivenDicts :: Subst -> Map Constraint Text -> CoreExpr -> CoreExpr
+replaceGivenDicts :: Subst -> Map Constraint CoreExpr -> CoreExpr -> CoreExpr
 replaceGivenDicts subst given =
   go
   where
@@ -445,8 +455,8 @@ replaceGivenDicts subst given =
       case expr of
         CDictWanted c ->
           case Map.lookup (applySubstConstraint subst c) given of
-            Just dictName ->
-              CVar dictName
+            Just dictExpr ->
+              dictExpr
             Nothing ->
               expr
         CVar {} ->
@@ -470,6 +480,55 @@ replaceGivenDicts subst given =
 
     goAlt (CoreAlt pat body) =
       CoreAlt pat (go body)
+
+deriveSuperDicts :: CE.ClassEnv -> Map Constraint CoreExpr -> Map Constraint CoreExpr
+deriveSuperDicts classEnv direct =
+  go (Map.toList direct) direct
+  where
+    go [] acc =
+      acc
+    go ((c, dictExpr) : rest) acc =
+      case Map.lookup (constraintClass c) classEnv of
+        Nothing ->
+          go rest acc
+        Just info ->
+          let params = CE.classInfoParams info
+              args = constraintArgs c
+           in if length params /= length args
+                then go rest acc
+                else
+                  let subst = Map.fromList (zip params args)
+                      supers = map (applySubstConstraint subst) (CE.classInfoSupers info)
+                      (acc', newWork) = foldl (addOne dictExpr) (acc, []) supers
+                   in go (rest <> newWork) acc'
+
+    addOne dictExpr (accMap, work) superC =
+      let field = "$super" <> constraintClass superC
+          dictExpr' = CSelect dictExpr field
+       in case Map.lookup superC accMap of
+            Just _ ->
+              (accMap, work)
+            Nothing ->
+              (Map.insert superC dictExpr' accMap, work <> [(superC, dictExpr')])
+
+elabSuperDictFields :: CE.ClassEnv -> InstanceDicts -> IE.InstanceInfo -> Either ElaborateError [(Text, CoreExpr)]
+elabSuperDictFields classEnv instanceDicts inst = do
+  case Map.lookup (IE.instanceInfoClass inst) classEnv of
+    Nothing ->
+      Right []
+    Just info ->
+      mapM (oneSuper (IE.instanceInfoHeadCon inst)) (CE.classInfoSupers info)
+  where
+    oneSuper headCon superC = do
+      let superCls = constraintClass superC
+      dictName <-
+        case Map.lookup (superCls, headCon) instanceDicts of
+          Nothing ->
+            Left (ElaborateUnresolvedConstraint (Constraint superCls [TCon headCon]))
+          Just name ->
+            Right name
+      let fieldName = "$super" <> superCls
+      Right (fieldName, CVar dictName)
 
 resolveInstanceDicts :: Subst -> InstanceDicts -> CoreExpr -> Either ElaborateError CoreExpr
 resolveInstanceDicts subst instanceDicts =

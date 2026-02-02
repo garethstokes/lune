@@ -24,67 +24,200 @@ instanceDictName cls headCon =
 builtinSchemes :: Map Text Scheme
 builtinSchemes =
   Map.fromList
-    [ ("addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
-    , ("prim_addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
-    , ("and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
-    , ("prim_and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
-    , ("geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    [ ("prim_addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_subInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_mulInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_eqInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
-    , ("parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    , ("prim_and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
+    , ("prim_or", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
+    , ("prim_not", Forall [] [] (TArrow (TCon "Bool") (TCon "Bool")))
+    , ("prim_appendString", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "String") (TCon "String"))))
+    , ("prim_showInt", Forall [] [] (TArrow (TCon "Int") (TCon "String")))
     , ("prim_parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
-    , ("putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
     , ("prim_putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
-    , ("runMain", Forall [] [] (TArrow (TApp (TCon "IO") (TCon "Unit")) (TCon "Int")))
-    , ("unit", Forall [] [] (TCon "Unit"))
-    , ("True", Forall [] [] (TCon "Bool"))
-    , ("False", Forall [] [] (TCon "Bool"))
-    , ("Nil", Forall ["a"] [] (TApp (TCon "List") (TVar "a")))
-    , ("Cons", Forall ["a"] [] (TArrow (TVar "a") (TArrow (TApp (TCon "List") (TVar "a")) (TApp (TCon "List") (TVar "a")))))
-    , ("Nothing", Forall ["a"] [] (TApp (TCon "Maybe") (TVar "a")))
-    , ("Just", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "Maybe") (TVar "a"))))
-    , ("Ok", Forall ["e", "a"] [] (TArrow (TVar "a") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    , ("Err", Forall ["e", "a"] [] (TArrow (TVar "e") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))
-    -- Monad method names are present via ClassEnv too; keep them here for now so older code remains stable.
-    , ("pureM", Forall ["m", "a"] [Constraint "Monad" [TVar "m"]] (TArrow (TVar "a") (TApp (TVar "m") (TVar "a"))))
-    , ("thenM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TApp (TVar "m") (TVar "b")) (TApp (TVar "m") (TVar "b")))))
-    , ("bindM", Forall ["m", "a", "b"] [Constraint "Monad" [TVar "m"]] (TArrow (TApp (TVar "m") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TVar "m") (TVar "b"))) (TApp (TVar "m") (TVar "b")))))
+    , ("prim_readLine", Forall [] [] (TApp (TCon "IO") (TCon "String")))
+    , ("prim_readInt", Forall [] [] (TApp (TCon "IO") (TCon "Int")))
+    , ("prim_sleepMs", Forall [] [] (TArrow (TCon "Int") (TApp (TCon "IO") (TCon "Unit"))))
+    , ("prim_readFile", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "String")))))
+    , ("prim_writeFile", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
+    , ("prim_atomically", Forall ["a"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TApp (TCon "IO") (TVar "a"))))
+    , ("prim_newTVar", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "STM") (TApp (TCon "TVar") (TVar "a")))))
+    , ("prim_readTVar", Forall ["a"] [] (TArrow (TApp (TCon "TVar") (TVar "a")) (TApp (TCon "STM") (TVar "a"))))
+    , ("prim_writeTVar", Forall ["a"] [] (TArrow (TApp (TCon "TVar") (TVar "a")) (TArrow (TVar "a") (TApp (TCon "STM") (TCon "Unit")))))
+    , ("prim_retry", Forall ["a"] [] (TApp (TCon "STM") (TVar "a")))
+    , ("prim_orElse", Forall ["a"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TArrow (TApp (TCon "STM") (TVar "a")) (TApp (TCon "STM") (TVar "a")))))
+    , ("prim_spawn", Forall ["a"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TApp (TCon "IO") (TApp (TCon "Fiber") (TVar "a")))))
+    , ("prim_await", Forall ["a"] [] (TArrow (TApp (TCon "Fiber") (TVar "a")) (TApp (TCon "IO") (TVar "a"))))
+    , ("prim_yield", Forall [] [] (TApp (TCon "IO") (TCon "Unit")))
+    , ("$primIOPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
+    , ("$primIOBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
+    , ("$primIOThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
 builtinInstanceDicts =
   Map.fromList
-    [ (("Monad", "IO"), instanceDictName "Monad" "IO")
+    [ (("Functor", "IO"), instanceDictName "Functor" "IO")
+    , (("Applicative", "IO"), instanceDictName "Applicative" "IO")
+    , (("Monad", "IO"), instanceDictName "Monad" "IO")
+    , (("Functor", "Result"), instanceDictName "Functor" "Result")
+    , (("Applicative", "Result"), instanceDictName "Applicative" "Result")
     , (("Monad", "Result"), instanceDictName "Monad" "Result")
     ]
 
 builtinCoreDecls :: [C.CoreDecl]
 builtinCoreDecls =
-  [ C.CoreDecl (instanceDictName "Monad" "IO") (C.CVar "$primDictMonad_IO")
-  , C.CoreDecl (instanceDictName "Monad" "Result") dictMonadResultCore
+  [ dictFunctorIO
+  , dictApplicativeIO
+  , dictMonadIO
+  , dictFunctorResult
+  , dictApplicativeResult
+  , dictMonadResult
   ]
   where
-    dictMonadResultCore =
-      C.CRecord
-        [ ("pureM", C.CLam [S.PVar "a"] (C.CApp (C.CVar "Ok") (C.CVar "a")))
-        , ("bindM", C.CLam [S.PVar "m", S.PVar "k"] bindBody)
-        , ("thenM", C.CLam [S.PVar "ra", S.PVar "rb"] thenBody)
-        ]
+    preludeCon n = "Lune.Prelude." <> n
+    conOk = preludeCon "Ok"
+    conErr = preludeCon "Err"
 
-    bindBody =
-      C.CCase
-        (C.CVar "m")
-        [ C.CoreAlt (S.PCon "Ok" [S.PVar "a"]) (C.CApp (C.CVar "k") (C.CVar "a"))
-        , C.CoreAlt (S.PCon "Err" [S.PVar "e"]) (C.CApp (C.CVar "Err") (C.CVar "e"))
-        ]
+    dictFunctorIO =
+      C.CoreDecl
+        (instanceDictName "Functor" "IO")
+        ( C.CRecord
+            [ ( "map"
+              , C.CLam
+                  [S.PVar "f", S.PVar "ma"]
+                  ( C.CApp
+                      ( C.CApp
+                          (C.CVar "$primIOBind")
+                          (C.CVar "ma")
+                      )
+                      ( C.CLam
+                          [S.PVar "a"]
+                          (C.CApp (C.CVar "$primIOPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                      )
+                  )
+              )
+            ]
+        )
 
-    thenBody =
-      C.CCase
-        (C.CVar "ra")
-        [ C.CoreAlt (S.PCon "Ok" [S.PWildcard]) (C.CVar "rb")
-        , C.CoreAlt (S.PCon "Err" [S.PVar "e"]) (C.CApp (C.CVar "Err") (C.CVar "e"))
-        ]
+    dictApplicativeIO =
+      C.CoreDecl
+        (instanceDictName "Applicative" "IO")
+        ( C.CRecord
+            [ ("$superFunctor", C.CVar (instanceDictName "Functor" "IO"))
+            , ("pure", C.CVar "$primIOPure")
+            , ("apply", applicativeApplyIO)
+            ]
+        )
+      where
+        applicativeApplyIO =
+          C.CLam
+            [S.PVar "mf", S.PVar "ma"]
+            ( C.CApp
+                (C.CApp (C.CVar "$primIOBind") (C.CVar "mf"))
+                ( C.CLam
+                    [S.PVar "f"]
+                    ( C.CApp
+                        (C.CApp (C.CVar "$primIOBind") (C.CVar "ma"))
+                        ( C.CLam
+                            [S.PVar "a"]
+                            (C.CApp (C.CVar "$primIOPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                        )
+                    )
+                )
+            )
+
+    dictMonadIO =
+      C.CoreDecl
+        (instanceDictName "Monad" "IO")
+        ( C.CRecord
+            [ ("$superApplicative", C.CVar (instanceDictName "Applicative" "IO"))
+            , ("andThen", C.CVar "$primIOBind")
+            , ("then", C.CVar "$primIOThen")
+            ]
+        )
+
+    dictFunctorResult =
+      C.CoreDecl
+        (instanceDictName "Functor" "Result")
+        ( C.CRecord
+            [ ( "map"
+              , C.CLam
+                  [S.PVar "f", S.PVar "r"]
+                  ( C.CCase
+                      (C.CVar "r")
+                      [ C.CoreAlt
+                          (S.PCon conErr [S.PVar "e"])
+                          (C.CApp (C.CVar conErr) (C.CVar "e"))
+                      , C.CoreAlt
+                          (S.PCon conOk [S.PVar "a"])
+                          (C.CApp (C.CVar conOk) (C.CApp (C.CVar "f") (C.CVar "a")))
+                      ]
+                  )
+              )
+            ]
+        )
+
+    dictApplicativeResult =
+      C.CoreDecl
+        (instanceDictName "Applicative" "Result")
+        ( C.CRecord
+            [ ("$superFunctor", C.CVar (instanceDictName "Functor" "Result"))
+            , ("pure", C.CLam [S.PVar "a"] (C.CApp (C.CVar conOk) (C.CVar "a")))
+            , ("apply", applicativeApplyResult)
+            ]
+        )
+      where
+        applicativeApplyResult =
+          C.CLam
+            [S.PVar "rf", S.PVar "ra"]
+            ( C.CCase
+                (C.CVar "rf")
+                [ C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                , C.CoreAlt
+                    (S.PCon conOk [S.PVar "f"])
+                    ( C.CCase
+                        (C.CVar "ra")
+                        [ C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                        , C.CoreAlt
+                            (S.PCon conOk [S.PVar "a"])
+                            (C.CApp (C.CVar conOk) (C.CApp (C.CVar "f") (C.CVar "a")))
+                        ]
+                    )
+                ]
+            )
+
+    dictMonadResult =
+      C.CoreDecl
+        (instanceDictName "Monad" "Result")
+        ( C.CRecord
+            [ ("$superApplicative", C.CVar (instanceDictName "Applicative" "Result"))
+            , ("andThen", monadAndThenResult)
+            , ("then", monadThenResult)
+            ]
+        )
+      where
+        monadAndThenResult =
+          C.CLam
+            [S.PVar "m", S.PVar "k"]
+            ( C.CCase
+                (C.CVar "m")
+                [ C.CoreAlt (S.PCon conOk [S.PVar "a"]) (C.CApp (C.CVar "k") (C.CVar "a"))
+                , C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                ]
+            )
+
+        monadThenResult =
+          C.CLam
+            [S.PVar "ra", S.PVar "rb"]
+            ( C.CCase
+                (C.CVar "ra")
+                [ C.CoreAlt (S.PCon conOk [S.PWildcard]) (C.CVar "rb")
+                , C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                ]
+            )
 
 data BuiltinPrim = BuiltinPrim
   { primArity :: Int
@@ -94,17 +227,11 @@ data BuiltinPrim = BuiltinPrim
 builtinEvalPrims :: Map Text BuiltinPrim
 builtinEvalPrims =
   Map.fromList
-    [ ("putStrLn", BuiltinPrim 1 primPutStrLn)
-    , ("prim_putStrLn", BuiltinPrim 1 primPutStrLn)
-    , ("parseInt", BuiltinPrim 1 primParseInt)
+    [ ("prim_putStrLn", BuiltinPrim 1 primPutStrLn)
     , ("prim_parseInt", BuiltinPrim 1 primParseInt)
-    , ("addInt", BuiltinPrim 2 primAddInt)
     , ("prim_addInt", BuiltinPrim 2 primAddInt)
-    , ("and", BuiltinPrim 2 primAnd)
     , ("prim_and", BuiltinPrim 2 primAnd)
-    , ("leInt", BuiltinPrim 2 primLeInt)
     , ("prim_leInt", BuiltinPrim 2 primLeInt)
-    , ("geInt", BuiltinPrim 2 primGeInt)
     , ("prim_geInt", BuiltinPrim 2 primGeInt)
     , ("$primIOPure", BuiltinPrim 1 primIOPure)
     , ("$primIOBind", BuiltinPrim 2 primIOBind)
@@ -113,24 +240,10 @@ builtinEvalPrims =
 
 builtinEvalEnv :: Map Text Value
 builtinEvalEnv =
-  primValues <> otherValues
+  primValues
   where
     primValues =
       Map.map (\(BuiltinPrim arity f) -> VPrim arity f []) builtinEvalPrims
-
-    otherValues =
-      Map.fromList
-        [ ("unit", VCon "Unit" [])
-        , ("$primDictMonad_IO", dictMonadIO)
-        ]
-
-    dictMonadIO =
-      VRecord $
-        Map.fromList
-          [ ("pureM", VPrim 1 primIOPure [])
-          , ("bindM", VPrim 2 primIOBind [])
-          , ("thenM", VPrim 2 primIOThen [])
-          ]
 
 primPutStrLn :: [Value] -> Either EvalError Value
 primPutStrLn args =
@@ -138,11 +251,13 @@ primPutStrLn args =
     [VString s] ->
       Right $
         VIO $ \w ->
-          Right (w {worldStdout = worldStdout w <> [s]}, VCon "Unit" [])
+          Right (w {worldStdout = worldStdout w <> [s]}, VCon (preludeCon "Unit") [])
     [other] ->
       Left (ExpectedString other)
     _ ->
       Left (NotAFunction (VPrim 1 primPutStrLn args))
+  where
+    preludeCon n = "Lune.Prelude." <> n
 
 primParseInt :: [Value] -> Either EvalError Value
 primParseInt args =
@@ -150,14 +265,16 @@ primParseInt args =
     [VString s] ->
       case parseDecimal s of
         Nothing ->
-          Right (VCon "Err" [VString "invalid int"])
+          Right (VCon (preludeCon "Err") [VString "invalid int"])
         Just n ->
-          Right (VCon "Ok" [VInt n])
+          Right (VCon (preludeCon "Ok") [VInt n])
     [other] ->
       Left (ExpectedString other)
     _ ->
       Left (NotAFunction (VPrim 1 primParseInt args))
   where
+    preludeCon n = "Lune.Prelude." <> n
+
     parseDecimal :: Text -> Maybe Integer
     parseDecimal t
       | T.null t = Nothing
@@ -190,12 +307,12 @@ primAddInt args =
 primAnd :: [Value] -> Either EvalError Value
 primAnd args =
   case args of
-    [VCon "False" [], _] ->
-      Right (VCon "False" [])
-    [VCon "True" [], VCon "True" []] ->
-      Right (VCon "True" [])
-    [VCon "True" [], VCon "False" []] ->
-      Right (VCon "False" [])
+    [VCon "Lune.Prelude.False" [], _] ->
+      Right (VCon "Lune.Prelude.False" [])
+    [VCon "Lune.Prelude.True" [], VCon "Lune.Prelude.True" []] ->
+      Right (VCon "Lune.Prelude.True" [])
+    [VCon "Lune.Prelude.True" [], VCon "Lune.Prelude.False" []] ->
+      Right (VCon "Lune.Prelude.False" [])
     _ ->
       Left (NotAFunction (VPrim 2 primAnd args))
 
@@ -203,7 +320,7 @@ primLeInt :: [Value] -> Either EvalError Value
 primLeInt args =
   case args of
     [VInt a, VInt b] ->
-      if a <= b then Right (VCon "True" []) else Right (VCon "False" [])
+      if a <= b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
     _ ->
       Left (NotAFunction (VPrim 2 primLeInt args))
 
@@ -211,7 +328,7 @@ primGeInt :: [Value] -> Either EvalError Value
 primGeInt args =
   case args of
     [VInt a, VInt b] ->
-      if a >= b then Right (VCon "True" []) else Right (VCon "False" [])
+      if a >= b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
     _ ->
       Left (NotAFunction (VPrim 2 primGeInt args))
 

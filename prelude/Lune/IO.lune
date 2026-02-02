@@ -31,26 +31,3 @@ readFile = prim_readFile
 
 writeFile : String -> String -> IO (Result Error Unit)
 writeFile = prim_writeFile
-
--- Internal prim hooks (compiler/runtime provided). Not exported.
-
-prim_putStrLn : String -> IO Unit
-prim_putStrLn = extern
-
-prim_readLine : IO String
-prim_readLine = extern
-
-prim_readInt : IO Int
-prim_readInt = extern
-
-prim_sleepMs : Int -> IO Unit
-prim_sleepMs = extern
-
-prim_readFile : String -> IO (Result Error String)
-prim_readFile = extern
-
-prim_writeFile : String -> String -> IO (Result Error Unit)
-prim_writeFile = extern
-
-extern : a
-extern = extern

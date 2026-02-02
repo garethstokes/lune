@@ -1,10 +1,6 @@
 module ValidationDemo exposing (Validation(..), map2, validateUser)
 
-import Lune.Prelude exposing (
-  Bool(..), Int, String, List(..),
-  Result(..),  -- not used; here to show coexistence
-  geInt
-)
+import Lune.Int as Int
 
 type Validation e a =
   Invalid e
@@ -43,7 +39,7 @@ validateName s =
 
 validateAge : Int -> Validation (List String) Int
 validateAge n =
-  case geInt n 0 of
+  case Int.gte n 0 of
     True  -> Valid n
     False -> Invalid (Cons "age must be >= 0" Nil)
 

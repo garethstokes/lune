@@ -5,9 +5,9 @@ import Lune.Prelude exposing (List(..), Monad(..))
 mapM : Monad m => (a -> m b) -> List a -> m (List b)
 mapM f xs =
   case xs of
-    Nil -> pureM Nil
+    Nil -> pure Nil
     Cons x xt ->
       do
         y  <- f x
         yt <- mapM f xt
-        pureM (Cons y yt)
+        pure (Cons y yt)

@@ -25,6 +25,8 @@ library
       Lune.Codegen.C
       Lune.Elaborate
       Lune.Eval
+      Lune.ModuleGraph
+      Lune.Resolve
 
   other-modules:
       Lune.Builtins
@@ -35,6 +37,8 @@ library
   build-depends:
       base >=4.16 && <4.21,
       containers,
+      directory,
+      filepath,
       text,
       transformers,
       megaparsec,

@@ -13,6 +13,8 @@ import qualified Lune.Core as Core
 import Lune.Parser (parseFile)
 import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
+import qualified Lune.ModuleGraph as MG
+import qualified Lune.Resolve as Resolve
 
 main :: IO ()
 main = do
@@ -101,11 +103,38 @@ parseArgs args =
 
 run :: Options -> IO ()
 run opts = do
-  surface <- parseFile (optPath opts)
+  if optDesugar opts || optValidate opts || optTypecheck opts || optCore opts || optEval opts || optRun opts
+    then runProgramPipeline opts
+    else do
+      surface <- parseFile (optPath opts)
+      print surface
+
+runProgramPipeline :: Options -> IO ()
+runProgramPipeline opts = do
+  loaded <- MG.loadProgram (optPath opts)
+  program <-
+    case loaded of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right p ->
+        pure p
+
+  resolved <-
+    case Resolve.resolveProgram program of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right m ->
+        pure m
+
   let mod' =
         if optDesugar opts || optTypecheck opts || optCore opts || optEval opts || optRun opts
-          then desugarModule surface
-          else surface
+          then desugarModule resolved
+          else resolved
+
+      entryName = MG.progEntryName program
+      qualify n = entryName <> "." <> n
 
   let shouldValidate = optValidate opts || optTypecheck opts || optCore opts || optEval opts || optRun opts
   if shouldValidate
@@ -128,12 +157,12 @@ run opts = do
             putStrLn (show err)
             exitFailure
           Right env ->
-            case Map.lookup "main" env of
+            case Map.lookup (qualify "main") env of
               Nothing -> do
                 putStrLn "No `main` binding found."
                 exitFailure
               Just _ ->
-                case Eval.evalExpr env (Core.CVar "main") of
+                case Eval.evalExpr env (Core.CVar (qualify "main")) of
                   Left err -> do
                     putStrLn (show err)
                     exitFailure
@@ -156,16 +185,16 @@ run opts = do
                 putStrLn (show err)
                 exitFailure
               Right env ->
-                case Map.lookup "idList" env of
+                case Map.lookup (qualify "idList") env of
                   Just _ ->
-                    case Eval.evalExpr env (Core.CVar "idList") of
+                    case Eval.evalExpr env (Core.CVar (qualify "idList")) of
                       Left err -> do
                         putStrLn (show err)
                         exitFailure
                       Right v ->
                         print v
                   Nothing ->
-                    let names = filter (`Map.member` env) ["demo", "demo2"]
+                    let names = filter (`Map.member` env) (map qualify ["demo", "demo2"])
                      in if null names
                           then print (Map.keys env)
                           else mapM_ (evalAndPrint env) names
@@ -185,7 +214,10 @@ run opts = do
                     exitFailure
                   Right bindings -> do
                     putStrLn "OK"
-                    mapM_ (\(name, scheme) -> putStrLn (T.unpack (name <> " : " <> renderScheme scheme))) bindings
+                    let entryPrefix = entryName <> "."
+                        onlyEntry =
+                          filter (\(name, _) -> entryPrefix `T.isPrefixOf` name) bindings
+                    mapM_ (\(name, scheme) -> putStrLn (T.unpack (name <> " : " <> renderScheme scheme))) onlyEntry
                 else
                   if optValidate opts
                     then putStrLn "OK"

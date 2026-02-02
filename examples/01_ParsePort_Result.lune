@@ -1,10 +1,8 @@
-module ParseDemo exposing (Result(..), parsePort)
+module ParseDemo exposing (parsePort, demo, demo2)
 
-import Lune.Prelude exposing (
-  Unit, unit, Bool(..), Int, String,
-  Result(..),
-  and, geInt, leInt, parseInt
-)
+import Lune.Bool as Bool
+import Lune.Int as Int
+import Lune.String as String
 
 guard : Bool -> e -> Result e Unit
 guard cond err =
@@ -15,8 +13,8 @@ guard cond err =
 parsePort : String -> Result String Int
 parsePort s =
   do
-    n <- parseInt s
-    _ <- guard (and (geInt n 1) (leInt n 65535)) "port out of range"
+    n <- String.toInt s
+    _ <- guard (Bool.and (Int.gte n 1) (Int.lte n 65535)) "port out of range"
     pure n
 
 -- NOTE: `pure` for Result is assumed to be provided by the stdlib as part of Monad Result.

@@ -41,26 +41,3 @@ wait = prim_retry
 
 orElse : Atomic a -> Atomic a -> Atomic a
 orElse = prim_orElse
-
--- Internal prim hooks (compiler/runtime provided). Not exported.
-
-prim_atomically : STM a -> IO a
-prim_atomically = extern
-
-prim_newTVar : a -> STM (TVar a)
-prim_newTVar = extern
-
-prim_readTVar : TVar a -> STM a
-prim_readTVar = extern
-
-prim_writeTVar : TVar a -> a -> STM Unit
-prim_writeTVar = extern
-
-prim_retry : STM a
-prim_retry = extern
-
-prim_orElse : STM a -> STM a -> STM a
-prim_orElse = extern
-
-extern : a
-extern = extern

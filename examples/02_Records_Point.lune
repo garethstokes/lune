@@ -1,6 +1,6 @@
 module RecordsDemo exposing (Point, origin, moveRight)
 
-import Lune.Prelude exposing (Int, addInt)
+import Lune.Int as Int
 
 type alias Point =
   { x : Int
@@ -13,4 +13,4 @@ origin =
 
 moveRight : Int -> Point -> Point
 moveRight dx p =
-  { p | x = addInt p.x dx }
+  { p | x = Int.add p.x dx }

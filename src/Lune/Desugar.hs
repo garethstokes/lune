@@ -51,16 +51,16 @@ desugarAlt (Alt pat expr) =
 
 desugarDo :: [Stmt] -> Expr
 desugarDo =
-  desugarDoWith False
+  desugarDoWith
 
-desugarDoWith :: Bool -> [Stmt] -> Expr
-desugarDoWith hasPreviousStatement stmts =
+desugarDoWith :: [Stmt] -> Expr
+desugarDoWith stmts =
   case stmts of
     [] ->
       error "desugarDo: empty do-block"
 
     [ExprStmt e] ->
-      if hasPreviousStatement then desugarFinalInDo e else desugarExpr e
+      desugarExpr e
 
     BindStmt pat m : rest ->
       case rest of
@@ -69,7 +69,7 @@ desugarDoWith hasPreviousStatement stmts =
         _ ->
           case pat of
             PVar name ->
-              bindM (desugarExpr m) (Lam [PVar name] (desugarDoWith True rest))
+              andThen (desugarExpr m) (Lam [PVar name] (desugarDoWith rest))
             _ ->
               error "desugarDo: pattern binds are not supported (only x <- and _ <- are allowed)"
 
@@ -78,45 +78,22 @@ desugarDoWith hasPreviousStatement stmts =
         [] ->
           error "desugarDo: do-block cannot end with a discard bind statement"
         _ ->
-          thenM (desugarExpr m) (desugarDoWith True rest)
+          thenDo (desugarExpr m) (desugarDoWith rest)
 
     LetStmt name e : rest ->
       case rest of
         [] ->
           error "desugarDo: do-block cannot end with a let statement"
         _ ->
-          LetIn name (desugarExpr e) (desugarDoWith True rest)
+          LetIn name (desugarExpr e) (desugarDoWith rest)
 
     ExprStmt m : rest ->
-      thenM (desugarExpr m) (desugarDoWith True rest)
+      thenDo (desugarExpr m) (desugarDoWith rest)
 
-desugarFinalInDo :: Expr -> Expr
-desugarFinalInDo expr =
-  case unapply expr of
-    (Var "pure", args@(_ : _)) ->
-      apply (Var "pureM") (map desugarExpr args)
-    _ ->
-      desugarExpr expr
+andThen :: Expr -> Expr -> Expr
+andThen m k =
+  App (App (Var "andThen") m) k
 
-unapply :: Expr -> (Expr, [Expr])
-unapply =
-  go []
-  where
-    go args e =
-      case e of
-        App f x ->
-          go (x : args) f
-        _ ->
-          (e, args)
-
-apply :: Expr -> [Expr] -> Expr
-apply =
-  foldl App
-
-bindM :: Expr -> Expr -> Expr
-bindM m k =
-  App (App (Var "bindM") m) k
-
-thenM :: Expr -> Expr -> Expr
-thenM m next =
-  App (App (Var "thenM") m) next
+thenDo :: Expr -> Expr -> Expr
+thenDo m next =
+  App (App (Var "then") m) next

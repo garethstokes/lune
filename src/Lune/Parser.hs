@@ -1,5 +1,6 @@
 module Lune.Parser
   ( parseFile
+  , parseFileEither
   , parseModule
   , parseExpr
   , parseDo
@@ -10,6 +11,7 @@ module Lune.Parser
 import Control.Applicative (empty, many, optional, some)
 import Control.Monad (void)
 import Data.Functor (($>))
+import Data.Char (isUpper)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -47,10 +49,18 @@ type Parser = Parsec Void Text
 
 parseFile :: FilePath -> IO Module
 parseFile path = do
-  contents <- T.readFile path
-  case runParser (scnOptional *> parseModule <* eof) path contents of
-    Left err -> error (errorBundlePretty err)
+  result <- parseFileEither path
+  case result of
+    Left err -> error err
     Right mod' -> pure mod'
+
+parseFileEither :: FilePath -> IO (Either String Module)
+parseFileEither path = do
+  contents <- T.readFile path
+  pure $
+    case runParser (scnOptional *> parseModule <* eof) path contents of
+      Left err -> Left (errorBundlePretty err)
+      Right mod' -> Right mod'
 
 parseModule :: Parser Module
 parseModule = do
@@ -60,7 +70,7 @@ parseModule = do
   scnOptional
   pure Module {modName = name, modExports = exports, modImports = imports, modDecls = decls}
 
-moduleHeader :: Parser (Text, [Text])
+moduleHeader :: Parser (Text, [Expose])
 moduleHeader = do
   keyword "module"
   name <- moduleName
@@ -72,9 +82,10 @@ importDecl :: Parser Import
 importDecl = do
   keyword "import"
   name <- moduleName
-  exposing <- exposingList
+  alias <- optional (keyword "as" *> identifier)
+  exposing <- optional exposingList
   scn
-  pure Import {impName = name, impExposing = exposing}
+  pure Import {impName = name, impAs = alias, impExposing = exposing}
 
 decl :: Parser Decl
 decl =
@@ -471,7 +482,7 @@ stringLiteral :: Parser String
 stringLiteral =
   char '"' >> manyTill L.charLiteral (char '"')
 
-exposingList :: Parser [Text]
+exposingList :: Parser [Expose]
 exposingList = do
   keyword "exposing"
   between (symbol "(") (symbol ")") body
@@ -482,13 +493,15 @@ exposingList = do
       scnOptional
       pure items
 
-exposingItem :: Parser Text
+exposingItem :: Parser Expose
 exposingItem = do
   name <- identifier
   hasAll <- optional (symbol "(..)")
-  pure $ case hasAll of
-    Nothing -> name
-    Just _ -> name <> "(..)"
+  case T.uncons name of
+    Just (c, _) | isUpper c ->
+      pure (ExposeType name (if hasAll == Nothing then ExposeOpaque else ExposeAll))
+    _ ->
+      pure (ExposeValue name)
 
 moduleName :: Parser Text
 moduleName = lexeme $ do
@@ -548,6 +561,7 @@ reserved =
   , "let"
   , "in"
   , "do"
+  , "as"
   , "class"
   , "instance"
   , "where"

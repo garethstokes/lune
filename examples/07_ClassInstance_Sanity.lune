@@ -1,18 +1,17 @@
 module InstanceDemo exposing (idList)
 
-class Functor (f : Type -> Type) where
-  fmap : (a -> b) -> f a -> f b
+import Lune.Prelude exposing (Functor(..), Int)
 
-type List a =
-  Nil
-  | Cons a (List a)
+type MyList a =
+  MyNil
+  | MyCons a (MyList a)
 
-instance Functor List where
-  fmap = \f xs ->
+instance Functor MyList where
+  map = \f xs ->
     case xs of
-      Nil -> Nil
-      Cons x xt -> Cons (f x) (fmap f xt)
+      MyNil -> MyNil
+      MyCons x xt -> MyCons (f x) (map f xt)
 
-idList : List Int
+idList : MyList Int
 idList =
-  fmap (\x -> x) (Cons 1 Nil)
+  map (\x -> x) (MyCons 1 MyNil)

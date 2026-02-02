@@ -51,7 +51,7 @@ instance Show Value where
       VString s ->
         show (T.unpack s)
       VCon name args ->
-        unwords (T.unpack name : map showAtom args)
+        unwords (T.unpack (renderCtor name) : map showAtom args)
       VClosure {} ->
         "<closure>"
       VRecord fields ->
@@ -70,6 +70,11 @@ instance Show Value where
       VIO {} ->
         "<io>"
     where
+      renderCtor n =
+        case reverse (T.splitOn "." n) of
+          [] -> n
+          (x : _) -> x
+
       showAtom x =
         case x of
           VCon _ (_ : _) ->
