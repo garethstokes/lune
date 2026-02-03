@@ -281,6 +281,9 @@ builtinEvalPrims =
     -- STM primitives
     , ("$primSTMPure", BuiltinPrim 1 primSTMPure)
     , ("$primSTMBind", BuiltinPrim 2 primSTMBind)
+    , ("prim_newTVar", BuiltinPrim 1 primNewTVar)
+    , ("prim_readTVar", BuiltinPrim 1 primReadTVar)
+    , ("prim_writeTVar", BuiltinPrim 2 primWriteTVar)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -920,3 +923,22 @@ primSTMBind args =
       )))
     [other, _] -> Left (NotAnIO other)  -- reuse error type
     _ -> Left (NotAFunction (VPrim 2 primSTMBind args))
+
+primNewTVar :: [Value] -> Either EvalError Value
+primNewTVar args =
+  case args of
+    [initialValue] -> Right (VSTM (STMNewTVar initialValue))
+    _ -> Left (NotAFunction (VPrim 1 primNewTVar args))
+
+primReadTVar :: [Value] -> Either EvalError Value
+primReadTVar args =
+  case args of
+    [VTVar tvid] -> Right (VSTM (STMReadTVar tvid))
+    _ -> Left (NotAFunction (VPrim 1 primReadTVar args))
+
+primWriteTVar :: [Value] -> Either EvalError Value
+primWriteTVar args =
+  case args of
+    [VTVar tvid, newValue] ->
+      Right (VSTM (STMWriteTVar tvid newValue))
+    _ -> Left (NotAFunction (VPrim 2 primWriteTVar args))
