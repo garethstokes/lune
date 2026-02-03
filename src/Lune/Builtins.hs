@@ -139,6 +139,13 @@ builtinSchemes =
         (TArrow (TArrow (TVar "a") (TApp (TApp (TCon "Api") (TVar "e")) (TVar "b")))
           (TArrow (TApp (TApp (TCon "Api") (TVar "e")) (TVar "a"))
             (TApp (TApp (TCon "Api") (TVar "e")) (TVar "b")))))
+    -- Path matching primitive
+    , ("prim_matchPath", Forall [] []
+        (TArrow (TCon "String")
+          (TArrow (TCon "String")
+            (TApp (TCon "Maybe")
+              (TApp (TCon "List")
+                (TRecord [("key", TCon "String"), ("value", TCon "String")]))))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -527,6 +534,8 @@ builtinEvalPrims =
     , ("prim_apiMapError", BuiltinPrim 2 primApiMapError)
     , ("prim_apiPure", BuiltinPrim 1 primApiPure)
     , ("prim_apiAndThen", BuiltinPrim 2 primApiAndThen)
+    -- Path matching primitive
+    , ("prim_matchPath", BuiltinPrim 2 primMatchPath)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1833,3 +1842,37 @@ primApiAndThen args =
       Left (NotAnIO other)
     _ ->
       Left (NotAFunction (VPrim 2 primApiAndThen args))
+
+-- =============================================================================
+-- Path Matching Primitive
+-- =============================================================================
+
+-- | prim_matchPath : String -> String -> Maybe (List { key : String, value : String })
+-- Pattern: "/users/:id/posts/:postId"
+-- Path: "/users/123/posts/456"
+-- Returns: Just [{ key = "id", value = "123" }, { key = "postId", value = "456" }]
+primMatchPath :: [Value] -> Either EvalError Value
+primMatchPath args =
+  case args of
+    [VString pattern, VString path] ->
+      let patternParts = filter (not . T.null) $ T.splitOn "/" pattern
+          pathParts = filter (not . T.null) $ T.splitOn "/" path
+      in case matchParts patternParts pathParts of
+        Nothing -> Right (VCon (preludeCon "Nothing") [])
+        Just params -> Right (VCon (preludeCon "Just") [listToValue (map paramToValue params)])
+    _ ->
+      Left (NotAFunction (VPrim 2 primMatchPath args))
+  where
+    matchParts :: [Text] -> [Text] -> Maybe [(Text, Text)]
+    matchParts [] [] = Just []
+    matchParts [] _ = Nothing
+    matchParts _ [] = Nothing
+    matchParts (p:ps) (v:vs)
+      | ":" `T.isPrefixOf` p =
+          let paramName = T.drop 1 p
+          in ((paramName, v) :) <$> matchParts ps vs
+      | p == v = matchParts ps vs
+      | otherwise = Nothing
+
+    paramToValue :: (Text, Text) -> Value
+    paramToValue (k, v) = VRecord $ Map.fromList [("key", VString k), ("value", VString v)]
