@@ -56,6 +56,7 @@ cabal run lune -- --eval examples/00_Hello.lune
 | Concurrency (Tasks, STM) | Working |
 | File I/O (read/write) | Working |
 | TCP Sockets | Working |
+| Web Framework (Api monad) | Basic (JSON APIs) |
 | FFI | Not implemented |
 | Native compilation | Partial |
 
@@ -175,4 +176,35 @@ main =
                   Err _ -> IO.println "Recv error"
                 _ <- Socket.closeConn conn
                 Socket.closeSocket sock
+```
+
+## Web API Example
+
+```haskell
+module ApiDemo exposing (main)
+
+import Lune.IO as IO
+import Lune.Api as Api
+import Lune.Api.Route as Route
+import Lune.Http exposing (Request, Response, Method(..))
+import Lune.Json as Json
+
+type AppError = NotFound String | BadRequest String
+
+errorHandler : AppError -> Response
+errorHandler err =
+  case err of
+    NotFound msg -> { status = 404, headers = [], body = msg }
+    BadRequest msg -> { status = 400, headers = [], body = msg }
+
+healthHandler : Request -> {} -> Api.Api AppError Response
+healthHandler req ctx =
+  Api.pure { status = 200, headers = [], body = "{\"status\":\"ok\"}" }
+
+main : IO Unit
+main =
+  do
+    let routes = Route.define [ Route.get "/health" healthHandler ]
+    let config = { port = 8080, errorHandler = errorHandler, context = {} }
+    Api.serve config routes
 ```
