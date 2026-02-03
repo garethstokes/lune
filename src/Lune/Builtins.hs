@@ -153,6 +153,9 @@ builtinInstanceDicts =
     , (("Functor", "STM"), instanceDictName "Functor" "STM")
     , (("Applicative", "STM"), instanceDictName "Applicative" "STM")
     , (("Monad", "STM"), instanceDictName "Monad" "STM")
+    , (("Functor", "Api"), instanceDictName "Functor" "Api")
+    , (("Applicative", "Api"), instanceDictName "Applicative" "Api")
+    , (("Monad", "Api"), instanceDictName "Monad" "Api")
     ]
 
 builtinCoreDecls :: [C.CoreDecl]
@@ -166,6 +169,9 @@ builtinCoreDecls =
   , dictFunctorSTM
   , dictApplicativeSTM
   , dictMonadSTM
+  , dictFunctorApi
+  , dictApplicativeApi
+  , dictMonadApi
   ]
   where
     preludeCon n = "Lune.Prelude." <> n
@@ -370,6 +376,79 @@ builtinCoreDecls =
                   ( C.CApp
                       (C.CApp (C.CVar "$primSTMBind") (C.CVar "ma"))
                       (C.CLam [S.PWildcard] (C.CVar "mb"))
+                  )
+              )
+            ]
+        )
+
+    dictFunctorApi =
+      C.CoreDecl
+        (instanceDictName "Functor" "Api")
+        ( C.CRecord
+            [ ( "map"
+              , C.CLam
+                  [S.PVar "f", S.PVar "ma"]
+                  ( C.CApp
+                      ( C.CApp
+                          (C.CVar "prim_apiAndThen")
+                          ( C.CLam
+                              [S.PVar "a"]
+                              (C.CApp (C.CVar "prim_apiPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                          )
+                      )
+                      (C.CVar "ma")
+                  )
+              )
+            ]
+        )
+
+    dictApplicativeApi =
+      C.CoreDecl
+        (instanceDictName "Applicative" "Api")
+        ( C.CRecord
+            [ ("$superFunctor", C.CVar (instanceDictName "Functor" "Api"))
+            , ("pure", C.CVar "prim_apiPure")
+            , ("apply", applicativeApplyApi)
+            ]
+        )
+      where
+        applicativeApplyApi =
+          C.CLam
+            [S.PVar "mf", S.PVar "ma"]
+            ( C.CApp
+                (C.CApp (C.CVar "prim_apiAndThen")
+                  ( C.CLam
+                      [S.PVar "f"]
+                      ( C.CApp
+                          (C.CApp (C.CVar "prim_apiAndThen")
+                            ( C.CLam
+                                [S.PVar "a"]
+                                (C.CApp (C.CVar "prim_apiPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                            )
+                          )
+                          (C.CVar "ma")
+                      )
+                  )
+                )
+                (C.CVar "mf")
+            )
+
+    dictMonadApi =
+      C.CoreDecl
+        (instanceDictName "Monad" "Api")
+        ( C.CRecord
+            [ ("$superApplicative", C.CVar (instanceDictName "Applicative" "Api"))
+            , ( "andThen"
+              , C.CLam
+                  [S.PVar "ma", S.PVar "k"]
+                  (C.CApp (C.CApp (C.CVar "prim_apiAndThen") (C.CVar "k")) (C.CVar "ma"))
+              )
+            , ( "then"
+              , C.CLam
+                  [S.PVar "ma", S.PVar "mb"]
+                  ( C.CApp
+                      (C.CApp (C.CVar "prim_apiAndThen") (C.CLam [S.PWildcard] (C.CVar "mb")))
+                      (C.CVar "ma")
                   )
               )
             ]
