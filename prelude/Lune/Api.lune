@@ -1,0 +1,46 @@
+module Lune.Api exposing (
+  Api,
+  run,
+  context,
+  fail,
+  orFail,
+  mapError,
+  pure,
+  andThen
+)
+
+import Lune.Prelude exposing (IO, Result(..), Maybe(..), Unit)
+
+{-| Api e a represents an API computation that:
+    - Has read access to context of type ctx (implicit via run)
+    - Can fail with error type e
+    - Returns a value of type a
+
+    Internally it's: ctx -> IO (Result e a)
+-}
+type Api e a = Api#
+
+-- Primitives (implemented in Haskell)
+run : ctx -> Api e a -> IO (Result e a)
+run = prim_apiRun
+
+context : Api e ctx
+context = prim_apiContext
+
+fail : e -> Api e a
+fail = prim_apiFail
+
+orFail : e -> Maybe a -> Api e a
+orFail err maybe =
+  case maybe of
+    Nothing -> fail err
+    Just a -> pure a
+
+mapError : (e1 -> e2) -> Api e1 a -> Api e2 a
+mapError = prim_apiMapError
+
+pure : a -> Api e a
+pure = prim_apiPure
+
+andThen : (a -> Api e b) -> Api e a -> Api e b
+andThen = prim_apiAndThen
