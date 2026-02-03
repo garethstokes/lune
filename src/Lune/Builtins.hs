@@ -89,6 +89,9 @@ builtinInstanceDicts =
     , (("Functor", "Result"), instanceDictName "Functor" "Result")
     , (("Applicative", "Result"), instanceDictName "Applicative" "Result")
     , (("Monad", "Result"), instanceDictName "Monad" "Result")
+    , (("Functor", "STM"), instanceDictName "Functor" "STM")
+    , (("Applicative", "STM"), instanceDictName "Applicative" "STM")
+    , (("Monad", "STM"), instanceDictName "Monad" "STM")
     ]
 
 builtinCoreDecls :: [C.CoreDecl]
@@ -99,6 +102,9 @@ builtinCoreDecls =
   , dictFunctorResult
   , dictApplicativeResult
   , dictMonadResult
+  , dictFunctorSTM
+  , dictApplicativeSTM
+  , dictMonadSTM
   ]
   where
     preludeCon n = "Lune.Prelude." <> n
@@ -242,6 +248,71 @@ builtinCoreDecls =
                 , C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
                 ]
             )
+
+    dictFunctorSTM =
+      C.CoreDecl
+        (instanceDictName "Functor" "STM")
+        ( C.CRecord
+            [ ( "map"
+              , C.CLam
+                  [S.PVar "f", S.PVar "ma"]
+                  ( C.CApp
+                      ( C.CApp
+                          (C.CVar "$primSTMBind")
+                          (C.CVar "ma")
+                      )
+                      ( C.CLam
+                          [S.PVar "a"]
+                          (C.CApp (C.CVar "$primSTMPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                      )
+                  )
+              )
+            ]
+        )
+
+    dictApplicativeSTM =
+      C.CoreDecl
+        (instanceDictName "Applicative" "STM")
+        ( C.CRecord
+            [ ("$superFunctor", C.CVar (instanceDictName "Functor" "STM"))
+            , ("pure", C.CVar "$primSTMPure")
+            , ("apply", applicativeApplySTM)
+            ]
+        )
+      where
+        applicativeApplySTM =
+          C.CLam
+            [S.PVar "mf", S.PVar "ma"]
+            ( C.CApp
+                (C.CApp (C.CVar "$primSTMBind") (C.CVar "mf"))
+                ( C.CLam
+                    [S.PVar "f"]
+                    ( C.CApp
+                        (C.CApp (C.CVar "$primSTMBind") (C.CVar "ma"))
+                        ( C.CLam
+                            [S.PVar "a"]
+                            (C.CApp (C.CVar "$primSTMPure") (C.CApp (C.CVar "f") (C.CVar "a")))
+                        )
+                    )
+                )
+            )
+
+    dictMonadSTM =
+      C.CoreDecl
+        (instanceDictName "Monad" "STM")
+        ( C.CRecord
+            [ ("$superApplicative", C.CVar (instanceDictName "Applicative" "STM"))
+            , ("andThen", C.CVar "$primSTMBind")
+            , ( "then"
+              , C.CLam
+                  [S.PVar "ma", S.PVar "mb"]
+                  ( C.CApp
+                      (C.CApp (C.CVar "$primSTMBind") (C.CVar "ma"))
+                      (C.CLam [S.PWildcard] (C.CVar "mb"))
+                  )
+              )
+            ]
+        )
 
 data BuiltinPrim = BuiltinPrim
   { primArity :: Int
