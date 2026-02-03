@@ -33,6 +33,9 @@ evalExpr env expr =
     C.CInt n ->
       Right (VInt n)
 
+    C.CChar c ->
+      Right (VChar c)
+
     C.CLam pats body ->
       Right (VClosure env pats body)
 

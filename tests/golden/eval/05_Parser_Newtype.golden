@@ -1,1 +1,1 @@
-ModuleParseError "examples/05_Parser_Newtype.lune" "examples/05_Parser_Newtype.lune:16:1:\n   |\n16 | newtype Parser a =\n   | ^\nunexpected 'n'\nexpecting end of input\n"
+ModuleExportsMissingName "Parser" "Result"

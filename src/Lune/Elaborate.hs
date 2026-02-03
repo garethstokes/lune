@@ -252,6 +252,9 @@ inferCoreExpr methodIndex env expr =
     S.IntLit n ->
       pure (nullSubst, [], TCon "Int", CInt n)
 
+    S.CharLit c ->
+      pure (nullSubst, [], TCon "Char", CChar c)
+
     S.App f x -> do
       (s1, c1, t1, cf) <- inferCoreExpr methodIndex env f
       (s2, c2, t2, cx) <- inferCoreExpr methodIndex (applySubstEnv s1 env) x

@@ -33,6 +33,7 @@ data JsonValue
 data Value
   = VInt Integer
   | VString Text
+  | VChar Char
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -62,6 +63,8 @@ instance Show Value where
         show n
       VString s ->
         show (T.unpack s)
+      VChar c ->
+        show c
       VCon name args ->
         unwords (T.unpack (renderCtor name) : map showAtom args)
       VJson _ ->

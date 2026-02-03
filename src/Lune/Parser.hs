@@ -33,7 +33,7 @@ import Text.Megaparsec
   , (<|>)
   )
 import qualified Text.Megaparsec as P
-import Text.Megaparsec.Pos (mkPos, unPos)
+import Text.Megaparsec.Pos (mkPos, unPos, pos1)
 import Text.Megaparsec.Char
   ( alphaNumChar
   , char
@@ -336,8 +336,34 @@ parseExpr =
 
 parseAppExpr :: Parser Expr
 parseAppExpr = do
-  atoms <- some parseTerm
-  pure (foldl1 App atoms)
+  ref <- L.indentLevel  -- capture reference BEFORE any whitespace
+  scnOptional           -- allow newline before first term (for multi-line binding RHS)
+  first <- parseTerm
+  rest <- many (try (continuationTerm ref))
+  pure (foldl1 App (first : rest))
+  where
+    -- Only parse continuation terms if they're on the same line OR indented more than the start
+    continuationTerm ref = do
+      startLine <- P.sourceLine <$> P.getSourcePos
+      scnOptional  -- consume any whitespace including newlines
+      afterLine <- P.sourceLine <$> P.getSourcePos
+      currentIndent <- L.indentLevel
+      if startLine == afterLine
+        then parseTerm  -- same line: always continue
+        else do
+          -- crossed a newline: only continue if not followed by case pattern arrow
+          notFollowedBy casePatternArrow
+          -- Check if next char is ( or { - these are self-delimiting so OK at any indent
+          isDelimited <- P.option False (True <$ P.lookAhead (satisfy (\c -> c == '(' || c == '{')))
+          if isDelimited || currentIndent > ref
+            then parseTerm
+            else empty
+
+    -- Detects pattern -> which indicates start of a case alternative
+    casePatternArrow = try $ do
+      _ <- parsePattern
+      _ <- symbol "->"
+      pure ()
 
 parseTerm :: Parser Expr
 parseTerm = do
@@ -356,11 +382,22 @@ parseAtom =
   choice
     [ try parseDo
     , parseRecord
-    , between (symbol "(") (symbol ")") parseExpr
+    , parenExpr
     , StringLit . T.pack <$> lexeme stringLiteral
+    , CharLit <$> lexeme charLiteral
     , IntLit <$> lexeme L.decimal
     , Var <$> identifier
     ]
+  where
+    parenExpr = do
+      _ <- symbol "("
+      e <- parseExpr
+      scnOptional  -- allow newline before closing paren
+      _ <- symbol ")"
+      pure e
+
+    charLiteral :: Parser Char
+    charLiteral = char '\'' *> L.charLiteral <* char '\''
 
 parseLambda :: Parser Expr
 parseLambda = do

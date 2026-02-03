@@ -1,13 +1,1 @@
-lune: examples/05_Parser_Newtype.lune:38:38:
-   |
-38 |               False -> Err "mismatch"
-   |                                      ^
-unexpected newline
-expecting "do", '"', '(', ')', '.', '{', integer, or letter
-
-CallStack (from HasCallStack):
-  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
-HasCallStack backtrace:
-  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
-  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:204:5 in ghc-internal:GHC.Internal.Exception
-  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
+Module {modName = "Parser", modExports = [ExposeType "Result" ExposeAll,ExposeType "Maybe" ExposeAll,ExposeType "Pair" ExposeAll,ExposeType "Parser" ExposeAll,ExposeValue "run",ExposeValue "char"], modImports = [Import {impName = "Lune.Prelude", impAs = Nothing, impExposing = Just [ExposeType "Bool" ExposeAll,ExposeType "Char" ExposeOpaque,ExposeType "String" ExposeOpaque,ExposeType "Result" ExposeAll,ExposeType "Maybe" ExposeAll]}], modDecls = [DeclType "Pair" ["a","b"] [TypeCtor "Pair" [TypeVar "a",TypeVar "b"]],DeclTypeSig "unconsString" (QualType {qualConstraints = [], qualType = TypeArrow (TypeCon "String") (TypeApp (TypeCon "Maybe") (TypeApp (TypeApp (TypeCon "Pair") (TypeCon "Char")) (TypeCon "String")))}),DeclValue "unconsString" [PVar "s"] (Var "Nothing"),DeclTypeSig "eqChar" (QualType {qualConstraints = [], qualType = TypeArrow (TypeCon "Char") (TypeArrow (TypeCon "Char") (TypeCon "Bool"))}),DeclValue "eqChar" [PVar "a",PVar "b"] (Var "False"),DeclNewtype "Parser" ["a"] "Parser" (TypeArrow (TypeCon "String") (TypeApp (TypeApp (TypeCon "Result") (TypeCon "String")) (TypeApp (TypeApp (TypeCon "Pair") (TypeVar "a")) (TypeCon "String")))),DeclTypeSig "run" (QualType {qualConstraints = [], qualType = TypeArrow (TypeApp (TypeCon "Parser") (TypeVar "a")) (TypeArrow (TypeCon "String") (TypeApp (TypeApp (TypeCon "Result") (TypeCon "String")) (TypeVar "a")))}),DeclValue "run" [PVar "p",PVar "input"] (Case (Var "p") [Alt (PCon "Parser" [PVar "parse"]) (DoBlock [BindStmt (PVar "pr") (App (Var "parse") (Var "input")),ExprStmt (Case (Var "pr") [Alt (PCon "Pair" [PVar "a",PWildcard,PVar "rest"]) (App (Var "Ok") (Var "a"))])])]),DeclTypeSig "char" (QualType {qualConstraints = [], qualType = TypeArrow (TypeCon "Char") (TypeApp (TypeCon "Parser") (TypeCon "Char"))}),DeclValue "char" [PVar "c"] (App (Var "Parser") (Lam [PVar "input"] (Case (App (Var "unconsString") (Var "input")) [Alt (PCon "Nothing" []) (App (Var "Err") (StringLit "eof")),Alt (PCon "Just" [PVar "pr"]) (Case (Var "pr") [Alt (PCon "Pair" [PVar "x",PVar "xs"]) (Case (App (App (Var "eqChar") (Var "x")) (Var "c")) [Alt (PCon "True" []) (App (Var "Ok") (App (App (Var "Pair") (Var "c")) (Var "xs"))),Alt (PCon "False" []) (App (Var "Err") (StringLit "mismatch"))])])])))]}

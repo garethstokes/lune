@@ -28,6 +28,8 @@ desugarExpr expr =
       expr
     IntLit _ ->
       expr
+    CharLit _ ->
+      expr
     App f x ->
       App (desugarExpr f) (desugarExpr x)
     Lam args body ->

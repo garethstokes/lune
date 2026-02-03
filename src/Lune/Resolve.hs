@@ -455,6 +455,8 @@ resolveExpr scope expr =
       Right expr
     S.IntLit _ ->
       Right expr
+    S.CharLit _ ->
+      Right expr
     S.App f x ->
       S.App <$> resolveExpr scope f <*> resolveExpr scope x
     S.Lam pats body -> do

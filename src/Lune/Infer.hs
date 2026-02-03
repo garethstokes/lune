@@ -140,6 +140,9 @@ inferExpr env expr =
     S.IntLit _ ->
       pure (nullSubst, [], TCon "Int")
 
+    S.CharLit _ ->
+      pure (nullSubst, [], TCon "Char")
+
     S.App f x -> do
       (s1, c1, t1) <- inferExpr env f
       (s2, c2, t2) <- inferExpr (applySubstEnv s1 env) x

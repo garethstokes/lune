@@ -1,13 +1,1 @@
-lune: examples/06_STM_Counter.lune:28:7:
-   |
-28 |       (do
-   |       ^
-unexpected '('
-expecting "class", "instance", "newtype", "type", end of input, or letter
-
-CallStack (from HasCallStack):
-  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
-HasCallStack backtrace:
-  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
-  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:204:5 in ghc-internal:GHC.Internal.Exception
-  error, called at src/Lune/Parser.hs:54:17 in lune-0.1.0.0-inplace:Lune.Parser
+Module {modName = "STMExample", modExports = [ExposeValue "main"], modImports = [Import {impName = "Lune.Prelude", impAs = Nothing, impExposing = Just [ExposeType "Unit" ExposeOpaque,ExposeValue "unit",ExposeType "Int" ExposeOpaque,ExposeType "String" ExposeOpaque,ExposeType "IO" ExposeOpaque,ExposeValue "putStrLn",ExposeValue "sleepMs",ExposeValue "addInt",ExposeValue "appendString",ExposeValue "showInt",ExposeType "Fiber" ExposeOpaque,ExposeValue "spawn",ExposeValue "yield",ExposeType "STM" ExposeOpaque,ExposeType "TVar" ExposeOpaque,ExposeValue "atomically",ExposeValue "newTVar",ExposeValue "readTVar",ExposeValue "writeTVar"]}], modDecls = [DeclTypeSig "main" (QualType {qualConstraints = [], qualType = TypeApp (TypeCon "IO") (TypeCon "Unit")}),DeclValue "main" [] (DoBlock [BindStmt (PVar "tv") (App (Var "atomically") (App (Var "newTVar") (IntLit 0))),DiscardBindStmt (App (Var "spawn") (App (Var "loop") (Var "tv"))),DiscardBindStmt (App (Var "spawn") (App (Var "loop") (Var "tv"))),DiscardBindStmt (App (Var "sleepMs") (IntLit 1000)),BindStmt (PVar "n") (App (Var "atomically") (App (Var "readTVar") (Var "tv"))),ExprStmt (App (Var "putStrLn") (App (App (Var "appendString") (StringLit "counter=")) (App (Var "showInt") (Var "n"))))]),DeclTypeSig "loop" (QualType {qualConstraints = [], qualType = TypeArrow (TypeApp (TypeCon "TVar") (TypeCon "Int")) (TypeApp (TypeCon "IO") (TypeCon "Unit"))}),DeclValue "loop" [PVar "tv"] (DoBlock [DiscardBindStmt (App (Var "atomically") (DoBlock [BindStmt (PVar "n") (App (Var "readTVar") (Var "tv")),DiscardBindStmt (App (App (Var "writeTVar") (Var "tv")) (App (App (Var "addInt") (Var "n")) (IntLit 1))),ExprStmt (App (Var "pure") (Var "unit"))])),DiscardBindStmt (Var "yield"),ExprStmt (App (Var "loop") (Var "tv"))])]}
