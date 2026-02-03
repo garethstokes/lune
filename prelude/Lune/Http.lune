@@ -1,0 +1,44 @@
+module Lune.Http exposing (
+  Method(..),
+  Request,
+  Response,
+  response,
+  jsonResponse
+)
+
+import Lune.Prelude exposing (String, Int, List, Maybe)
+import Lune.Json exposing (Json)
+
+type Method
+  = GET
+  | POST
+  | PUT
+  | PATCH
+  | DELETE
+
+type alias Request =
+  { method : Method
+  , path : String
+  , headers : List { key : String, value : String }
+  , body : String
+  }
+
+type alias Response =
+  { status : Int
+  , headers : List { key : String, value : String }
+  , body : String
+  }
+
+response : Int -> String -> Response
+response status body =
+  { status = status
+  , headers = Nil
+  , body = body
+  }
+
+jsonResponse : Int -> Json -> Response
+jsonResponse status json =
+  { status = status
+  , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+  , body = prim_jsonStringify json
+  }
