@@ -1,0 +1,59 @@
+module Lune.Http.Server exposing (
+  serve,
+  Handler
+)
+
+import Lune.Prelude exposing (IO, Unit, Result(..), Int, String, unit)
+import Lune.IO as IO
+import Lune.Net.Socket as Socket
+import Lune.Http exposing (Request, Response)
+import Lune.String as Str
+
+type alias Handler = Request -> IO Response
+
+serve : Int -> Handler -> IO Unit
+serve port handler =
+  do
+    IO.println (Str.append "Starting HTTP server on port " (Str.fromInt port))
+    socketResult <- Socket.listen port
+    case socketResult of
+      Err _ ->
+        IO.println "Failed to start server"
+      Ok sock ->
+        acceptLoop sock handler
+
+acceptLoop : Socket.Socket -> Handler -> IO Unit
+acceptLoop sock handler =
+  do
+    connResult <- Socket.accept sock
+    case connResult of
+      Err _ ->
+        IO.println "Accept failed, stopping server"
+      Ok conn ->
+        do
+          handleConnection conn handler
+          acceptLoop sock handler
+
+handleConnection : Socket.Connection -> Handler -> IO Unit
+handleConnection conn handler =
+  do
+    recvResult <- Socket.recv conn
+    case recvResult of
+      Err _ ->
+        do
+          _ <- Socket.closeConn conn
+          pure unit
+      Ok rawRequest ->
+        case prim_parseHttpRequest rawRequest of
+          Err _ ->
+            do
+              _ <- Socket.send conn "HTTP/1.1 400 Bad Request\r\n\r\n"
+              _ <- Socket.closeConn conn
+              pure unit
+          Ok request ->
+            do
+              response <- handler request
+              let rawResponse = prim_formatHttpResponse response
+              _ <- Socket.send conn rawResponse
+              _ <- Socket.closeConn conn
+              pure unit
