@@ -34,6 +34,28 @@ instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
   "$dict" <> cls <> "_" <> headCon
 
+-- HTTP types for builtin primitives
+httpHeaderType :: Type
+httpHeaderType =
+  TRecord [("key", TCon "String"), ("value", TCon "String")]
+
+httpRequestType :: Type
+httpRequestType =
+  TRecord
+    [ ("body", TCon "String")
+    , ("headers", TApp (TCon "List") httpHeaderType)
+    , ("method", TCon "Lune.Http.Method")
+    , ("path", TCon "String")
+    ]
+
+httpResponseType :: Type
+httpResponseType =
+  TRecord
+    [ ("body", TCon "String")
+    , ("headers", TApp (TCon "List") httpHeaderType)
+    , ("status", TCon "Int")
+    ]
+
 builtinSchemes :: Map Text Scheme
 builtinSchemes =
   Map.fromList
@@ -96,8 +118,8 @@ builtinSchemes =
     , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     -- HTTP primitives
-    , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Request"))))
-    , ("prim_formatHttpResponse", Forall [] [] (TArrow (TCon "Response") (TCon "String")))
+    , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) httpRequestType)))
+    , ("prim_formatHttpResponse", Forall [] [] (TArrow httpResponseType (TCon "String")))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -1539,14 +1561,16 @@ primFormatHttpResponse args =
 -- | Parse an HTTP request string into a Request record
 parseHttpRequest :: Text -> Either Text Value
 parseHttpRequest raw =
-  let linesRaw = T.lines raw
+  -- Normalize CRLF to LF and strip trailing CR from lines
+  let linesRaw = map (T.dropWhileEnd (== '\r')) (T.lines raw)
+      isBlankLine t = T.null t || T.all isSpace t
   in case linesRaw of
     [] -> Left "empty request"
     (requestLine : headerLines) ->
       case T.words requestLine of
         [methodStr, pathStr, _version] ->
           let method = parseMethod methodStr
-              (headerPart, bodyPart) = break T.null headerLines
+              (headerPart, bodyPart) = break isBlankLine headerLines
               headers = mapMaybe parseHeader headerPart
               body = T.unlines (drop 1 bodyPart)
           in Right $ VRecord $ Map.fromList

@@ -6,11 +6,11 @@ module Lune.Http exposing (
   jsonResponse
 )
 
-import Lune.Prelude exposing (String, Int, List, Maybe)
+import Lune.Prelude exposing (String, Int, List(..), Maybe)
 import Lune.Json exposing (Json)
 
-type Method
-  = GET
+type Method =
+  GET
   | POST
   | PUT
   | PATCH
