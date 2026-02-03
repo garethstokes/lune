@@ -311,6 +311,13 @@ import Lune.Database.Postgres as Postgres
 import Lune.Json as Json
 
 -- ============================================================================
+-- Validated Types
+-- ============================================================================
+
+type Email = Email String
+type NonEmpty = NonEmpty String
+
+-- ============================================================================
 -- Schema
 -- ============================================================================
 
@@ -329,13 +336,13 @@ type alias User =
   }
 
 type alias CreateUserInput =
-  { name : String
-  , email : String
+  { name : NonEmpty
+  , email : Email
   }
 
 type alias UpdateUserInput =
-  { name : Maybe String
-  , email : Maybe String
+  { name : Field NonEmpty
+  , email : Field Email
   }
 
 -- ============================================================================
@@ -345,6 +352,8 @@ type alias UpdateUserInput =
 type AppError
   = NotFound String
   | BadRequest String
+  | Unauthorized
+  | Forbidden
   | Conflict String
   | DbError Database.Error
 
@@ -353,6 +362,8 @@ errorToResponse err =
   case err of
     NotFound msg -> Response.json 404 { error = msg }
     BadRequest msg -> Response.json 400 { error = msg }
+    Unauthorized -> Response.json 401 { error = "Unauthorized" }
+    Forbidden -> Response.json 403 { error = "Forbidden" }
     Conflict msg -> Response.json 409 { error = msg }
     DbError e -> Response.json 500 { error = Database.errorToString e }
 
@@ -371,27 +382,49 @@ type alias Context =
 api : Api.Routes AppError Context
 api =
   Api.define
-    [ Api.get "/users" listUsers
-    , Api.get "/users/:id" getUser
-    , Api.post "/users" createUser
-    , Api.put "/users/:id" updateUser
-    , Api.delete "/users/:id" deleteUser
+    [ -- Public
+      Api.get "/health" healthCheck
+    , Api.post "/login" login
+
+    -- Authenticated user routes
+    , Api.group
+        |> Api.requireAuth
+        |> Api.prefix "/users"
+        |> Api.routes
+            [ Api.get ""
+                |> Api.query "page" Api.int
+                |> Api.query "limit" Api.int
+                |> Api.handler listUsers
+            , Api.get "/:id" getUser
+            , Api.post "" createUser
+            , Api.patch "/:id" updateUser
+            , Api.delete "/:id" deleteUser
+            ]
     ]
 
 -- ============================================================================
 -- Handlers
 -- ============================================================================
 
-listUsers : {} -> Api AppError (List User)
+healthCheck : {} -> Api AppError Unit
+healthCheck params =
+  pure unit
+
+listUsers : { user : AuthUser, page : Maybe Int, limit : Maybe Int } -> Api AppError (List User)
 listUsers params =
   do
     ctx <- Api.context
+    let page = params.page |> Maybe.withDefault 1
+    let limit = params.limit |> Maybe.withDefault 20
+    let offset = Int.mul (Int.sub page 1) limit
     Database.select users
       |> Database.orderBy users.id Asc
+      |> Database.limit limit
+      |> Database.offset offset
       |> Database.run ctx.db
       |> Api.mapError DbError
 
-getUser : { id : Int } -> Api AppError User
+getUser : { user : AuthUser, id : Int } -> Api AppError User
 getUser params =
   do
     ctx <- Api.context
@@ -402,21 +435,21 @@ getUser params =
       |> Api.mapError DbError
     result |> Api.orFail (NotFound "User not found")
 
-createUser : {} -> CreateUserInput -> Api AppError User
+createUser : { user : AuthUser } -> CreateUserInput -> Api AppError User
 createUser params body =
   do
     ctx <- Api.context
     Database.insert users
-      |> Database.values { name = body.name, email = body.email }
+      |> Database.values { name = NonEmpty.toString body.name, email = Email.toString body.email }
       |> Database.returning All
       |> Database.run ctx.db
       |> Api.mapError DbError
 
-updateUser : { id : Int } -> UpdateUserInput -> Api AppError User
+updateUser : { user : AuthUser, id : Int } -> UpdateUserInput -> Api AppError User
 updateUser params body =
   do
     ctx <- Api.context
-    _ <- getUser params  -- ensure exists
+    _ <- getUser { user = params.user, id = params.id }  -- ensure exists
     Database.update users
       |> Database.set body
       |> Database.where_ (users.id |> Database.eq params.id)
@@ -424,11 +457,11 @@ updateUser params body =
       |> Database.run ctx.db
       |> Api.mapError DbError
 
-deleteUser : { id : Int } -> Api AppError Unit
+deleteUser : { user : AuthUser, id : Int } -> Api AppError Unit
 deleteUser params =
   do
     ctx <- Api.context
-    _ <- getUser params  -- ensure exists
+    _ <- getUser { user = params.user, id = params.id }  -- ensure exists
     Database.delete users
       |> Database.where_ (users.id |> Database.eq params.id)
       |> Database.run ctx.db
@@ -502,10 +535,183 @@ main =
 
 ---
 
-## 10. Open Questions
+## 10. Query Parameters
 
-1. **Query parameter handling** - How should `?page=2&limit=10` flow into handlers?
-2. **Header access** - Should headers be part of params record or separate accessor?
-3. **Authentication pattern** - How to express "this route requires auth" at the type level?
-4. **Request validation** - Beyond JSON parsing, how to express field-level validation?
-5. **Partial updates** - How should `UpdateUserInput` with `Maybe` fields translate to SQL?
+Query parameters are declared at the route level and flow into the params record:
+
+```
+Api.get "/users"
+  |> Api.query "page" Api.int
+  |> Api.query "limit" Api.int
+  |> Api.query "sort" Api.string
+  |> Api.handler listUsers
+
+listUsers : { page : Maybe Int, limit : Maybe Int, sort : Maybe String } -> Api AppError (List User)
+listUsers params =
+  do
+    let page = params.page |> Maybe.withDefault 1
+    let limit = params.limit |> Maybe.withDefault 20
+    ...
+```
+
+---
+
+## 11. Header Access
+
+Headers are accessed via `Api.header`, which is shorthand for reading from the request in context:
+
+```
+Api.header : String -> Api e (Maybe String)
+
+-- Usage
+getUser : { id : Int } -> Api AppError User
+getUser params =
+  do
+    authHeader <- Api.header "Authorization"
+    ...
+
+-- Equivalent to:
+getUser params =
+  do
+    ctx <- Api.context
+    let authHeader = ctx.request.headers |> Headers.get "Authorization"
+    ...
+```
+
+---
+
+## 12. Authentication & Route Groups
+
+Routes can be grouped with shared requirements. Auth requirements inject the authenticated user into the params record:
+
+```
+api : Api.Routes AppError Context
+api =
+  Api.define
+    [ -- Public routes
+      Api.get "/health" healthCheck
+    , Api.post "/login" login
+
+    -- Authenticated routes (grouped)
+    , Api.group
+        |> Api.requireAuth
+        |> Api.prefix "/users"
+        |> Api.routes
+            [ Api.get "" listUsers           -- GET /users
+            , Api.get "/:id" getUser         -- GET /users/:id
+            , Api.post "" createUser         -- POST /users
+            ]
+
+    -- Admin routes (composed requirements)
+    , Api.group
+        |> Api.requireAuth
+        |> Api.requireRole Admin
+        |> Api.prefix "/admin"
+        |> Api.routes
+            [ Api.get "/stats" getStats
+            , Api.delete "/users/:id" deleteUser
+            ]
+    ]
+
+-- Public handler
+healthCheck : {} -> Api AppError Unit
+
+-- Authenticated handler (user injected into params)
+listUsers : { user : AuthUser } -> Api AppError (List User)
+
+-- Authenticated with path param
+getUser : { user : AuthUser, id : Int } -> Api AppError User
+```
+
+---
+
+## 13. Validated Types
+
+Validation happens at the JSON parsing boundary using validated newtypes:
+
+```
+-- Validated types (can only be constructed via parse)
+type Email = Email String
+type NonEmpty = NonEmpty String
+
+-- Smart constructors
+Email.parse : String -> Result String Email
+NonEmpty.parse : String -> Result String NonEmpty
+
+-- FromJson instance validates during parsing
+instance FromJson Email where
+  decode = Json.string |> Json.andThen (\s ->
+    case Email.parse s of
+      Ok e -> Json.succeed e
+      Err msg -> Json.fail msg
+  )
+
+-- Input types use validated types
+type alias CreateUserInput =
+  { email : Email
+  , name : NonEmpty
+  }
+
+-- Handler receives already-validated data
+createUser : {} -> CreateUserInput -> Api AppError User
+createUser params body =
+  do
+    -- body.email is guaranteed valid Email
+    -- body.name is guaranteed non-empty
+    ...
+```
+
+---
+
+## 14. Partial Updates with Field Type
+
+For PATCH endpoints, use the `Field` type to distinguish between "unchanged", "set value", and "clear":
+
+```
+type Field a
+  = Unchanged    -- field not present in JSON
+  | Set a        -- field present with value
+  | Clear        -- field explicitly set to null
+
+type alias UpdateUserInput =
+  { name : Field String
+  , email : Field Email
+  , bio : Field String
+  }
+
+-- JSON parsing:
+-- {}                        => { name = Unchanged, email = Unchanged, bio = Unchanged }
+-- { "name": "Alice" }       => { name = Set "Alice", email = Unchanged, bio = Unchanged }
+-- { "bio": null }           => { name = Unchanged, email = Unchanged, bio = Clear }
+
+-- Query builder understands Field
+Database.update users
+  |> Database.set body
+  |> Database.where_ (users.id |> Database.eq params.id)
+  |> Database.run ctx.db
+
+-- Generates: UPDATE users SET name = 'Alice' WHERE id = 1
+-- (unchanged fields not included, Clear sets NULL)
+```
+
+Use `Api.patch` for partial update endpoints:
+
+```
+Api.patch "/users/:id" updateUser
+
+updateUser : { id : Int } -> UpdateUserInput -> Api AppError User
+```
+
+---
+
+## 15. Open Questions (Resolved)
+
+All initial open questions have been addressed:
+
+| Question | Resolution |
+|----------|------------|
+| Query parameters | Declared at route level, flow into params record |
+| Header access | `Api.header` accessor, shorthand for context access |
+| Authentication | Route groups with `requireAuth`, user injected into params |
+| Request validation | Validated newtypes with smart constructors |
+| Partial updates | `Field` type with `Unchanged`, `Set`, `Clear` variants |
