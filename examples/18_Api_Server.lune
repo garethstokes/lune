@@ -1,0 +1,76 @@
+module ApiServer exposing (main)
+
+import Lune.IO as IO
+import Lune.Api as Api
+import Lune.Api.Route as Route
+import Lune.Http exposing (Request, Response, Method(..))
+import Lune.String as Str
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Maybe(..))
+
+-- Error type
+type AppError
+  = NotFound String
+  | BadRequest String
+
+-- Context
+type alias Context =
+  { appName : String
+  }
+
+-- Error handler
+errorToResponse : AppError -> Response
+errorToResponse err =
+  case err of
+    NotFound msg ->
+      { status = 404
+      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
+      }
+    BadRequest msg ->
+      { status = 400
+      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
+      }
+
+-- Routes
+routes : Route.Routes AppError Context
+routes =
+  Route.define
+    [ Route.get "/health" healthHandler
+    , Route.get "/users/:id" getUserHandler
+    , Route.post "/users" createUserHandler
+    ]
+
+-- Handlers
+healthHandler : Request -> Context -> Api.Api AppError Response
+healthHandler request ctx =
+  Api.pure
+    { status = 200
+    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , body = "{\"status\":\"ok\"}"
+    }
+
+getUserHandler : Request -> Context -> Api.Api AppError Response
+getUserHandler request ctx =
+  Api.pure
+    { status = 200
+    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , body = "{\"id\":123,\"name\":\"Alice\"}"
+    }
+
+createUserHandler : Request -> Context -> Api.Api AppError Response
+createUserHandler request ctx =
+  Api.pure
+    { status = 201
+    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , body = "{\"id\":456,\"name\":\"Created\"}"
+    }
+
+main : IO Unit
+main =
+  let config =
+        { port = 8080
+        , errorHandler = errorToResponse
+        , context = { appName = "MyApp" }
+        }
+  in Api.serve config routes
