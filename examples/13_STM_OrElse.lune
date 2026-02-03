@@ -1,0 +1,28 @@
+module STMOrElse exposing (main)
+
+import Lune.IO as IO
+import Lune.Atomic as Atomic
+import Lune.String as Str
+import Lune.Int as Int
+import Lune.Prelude exposing (Shared, Atomic)
+
+tryFirst : Shared Int -> Atomic Unit
+tryFirst tv =
+  do
+    n <- Atomic.read tv
+    case Int.eq n 0 of
+      True -> Atomic.wait
+      False -> Atomic.write tv 100
+
+trySecond : Shared Int -> Atomic Unit
+trySecond tv =
+  Atomic.write tv 42
+
+main : IO Unit
+main =
+  do
+    IO.println "Testing orElse:"
+    tv <- Atomic.commit (Atomic.new 0)
+    _ <- Atomic.commit (Atomic.orElse (tryFirst tv) (trySecond tv))
+    final <- Atomic.commit (Atomic.read tv)
+    IO.println (Str.append "Final value: " (Str.fromInt final))

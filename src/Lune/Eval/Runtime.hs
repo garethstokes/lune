@@ -18,7 +18,7 @@ runIO :: Value -> Either EvalError (World, Value)
 runIO v =
   case v of
     VIO act ->
-      act (World [] IntMap.empty 0)
+      act (World [] IntMap.empty 0 IntMap.empty 0 [])
     other ->
       Left (NotAnIO other)
 

@@ -1,34 +1,39 @@
 module STMExample exposing (main)
 
-import Lune.Prelude exposing (
-  Unit, unit,
-  Int, String,
-  IO, putStrLn, sleepMs,
-  addInt, appendString, showInt,
-  Fiber, spawn, yield,
-  STM, TVar, atomically, newTVar, readTVar, writeTVar
-)
+import Lune.IO as IO
+import Lune.Atomic as Atomic
+import Lune.Task as Task
+import Lune.String as Str
+import Lune.Int as Int
+import Lune.Prelude exposing (Shared)
 
 main : IO Unit
 main =
   do
-    tv <- atomically (newTVar 0)
+    tv <- Atomic.commit (Atomic.new 0)
+    t1 <- Task.start (incrementN tv 5)
+    t2 <- Task.start (incrementN tv 5)
+    _ <- Task.yield
+    _ <- Task.yield
+    _ <- Task.await t1
+    _ <- Task.await t2
+    n <- Atomic.commit (Atomic.read tv)
+    IO.println (Str.append "counter=" (Str.fromInt n))
 
-    _ <- spawn (loop tv)
-    _ <- spawn (loop tv)
+incrementN : Shared Int -> Int -> IO Unit
+incrementN tv count =
+  incrementLoop tv count
 
-    _ <- sleepMs 1000
-    n <- atomically (readTVar tv)
-    putStrLn (appendString "counter=" (showInt n))
-
-loop : TVar Int -> IO Unit
-loop tv =
-  do
-    _ <- atomically
-      (do
-        n <- readTVar tv
-        _ <- writeTVar tv (addInt n 1)
-        pure unit
-      )
-    _ <- yield
-    loop tv
+incrementLoop : Shared Int -> Int -> IO Unit
+incrementLoop tv remaining =
+  case Int.lte remaining 0 of
+    True ->
+      IO.println "Worker done"
+    False ->
+      do
+        _ <- Atomic.commit
+          (do
+            n <- Atomic.read tv
+            Atomic.write tv (Int.add n 1)
+          )
+        incrementLoop tv (Int.sub remaining 1)

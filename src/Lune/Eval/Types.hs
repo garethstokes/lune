@@ -1,7 +1,9 @@
 module Lune.Eval.Types
   ( Env
   , TVarId
+  , FiberId
   , STMAction (..)
+  , FiberState (..)
   , World (..)
   , Value (..)
   , JsonValue (..)
@@ -21,6 +23,19 @@ import Lune.Type (Constraint)
 type Env = Map Text Value
 
 type TVarId = Int
+type FiberId = Int
+
+data FiberState
+  = FiberRunning
+  | FiberSuspended (World -> Either EvalError (World, Value))
+  | FiberCompleted Value
+  | FiberFailed EvalError
+
+instance Show FiberState where
+  show FiberRunning = "FiberRunning"
+  show (FiberSuspended _) = "FiberSuspended <cont>"
+  show (FiberCompleted v) = "FiberCompleted " <> show v
+  show (FiberFailed e) = "FiberFailed " <> show e
 
 -- | STM transaction action - builds up reads/writes for atomic commit
 data STMAction
@@ -34,8 +49,11 @@ data STMAction
 
 data World = World
   { worldStdout :: [Text]
-  , worldTVars :: IntMap Value   -- TVar storage
-  , worldNextTVarId :: TVarId    -- Next TVar ID to allocate
+  , worldTVars :: IntMap Value        -- TVar storage
+  , worldNextTVarId :: TVarId         -- Next TVar ID to allocate
+  , worldFibers :: IntMap FiberState  -- Fiber storage
+  , worldNextFiberId :: FiberId       -- Next Fiber ID to allocate
+  , worldReadyQueue :: [FiberId]      -- Fibers ready to run
   }
   deriving (Show)
 
@@ -54,6 +72,7 @@ data Value
   | VChar Char
   | VTVar TVarId
   | VSTM STMAction
+  | VFiber FiberId
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -110,6 +129,8 @@ instance Show Value where
         "<tvar:" <> show tvid <> ">"
       VSTM _ ->
         "<stm>"
+      VFiber fid ->
+        "<fiber:" <> show fid <> ">"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
