@@ -1,0 +1,1 @@
+ElaborateTypecheckError EchoServer.main: CannotUnify (TCon "Connection") (TCon "Socket.Connection")

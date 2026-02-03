@@ -14,13 +14,13 @@ import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import Lune.Eval.Types
 
-runIO :: Value -> Either EvalError (World, Value)
+runIO :: Value -> IO (Either EvalError (World, Value))
 runIO v =
   case v of
     VIO act ->
-      act (World [] IntMap.empty 0 IntMap.empty 0 [])
+      act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0)
     other ->
-      Left (NotAnIO other)
+      pure (Left (NotAnIO other))
 
 evalExpr :: Env -> C.CoreExpr -> Either EvalError Value
 evalExpr env expr =

@@ -1,0 +1,38 @@
+module Lune.Net.Socket exposing (
+  Socket,
+  Connection,
+  listen,
+  accept,
+  connect,
+  recv,
+  send,
+  closeConn,
+  closeSocket
+)
+
+import Lune.Prelude exposing (IO, Int, Result, String, Unit)
+import Lune.IO exposing (Error)
+
+type Socket = Socket#
+type Connection = Connection#
+
+listen : Int -> IO (Result Error Socket)
+listen = prim_tcpListen
+
+accept : Socket -> IO (Result Error Connection)
+accept = prim_tcpAccept
+
+connect : String -> Int -> IO (Result Error Connection)
+connect = prim_tcpConnect
+
+recv : Connection -> IO (Result Error String)
+recv = prim_connRecv
+
+send : Connection -> String -> IO (Result Error Unit)
+send = prim_connSend
+
+closeConn : Connection -> IO (Result Error Unit)
+closeConn = prim_connClose
+
+closeSocket : Socket -> IO (Result Error Unit)
+closeSocket = prim_socketClose

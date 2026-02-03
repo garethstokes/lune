@@ -54,6 +54,8 @@ cabal run lune -- --eval examples/00_Hello.lune
 | JSON parsing/encoding | Working |
 | Multi-line function application | Working |
 | Concurrency (Tasks, STM) | Working |
+| File I/O (read/write) | Working |
+| TCP Sockets | Working |
 | FFI | Not implemented |
 | Native compilation | Partial |
 
@@ -123,4 +125,54 @@ increment tv =
         Atomic.write tv (Int.add n 1)
       )
     IO.println "Incremented"
+```
+
+## File I/O Example
+
+```haskell
+module FileDemo exposing (main)
+
+import Lune.IO as IO
+import Lune.String as Str
+import Lune.Prelude exposing (Result(..))
+
+main : IO Unit
+main =
+  do
+    _ <- IO.writeFile "/tmp/test.txt" "Hello from Lune!"
+    result <- IO.readFile "/tmp/test.txt"
+    case result of
+      Ok contents -> IO.println (Str.append "Read: " contents)
+      Err _ -> IO.println "Error reading file"
+```
+
+## TCP Socket Example
+
+```haskell
+module EchoServer exposing (main)
+
+import Lune.IO as IO
+import Lune.Net.Socket as Socket
+import Lune.String as Str
+import Lune.Prelude exposing (Result(..))
+
+main : IO Unit
+main =
+  do
+    socketResult <- Socket.listen 8080
+    case socketResult of
+      Err _ -> IO.println "Failed to listen"
+      Ok sock ->
+        do
+          connResult <- Socket.accept sock
+          case connResult of
+            Err _ -> IO.println "Accept failed"
+            Ok conn ->
+              do
+                recvResult <- Socket.recv conn
+                case recvResult of
+                  Ok msg -> Socket.send conn (Str.append "Echo: " msg)
+                  Err _ -> IO.println "Recv error"
+                _ <- Socket.closeConn conn
+                Socket.closeSocket sock
 ```

@@ -2,6 +2,8 @@ module Lune.Eval.Types
   ( Env
   , TVarId
   , FiberId
+  , SocketId
+  , ConnId
   , STMAction (..)
   , FiberState (..)
   , World (..)
@@ -19,15 +21,18 @@ import qualified Data.Text as T
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import Lune.Type (Constraint)
+import qualified Network.Socket as NS
 
 type Env = Map Text Value
 
 type TVarId = Int
 type FiberId = Int
+type SocketId = Int
+type ConnId = Int
 
 data FiberState
   = FiberRunning
-  | FiberSuspended (World -> Either EvalError (World, Value))
+  | FiberSuspended (World -> IO (Either EvalError (World, Value)))
   | FiberCompleted Value
   | FiberFailed EvalError
 
@@ -54,8 +59,19 @@ data World = World
   , worldFibers :: IntMap FiberState  -- Fiber storage
   , worldNextFiberId :: FiberId       -- Next Fiber ID to allocate
   , worldReadyQueue :: [FiberId]      -- Fibers ready to run
+  , worldSockets :: IntMap NS.Socket  -- Listening sockets
+  , worldNextSocketId :: SocketId     -- Next Socket ID
+  , worldConns :: IntMap NS.Socket    -- Connections (also sockets)
+  , worldNextConnId :: ConnId         -- Next Connection ID
   }
-  deriving (Show)
+
+instance Show World where
+  show w = "World { stdout = " <> show (worldStdout w)
+         <> ", tvars = " <> show (IntMap.size (worldTVars w)) <> " entries"
+         <> ", fibers = " <> show (IntMap.size (worldFibers w)) <> " entries"
+         <> ", sockets = " <> show (IntMap.size (worldSockets w)) <> " entries"
+         <> ", conns = " <> show (IntMap.size (worldConns w)) <> " entries"
+         <> " }"
 
 data JsonValue
   = JNull
@@ -73,13 +89,15 @@ data Value
   | VTVar TVarId
   | VSTM STMAction
   | VFiber FiberId
+  | VSocket SocketId
+  | VConn ConnId
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
   | VRecord (Map Text Value)
   | VThunk Env C.CoreExpr
   | VPrim Int ([Value] -> Either EvalError Value) [Value]
-  | VIO (World -> Either EvalError (World, Value))
+  | VIO (World -> IO (Either EvalError (World, Value)))
 
 data EvalError
   = UnboundVariable Text
@@ -131,6 +149,10 @@ instance Show Value where
         "<stm>"
       VFiber fid ->
         "<fiber:" <> show fid <> ">"
+      VSocket sid ->
+        "<socket:" <> show sid <> ">"
+      VConn cid ->
+        "<conn:" <> show cid <> ">"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of

@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Lune.Builtins
   ( builtinSchemes
   , builtinInstanceDicts
@@ -7,6 +9,7 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
+import Control.Exception (try, IOException)
 import Data.Char (isDigit, isSpace)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
@@ -15,11 +18,16 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Text.IO as TIO
 import qualified Lune.Core as C
 import qualified Lune.Eval.Runtime as ER
 import Lune.Eval.Types
 import qualified Lune.Syntax as S
 import Lune.Type
+import qualified Network.Socket as NS
+import qualified Network.Socket.ByteString as NSB
+import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
@@ -78,6 +86,14 @@ builtinSchemes =
     , ("$primIOThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
     , ("$primSTMPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "STM") (TVar "a"))))
     , ("$primSTMBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "STM") (TVar "b"))) (TApp (TCon "STM") (TVar "b")))))
+    -- Socket primitives
+    , ("prim_tcpListen", Forall [] [] (TArrow (TCon "Int") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Socket")))))
+    , ("prim_tcpAccept", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Connection")))))
+    , ("prim_tcpConnect", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "Int") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Connection"))))))
+    , ("prim_connRecv", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "String")))))
+    , ("prim_connSend", Forall [] [] (TArrow (TCon "Connection") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
+    , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
+    , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -366,6 +382,17 @@ builtinEvalPrims =
     , ("prim_spawn", BuiltinPrim 1 primSpawn)
     , ("prim_yield", BuiltinPrim 0 primYield)
     , ("prim_await", BuiltinPrim 1 primAwait)
+    -- File I/O primitives
+    , ("prim_readFile", BuiltinPrim 1 primReadFile)
+    , ("prim_writeFile", BuiltinPrim 2 primWriteFile)
+    -- Socket primitives
+    , ("prim_tcpListen", BuiltinPrim 1 primTcpListen)
+    , ("prim_tcpAccept", BuiltinPrim 1 primTcpAccept)
+    , ("prim_tcpConnect", BuiltinPrim 2 primTcpConnect)
+    , ("prim_connRecv", BuiltinPrim 1 primConnRecv)
+    , ("prim_connSend", BuiltinPrim 2 primConnSend)
+    , ("prim_connClose", BuiltinPrim 1 primConnClose)
+    , ("prim_socketClose", BuiltinPrim 1 primSocketClose)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -390,13 +417,13 @@ primPutStrLn args =
     [VString s] ->
       Right $
         VIO $ \w ->
-          Right (w {worldStdout = worldStdout w <> [s]}, VCon (preludeCon "Unit") [])
+          pure $ Right (w {worldStdout = worldStdout w <> [s]}, VCon (preludeCon' "Unit") [])
     [other] ->
       Left (ExpectedString other)
     _ ->
       Left (NotAFunction (VPrim 1 primPutStrLn args))
   where
-    preludeCon n = "Lune.Prelude." <> n
+    preludeCon' n = "Lune.Prelude." <> n
 
 primShowInt :: [Value] -> Either EvalError Value
 primShowInt args =
@@ -531,7 +558,7 @@ primIOPure :: [Value] -> Either EvalError Value
 primIOPure args =
   case args of
     [v] ->
-      Right (VIO (\w -> Right (w, v)))
+      Right (VIO (\w -> pure (Right (w, v))))
     _ ->
       Left (NotAFunction (VPrim 1 primIOPure args))
 
@@ -543,13 +570,14 @@ primIOBind args =
         VIO act1 ->
           Right $
             VIO $ \w0 -> do
-              (w1, a) <- act1 w0
-              kApp <- ER.apply k a >>= ER.force
-              case kApp of
-                VIO act2 ->
-                  act2 w1
-                other ->
-                  Left (NotAnIO other)
+              result1 <- act1 w0
+              case result1 of
+                Left err -> pure (Left err)
+                Right (w1, a) ->
+                  case ER.apply k a >>= ER.force of
+                    Left err -> pure (Left err)
+                    Right (VIO act2) -> act2 w1
+                    Right other -> pure (Left (NotAnIO other))
         other ->
           Left (NotAnIO other)
     _ ->
@@ -563,8 +591,10 @@ primIOThen args =
         (VIO act1, VIO act2) ->
           Right $
             VIO $ \w0 -> do
-              (w1, _) <- act1 w0
-              act2 w1
+              result1 <- act1 w0
+              case result1 of
+                Left err -> pure (Left err)
+                Right (w1, _) -> act2 w1
         (other, _) ->
           Left (NotAnIO other)
     _ ->
@@ -1060,7 +1090,7 @@ primAtomically args =
   case args of
     [VSTM action] ->
       Right $ VIO $ \world ->
-        runSTM action world
+        pure $ runSTM action world
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAtomically args))
 
@@ -1139,13 +1169,13 @@ primSpawn args =
       Right $ VIO $ \world ->
         let fid = worldNextFiberId world
             -- Create fiber in suspended state with the IO action as continuation
-            fiberState = FiberSuspended (\w -> ioAction w)
+            fiberState = FiberSuspended ioAction
             world' = world
               { worldNextFiberId = fid + 1
               , worldFibers = IntMap.insert fid fiberState (worldFibers world)
               , worldReadyQueue = worldReadyQueue world ++ [fid]
               }
-        in Right (world', VFiber fid)
+        in pure $ Right (world', VFiber fid)
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primSpawn args))
 
@@ -1160,40 +1190,41 @@ primYield args =
         case worldReadyQueue world of
           [] ->
             -- No other fibers to run, just return
-            Right (world, VCon (preludeCon "Unit") [])
+            pure $ Right (world, VCon (preludeCon "Unit") [])
           (fid : rest) ->
             -- Pop a fiber and run it
             case IntMap.lookup fid (worldFibers world) of
               Nothing ->
                 -- Fiber was removed, continue with rest
                 let world' = world { worldReadyQueue = rest }
-                in Right (world', VCon (preludeCon "Unit") [])
+                in pure $ Right (world', VCon (preludeCon "Unit") [])
               Just fiberState ->
                 case fiberState of
-                  FiberSuspended cont ->
+                  FiberSuspended cont -> do
                     -- Run the suspended fiber's continuation
                     let world' = world { worldReadyQueue = rest }
-                    in case cont world' of
-                         Left err ->
-                           -- Fiber failed, mark it
-                           let world'' = world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
-                           in Right (world'', VCon (preludeCon "Unit") [])
-                         Right (world'', result) ->
-                           -- Fiber completed, mark it
-                           let world''' = world'' { worldFibers = IntMap.insert fid (FiberCompleted result) (worldFibers world'') }
-                           in Right (world''', VCon (preludeCon "Unit") [])
+                    result <- cont world'
+                    case result of
+                      Left err ->
+                        -- Fiber failed, mark it
+                        let world'' = world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
+                        in pure $ Right (world'', VCon (preludeCon "Unit") [])
+                      Right (world'', resultVal) ->
+                        -- Fiber completed, mark it
+                        let world''' = world'' { worldFibers = IntMap.insert fid (FiberCompleted resultVal) (worldFibers world'') }
+                        in pure $ Right (world''', VCon (preludeCon "Unit") [])
                   FiberRunning ->
                     -- Shouldn't happen in cooperative scheduling
                     let world' = world { worldReadyQueue = rest }
-                    in Right (world', VCon (preludeCon "Unit") [])
+                    in pure $ Right (world', VCon (preludeCon "Unit") [])
                   FiberCompleted _ ->
                     -- Already done, skip
                     let world' = world { worldReadyQueue = rest }
-                    in Right (world', VCon (preludeCon "Unit") [])
+                    in pure $ Right (world', VCon (preludeCon "Unit") [])
                   FiberFailed _ ->
                     -- Already failed, skip
                     let world' = world { worldReadyQueue = rest }
-                    in Right (world', VCon (preludeCon "Unit") [])
+                    in pure $ Right (world', VCon (preludeCon "Unit") [])
     _ -> Left (NotAFunction (VPrim 0 primYield args))
 
 -- | prim_await : Fiber a -> IO a
@@ -1202,39 +1233,39 @@ primAwait :: [Value] -> Either EvalError Value
 primAwait args =
   case args of
     [VFiber fid] ->
-      Right $ VIO $ \world ->
-        awaitFiber fid world
+      Right $ VIO $ awaitFiber fid
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAwait args))
 
 -- | Keep yielding until the target fiber completes
-awaitFiber :: FiberId -> World -> Either EvalError (World, Value)
+awaitFiber :: FiberId -> World -> IO (Either EvalError (World, Value))
 awaitFiber fid world =
   case IntMap.lookup fid (worldFibers world) of
     Nothing ->
-      Left (UnboundVariable ("fiber:" <> T.pack (show fid) <> " not found"))
+      pure $ Left (UnboundVariable ("fiber:" <> T.pack (show fid) <> " not found"))
     Just fiberState ->
       case fiberState of
         FiberCompleted result ->
-          Right (world, result)
+          pure $ Right (world, result)
         FiberFailed err ->
-          Left err
-        FiberSuspended _ ->
+          pure $ Left err
+        FiberSuspended _ -> do
           -- Fiber not done yet, run the scheduler
-          case runSchedulerStep world of
-            Left err -> Left err
+          result <- runSchedulerStep world
+          case result of
+            Left err -> pure $ Left err
             Right world' -> awaitFiber fid world'
         FiberRunning ->
           -- In cooperative scheduling this shouldn't happen
-          Left (UnboundVariable "fiber in running state during await")
+          pure $ Left (UnboundVariable "fiber in running state during await")
 
 -- | Run one step of the scheduler (execute next ready fiber)
-runSchedulerStep :: World -> Either EvalError World
+runSchedulerStep :: World -> IO (Either EvalError World)
 runSchedulerStep world =
   case worldReadyQueue world of
     [] ->
       -- No fibers to run, return unchanged
-      Right world
+      pure $ Right world
     (fid : rest) ->
       case IntMap.lookup fid (worldFibers world) of
         Nothing ->
@@ -1242,19 +1273,224 @@ runSchedulerStep world =
           runSchedulerStep (world { worldReadyQueue = rest })
         Just fiberState ->
           case fiberState of
-            FiberSuspended cont ->
+            FiberSuspended cont -> do
               let world' = world { worldReadyQueue = rest }
-              in case cont world' of
-                   Left err ->
-                     Right $ world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
-                   Right (world'', result) ->
-                     Right $ world'' { worldFibers = IntMap.insert fid (FiberCompleted result) (worldFibers world'') }
+              result <- cont world'
+              case result of
+                Left err ->
+                  pure $ Right $ world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
+                Right (world'', resultVal) ->
+                  pure $ Right $ world'' { worldFibers = IntMap.insert fid (FiberCompleted resultVal) (worldFibers world'') }
             FiberCompleted _ ->
               -- Already done
-              Right $ world { worldReadyQueue = rest }
+              pure $ Right $ world { worldReadyQueue = rest }
             FiberFailed _ ->
               -- Already failed
-              Right $ world { worldReadyQueue = rest }
+              pure $ Right $ world { worldReadyQueue = rest }
             FiberRunning ->
               -- Skip
-              Right $ world { worldReadyQueue = rest }
+              pure $ Right $ world { worldReadyQueue = rest }
+
+-- =============================================================================
+-- File I/O Primitives
+-- =============================================================================
+
+-- | prim_readFile : String -> IO (Result Error String)
+primReadFile :: [Value] -> Either EvalError Value
+primReadFile args =
+  case args of
+    [VString path] ->
+      Right $ VIO $ \world -> do
+        result <- try (TIO.readFile (T.unpack path))
+        case result of
+          Left (e :: IOException) ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+          Right contents ->
+            pure $ Right (world, VCon (preludeCon "Ok") [VString contents])
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primReadFile args))
+
+-- | prim_writeFile : String -> String -> IO (Result Error Unit)
+primWriteFile :: [Value] -> Either EvalError Value
+primWriteFile args =
+  case args of
+    [VString path, VString contents] ->
+      Right $ VIO $ \world -> do
+        result <- try (TIO.writeFile (T.unpack path) contents)
+        case result of
+          Left (e :: IOException) ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+          Right () ->
+            pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    [other, _] | not (isVString other) ->
+      Left (ExpectedString other)
+    [_, other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primWriteFile args))
+  where
+    isVString (VString _) = True
+    isVString _ = False
+
+-- =============================================================================
+-- Socket Primitives
+-- =============================================================================
+
+-- | prim_tcpListen : Int -> IO (Result Error Socket)
+primTcpListen :: [Value] -> Either EvalError Value
+primTcpListen args =
+  case args of
+    [VInt port] ->
+      Right $ VIO $ \world -> do
+        result <- try $ do
+          sock <- NS.socket NS.AF_INET NS.Stream NS.defaultProtocol
+          NS.setSocketOption sock NS.ReuseAddr 1
+          let addr = NS.SockAddrInet (fromIntegral port) 0  -- 0 = INADDR_ANY
+          NS.bind sock addr
+          NS.listen sock 5
+          pure sock
+        case result of
+          Left (e :: IOException) ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+          Right sock ->
+            let sid = worldNextSocketId world
+                world' = world
+                  { worldSockets = IntMap.insert sid sock (worldSockets world)
+                  , worldNextSocketId = sid + 1
+                  }
+            in pure $ Right (world', VCon (preludeCon "Ok") [VSocket sid])
+    _ ->
+      Left (NotAFunction (VPrim 1 primTcpListen args))
+
+-- | prim_tcpAccept : Socket -> IO (Result Error Connection)
+primTcpAccept :: [Value] -> Either EvalError Value
+primTcpAccept args =
+  case args of
+    [VSocket sid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup sid (worldSockets world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid socket"])
+          Just sock -> do
+            result <- try (NS.accept sock)
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right (conn, _addr) ->
+                let cid = worldNextConnId world
+                    world' = world
+                      { worldConns = IntMap.insert cid conn (worldConns world)
+                      , worldNextConnId = cid + 1
+                      }
+                in pure $ Right (world', VCon (preludeCon "Ok") [VConn cid])
+    _ ->
+      Left (NotAFunction (VPrim 1 primTcpAccept args))
+
+-- | prim_tcpConnect : String -> Int -> IO (Result Error Connection)
+primTcpConnect :: [Value] -> Either EvalError Value
+primTcpConnect args =
+  case args of
+    [VString host, VInt port] ->
+      Right $ VIO $ \world -> do
+        result <- try $ do
+          let hints = NS.defaultHints { NS.addrSocketType = NS.Stream }
+          addrs <- NS.getAddrInfo (Just hints) (Just (T.unpack host)) (Just (show port))
+          case addrs of
+            [] -> ioError (userError "no addresses found")
+            (addr:_) -> do
+              sock <- NS.socket (NS.addrFamily addr) (NS.addrSocketType addr) (NS.addrProtocol addr)
+              NS.connect sock (NS.addrAddress addr)
+              pure sock
+        case result of
+          Left (e :: IOException) ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+          Right conn ->
+            let cid = worldNextConnId world
+                world' = world
+                  { worldConns = IntMap.insert cid conn (worldConns world)
+                  , worldNextConnId = cid + 1
+                  }
+            in pure $ Right (world', VCon (preludeCon "Ok") [VConn cid])
+    _ ->
+      Left (NotAFunction (VPrim 2 primTcpConnect args))
+
+-- | prim_connRecv : Connection -> IO (Result Error String)
+primConnRecv :: [Value] -> Either EvalError Value
+primConnRecv args =
+  case args of
+    [VConn cid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup cid (worldConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+          Just conn -> do
+            result <- try (NSB.recv conn 4096)
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right bytes ->
+                let text = TE.decodeUtf8Lenient bytes
+                in pure $ Right (world, VCon (preludeCon "Ok") [VString text])
+    _ ->
+      Left (NotAFunction (VPrim 1 primConnRecv args))
+
+-- | prim_connSend : Connection -> String -> IO (Result Error Unit)
+primConnSend :: [Value] -> Either EvalError Value
+primConnSend args =
+  case args of
+    [VConn cid, VString msg] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup cid (worldConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+          Just conn -> do
+            result <- try (NSB.sendAll conn (TE.encodeUtf8 msg))
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 2 primConnSend args))
+
+-- | prim_connClose : Connection -> IO (Result Error Unit)
+primConnClose :: [Value] -> Either EvalError Value
+primConnClose args =
+  case args of
+    [VConn cid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup cid (worldConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+          Just conn -> do
+            result <- try (NS.close conn)
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                let world' = world { worldConns = IntMap.delete cid (worldConns world) }
+                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primConnClose args))
+
+-- | prim_socketClose : Socket -> IO (Result Error Unit)
+primSocketClose :: [Value] -> Either EvalError Value
+primSocketClose args =
+  case args of
+    [VSocket sid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup sid (worldSockets world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid socket"])
+          Just sock -> do
+            result <- try (NS.close sock)
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                let world' = world { worldSockets = IntMap.delete sid (worldSockets world) }
+                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primSocketClose args))

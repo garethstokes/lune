@@ -166,8 +166,9 @@ runProgramPipeline opts = do
                   Left err -> do
                     putStrLn (show err)
                     exitFailure
-                  Right v ->
-                    case Eval.runIO v of
+                  Right v -> do
+                    result <- Eval.runIO v
+                    case result of
                       Left err -> do
                         putStrLn (show err)
                         exitFailure
@@ -204,8 +205,9 @@ runProgramPipeline opts = do
                                 Left err -> do
                                   putStrLn (show err)
                                   exitFailure
-                                Right v ->
-                                  case Eval.runIO v of
+                                Right v -> do
+                                  result <- Eval.runIO v
+                                  case result of
                                     Left _ ->
                                       print v
                                     Right (world, _) ->
