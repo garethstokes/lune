@@ -1,0 +1,48 @@
+module Lune.Api.Route exposing (
+  Route,
+  Routes,
+  get,
+  post,
+  put,
+  patch,
+  delete,
+  define
+)
+
+import Lune.Prelude exposing (String, List(..), Maybe(..), Int)
+import Lune.Http exposing (Method(..), Request, Response)
+import Lune.Api exposing (Api)
+
+{-| A route combines a method, path pattern, and handler.
+    Path patterns use :param syntax for path parameters.
+-}
+type alias Route e ctx =
+  { method : Method
+  , pattern : String
+  , handler : Request -> ctx -> Api e Response
+  }
+
+type alias Routes e ctx = List (Route e ctx)
+
+get : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+get pattern handler =
+  { method = GET, pattern = pattern, handler = handler }
+
+post : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+post pattern handler =
+  { method = POST, pattern = pattern, handler = handler }
+
+put : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+put pattern handler =
+  { method = PUT, pattern = pattern, handler = handler }
+
+patch : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+patch pattern handler =
+  { method = PATCH, pattern = pattern, handler = handler }
+
+delete : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+delete pattern handler =
+  { method = DELETE, pattern = pattern, handler = handler }
+
+define : List (Route e ctx) -> Routes e ctx
+define routes = routes
