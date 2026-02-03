@@ -6,21 +6,31 @@ module Lune.Api exposing (
   orFail,
   mapError,
   pure,
-  andThen
+  andThen,
+  serve,
+  ServerConfig
 )
 
-import Lune.Prelude exposing (IO, Result(..), Maybe(..), Unit)
+import Lune.Prelude exposing (IO, Result(..), Maybe(..), Unit, List(..), Int, Bool(..), unit)
+import Lune.Http exposing (Request, Response, Method(..))
+import Lune.Http.Server as Server
+import Lune.Api.Route exposing (Route, Routes)
+import Lune.String as Str
 
 {-| Api e a represents an API computation that:
     - Has read access to context of type ctx (implicit via run)
     - Can fail with error type e
     - Returns a value of type a
-
-    Internally it's: ctx -> IO (Result e a)
 -}
 type Api e a = Api#
 
--- Primitives (implemented in Haskell)
+type alias ServerConfig e ctx =
+  { port : Int
+  , errorHandler : e -> Response
+  , context : ctx
+  }
+
+-- Core Api operations (primitives)
 run : ctx -> Api e a -> IO (Result e a)
 run = prim_apiRun
 
@@ -44,3 +54,49 @@ pure = prim_apiPure
 
 andThen : (a -> Api e b) -> Api e a -> Api e b
 andThen = prim_apiAndThen
+
+-- Server
+serve : ServerConfig e ctx -> Routes e ctx -> IO Unit
+serve config routes =
+  Server.serve config.port (handleRequest config routes)
+
+handleRequest : ServerConfig e ctx -> Routes e ctx -> Request -> IO Response
+handleRequest config routes request =
+  case findMatchingRoute request routes of
+    Nothing ->
+      pure notFoundResponse
+    Just route ->
+      do
+        result <- run config.context (route.handler request config.context)
+        case result of
+          Err e -> pure (config.errorHandler e)
+          Ok response -> pure response
+
+findMatchingRoute : Request -> Routes e ctx -> Maybe (Route e ctx)
+findMatchingRoute request routes =
+  case routes of
+    Nil -> Nothing
+    Cons route rest ->
+      case methodMatches request.method route.method of
+        False -> findMatchingRoute request rest
+        True ->
+          case prim_matchPath route.pattern request.path of
+            Nothing -> findMatchingRoute request rest
+            Just _ -> Just route
+
+methodMatches : Method -> Method -> Bool
+methodMatches m1 m2 =
+  case (m1, m2) of
+    (GET, GET) -> True
+    (POST, POST) -> True
+    (PUT, PUT) -> True
+    (PATCH, PATCH) -> True
+    (DELETE, DELETE) -> True
+    _ -> False
+
+notFoundResponse : Response
+notFoundResponse =
+  { status = 404
+  , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+  , body = "{\"error\":\"Not Found\"}"
+  }
