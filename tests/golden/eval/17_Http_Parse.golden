@@ -1,0 +1,6 @@
+=== HTTP Parse Test ===
+Path: /users/123
+GET request parsed successfully
+Path: /users
+Body: {"name":"Alice"}
+POST request parsed successfully
