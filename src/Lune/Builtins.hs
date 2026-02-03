@@ -74,6 +74,8 @@ builtinSchemes =
     , ("$primIOPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
     , ("$primIOBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
     , ("$primIOThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
+    , ("$primSTMPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "STM") (TVar "a"))))
+    , ("$primSTMBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "STM") (TVar "b"))) (TApp (TCon "STM") (TVar "b")))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -276,6 +278,9 @@ builtinEvalPrims =
     , ("prim_jsonToInt", BuiltinPrim 1 primJsonToInt)
     , ("prim_jsonToString", BuiltinPrim 1 primJsonToString)
     , ("prim_jsonIsNull", BuiltinPrim 1 primJsonIsNull)
+    -- STM primitives
+    , ("$primSTMPure", BuiltinPrim 1 primSTMPure)
+    , ("$primSTMBind", BuiltinPrim 2 primSTMBind)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -892,3 +897,26 @@ stringifyJson jv =
     hexDigit n
       | n < 10 = toEnum (fromEnum '0' + n)
       | otherwise = toEnum (fromEnum 'a' + n - 10)
+
+-- =============================================================================
+-- STM Primitives
+-- =============================================================================
+
+primSTMPure :: [Value] -> Either EvalError Value
+primSTMPure args =
+  case args of
+    [v] -> Right (VSTM (STMPure v))
+    _ -> Left (NotAFunction (VPrim 1 primSTMPure args))
+
+primSTMBind :: [Value] -> Either EvalError Value
+primSTMBind args =
+  case args of
+    [VSTM action, k] ->
+      Right (VSTM (STMBind action (\v ->
+        case ER.apply k v >>= ER.force of
+          Right (VSTM act) -> act
+          Right other -> STMPure other  -- wrap non-STM in pure
+          Left _ -> STMRetry  -- error becomes retry
+      )))
+    [other, _] -> Left (NotAnIO other)  -- reuse error type
+    _ -> Left (NotAFunction (VPrim 2 primSTMBind args))
