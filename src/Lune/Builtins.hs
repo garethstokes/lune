@@ -8,6 +8,8 @@ module Lune.Builtins
   ) where
 
 import Data.Char (isDigit, isSpace)
+import Data.IntMap.Strict (IntMap)
+import qualified Data.IntMap.Strict as IntMap
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -284,6 +286,7 @@ builtinEvalPrims =
     , ("prim_newTVar", BuiltinPrim 1 primNewTVar)
     , ("prim_readTVar", BuiltinPrim 1 primReadTVar)
     , ("prim_writeTVar", BuiltinPrim 2 primWriteTVar)
+    , ("prim_atomically", BuiltinPrim 1 primAtomically)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -942,3 +945,57 @@ primWriteTVar args =
     [VTVar tvid, newValue] ->
       Right (VSTM (STMWriteTVar tvid newValue))
     _ -> Left (NotAFunction (VPrim 2 primWriteTVar args))
+
+primAtomically :: [Value] -> Either EvalError Value
+primAtomically args =
+  case args of
+    [VSTM action] ->
+      Right $ VIO $ \world ->
+        runSTM action world
+    [other] -> Left (NotAnIO other)
+    _ -> Left (NotAFunction (VPrim 1 primAtomically args))
+
+-- | Execute an STM transaction against the world
+runSTM :: STMAction -> World -> Either EvalError (World, Value)
+runSTM action world = go action world IntMap.empty
+  where
+    -- go action world localWrites
+    -- localWrites tracks writes made in this transaction
+    go :: STMAction -> World -> IntMap Value -> Either EvalError (World, Value)
+    go act w writes =
+      case act of
+        STMPure v ->
+          -- Commit all writes
+          let w' = w { worldTVars = IntMap.union writes (worldTVars w) }
+          in Right (w', v)
+
+        STMBind m f ->
+          case go m w writes of
+            Left err -> Left err
+            Right (w', v) ->
+              go (f v) w' writes
+
+        STMNewTVar initialValue ->
+          let tvid = worldNextTVarId w
+              w' = w { worldNextTVarId = tvid + 1 }
+              writes' = IntMap.insert tvid initialValue writes
+          in Right (w' { worldTVars = IntMap.union writes' (worldTVars w') }, VTVar tvid)
+
+        STMReadTVar tvid ->
+          -- Check local writes first, then global state
+          case IntMap.lookup tvid writes of
+            Just v -> Right (w, v)
+            Nothing ->
+              case IntMap.lookup tvid (worldTVars w) of
+                Just v -> Right (w, v)
+                Nothing -> Left (UnboundVariable ("tvar:" <> T.pack (show tvid)))
+
+        STMWriteTVar tvid newValue ->
+          let writes' = IntMap.insert tvid newValue writes
+          in go (STMPure (VCon (preludeCon "Unit") [])) w writes'
+
+        STMRetry ->
+          Left (UnboundVariable "STM retry not yet implemented")
+
+        STMOrElse _ _ ->
+          Left (UnboundVariable "STM orElse not yet implemented")
