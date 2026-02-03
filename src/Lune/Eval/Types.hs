@@ -98,6 +98,7 @@ data Value
   | VThunk Env C.CoreExpr
   | VPrim Int ([Value] -> Either EvalError Value) [Value]
   | VIO (World -> IO (Either EvalError (World, Value)))
+  | VApi (Value -> World -> IO (Either EvalError (World, Value)))
 
 data EvalError
   = UnboundVariable Text
@@ -143,6 +144,8 @@ instance Show Value where
         "<prim>"
       VIO {} ->
         "<io>"
+      VApi _ ->
+        "<api>"
       VTVar tvid ->
         "<tvar:" <> show tvid <> ">"
       VSTM _ ->

@@ -120,6 +120,25 @@ builtinSchemes =
     -- HTTP primitives
     , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) httpRequestType)))
     , ("prim_formatHttpResponse", Forall [] [] (TArrow httpResponseType (TCon "String")))
+    -- Api monad primitives
+    , ("prim_apiRun", Forall ["ctx", "e", "a"] []
+        (TArrow (TVar "ctx")
+          (TArrow (TApp (TApp (TCon "Api") (TVar "e")) (TVar "a"))
+            (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TVar "e")) (TVar "a"))))))
+    , ("prim_apiContext", Forall ["e", "ctx"] []
+        (TApp (TApp (TCon "Api") (TVar "e")) (TVar "ctx")))
+    , ("prim_apiFail", Forall ["e", "a"] []
+        (TArrow (TVar "e") (TApp (TApp (TCon "Api") (TVar "e")) (TVar "a"))))
+    , ("prim_apiMapError", Forall ["e1", "e2", "a"] []
+        (TArrow (TArrow (TVar "e1") (TVar "e2"))
+          (TArrow (TApp (TApp (TCon "Api") (TVar "e1")) (TVar "a"))
+            (TApp (TApp (TCon "Api") (TVar "e2")) (TVar "a")))))
+    , ("prim_apiPure", Forall ["e", "a"] []
+        (TArrow (TVar "a") (TApp (TApp (TCon "Api") (TVar "e")) (TVar "a"))))
+    , ("prim_apiAndThen", Forall ["e", "a", "b"] []
+        (TArrow (TArrow (TVar "a") (TApp (TApp (TCon "Api") (TVar "e")) (TVar "b")))
+          (TArrow (TApp (TApp (TCon "Api") (TVar "e")) (TVar "a"))
+            (TApp (TApp (TCon "Api") (TVar "e")) (TVar "b")))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -422,6 +441,13 @@ builtinEvalPrims =
     -- HTTP primitives
     , ("prim_parseHttpRequest", BuiltinPrim 1 primParseHttpRequest)
     , ("prim_formatHttpResponse", BuiltinPrim 1 primFormatHttpResponse)
+    -- Api monad primitives
+    , ("prim_apiRun", BuiltinPrim 2 primApiRun)
+    , ("prim_apiContext", BuiltinPrim 0 primApiContext)
+    , ("prim_apiFail", BuiltinPrim 1 primApiFail)
+    , ("prim_apiMapError", BuiltinPrim 2 primApiMapError)
+    , ("prim_apiPure", BuiltinPrim 1 primApiPure)
+    , ("prim_apiAndThen", BuiltinPrim 2 primApiAndThen)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1633,3 +1659,98 @@ statusText code =
     409 -> "Conflict"
     500 -> "Internal Server Error"
     _ -> "Unknown"
+
+-- =============================================================================
+-- Api Monad Primitives
+-- =============================================================================
+
+-- | prim_apiRun : ctx -> Api e a -> IO (Result e a)
+primApiRun :: [Value] -> Either EvalError Value
+primApiRun args =
+  case args of
+    [ctx, VApi apiAction] ->
+      Right $ VIO $ \world -> do
+        result <- apiAction ctx world
+        case result of
+          Left err -> pure $ Left err
+          Right (world', val) -> pure $ Right (world', val)
+    [_, other] ->
+      Left (NotAnIO other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primApiRun args))
+
+-- | prim_apiContext : Api e ctx
+primApiContext :: [Value] -> Either EvalError Value
+primApiContext [] =
+  Right $ VApi $ \ctx world ->
+    pure $ Right (world, resultOk ctx)
+primApiContext args =
+  Left (NotAFunction (VPrim 0 primApiContext args))
+
+-- | prim_apiFail : e -> Api e a
+primApiFail :: [Value] -> Either EvalError Value
+primApiFail args =
+  case args of
+    [err] ->
+      Right $ VApi $ \_ctx world ->
+        pure $ Right (world, VCon (preludeCon "Err") [err])
+    _ ->
+      Left (NotAFunction (VPrim 1 primApiFail args))
+
+-- | prim_apiMapError : (e1 -> e2) -> Api e1 a -> Api e2 a
+primApiMapError :: [Value] -> Either EvalError Value
+primApiMapError args =
+  case args of
+    [f, VApi apiAction] ->
+      Right $ VApi $ \ctx world -> do
+        result <- apiAction ctx world
+        case result of
+          Left err -> pure $ Left err
+          Right (world', val) ->
+            case val of
+              VCon con [e] | con == preludeCon "Err" ->
+                case ER.apply f e >>= ER.force of
+                  Left err -> pure $ Left err
+                  Right mappedErr -> pure $ Right (world', VCon (preludeCon "Err") [mappedErr])
+              _ -> pure $ Right (world', val)
+    [_, other] ->
+      Left (NotAnIO other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primApiMapError args))
+
+-- | prim_apiPure : a -> Api e a
+primApiPure :: [Value] -> Either EvalError Value
+primApiPure args =
+  case args of
+    [v] ->
+      Right $ VApi $ \_ctx world ->
+        pure $ Right (world, resultOk v)
+    _ ->
+      Left (NotAFunction (VPrim 1 primApiPure args))
+
+-- | prim_apiAndThen : (a -> Api e b) -> Api e a -> Api e b
+primApiAndThen :: [Value] -> Either EvalError Value
+primApiAndThen args =
+  case args of
+    [k, VApi apiAction] ->
+      Right $ VApi $ \ctx world -> do
+        result <- apiAction ctx world
+        case result of
+          Left err -> pure $ Left err
+          Right (world', val) ->
+            case val of
+              VCon con [e] | con == preludeCon "Err" ->
+                -- Short-circuit on error
+                pure $ Right (world', VCon (preludeCon "Err") [e])
+              VCon con [a] | con == preludeCon "Ok" ->
+                -- Apply continuation
+                case ER.apply k a >>= ER.force of
+                  Left err -> pure $ Left err
+                  Right (VApi nextAction) -> nextAction ctx world'
+                  Right other -> pure $ Left (NotAnIO other)
+              other ->
+                pure $ Left (NotAResult other)
+    [_, other] ->
+      Left (NotAnIO other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primApiAndThen args))
