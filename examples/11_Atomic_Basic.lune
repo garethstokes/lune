@@ -1,0 +1,18 @@
+module AtomicBasic exposing (main)
+
+import Lune.IO as IO
+import Lune.Atomic as Atomic
+import Lune.String as Str
+import Lune.Int as Int
+
+main : IO Unit
+main =
+  do
+    counter <- Atomic.commit (Atomic.new 0)
+    _ <- Atomic.commit
+      (do
+        n <- Atomic.read counter
+        Atomic.write counter (Int.add n 1)
+      )
+    result <- Atomic.commit (Atomic.read counter)
+    IO.println (Str.append "Counter: " (Str.fromInt result))
