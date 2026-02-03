@@ -6,6 +6,7 @@ module Lune.Eval.Runtime
   ) where
 
 import Data.Char (isUpper)
+import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -17,7 +18,7 @@ runIO :: Value -> Either EvalError (World, Value)
 runIO v =
   case v of
     VIO act ->
-      act (World [])
+      act (World [] IntMap.empty 0)
     other ->
       Left (NotAnIO other)
 

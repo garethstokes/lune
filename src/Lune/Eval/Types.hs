@@ -8,6 +8,8 @@ module Lune.Eval.Types
   , EvalError (..)
   ) where
 
+import Data.IntMap.Strict (IntMap)
+import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Text (Text)
@@ -32,6 +34,8 @@ data STMAction
 
 data World = World
   { worldStdout :: [Text]
+  , worldTVars :: IntMap Value   -- TVar storage
+  , worldNextTVarId :: TVarId    -- Next TVar ID to allocate
   }
   deriving (Show)
 
