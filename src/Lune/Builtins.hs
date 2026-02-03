@@ -11,6 +11,7 @@ module Lune.Builtins
 
 import Control.Exception (try, IOException)
 import Data.Char (isDigit, isSpace)
+import Data.Maybe (mapMaybe)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import Data.List (foldl')
@@ -94,6 +95,9 @@ builtinSchemes =
     , ("prim_connSend", Forall [] [] (TArrow (TCon "Connection") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
     , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
+    -- HTTP primitives
+    , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Request"))))
+    , ("prim_formatHttpResponse", Forall [] [] (TArrow (TCon "Response") (TCon "String")))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -393,6 +397,9 @@ builtinEvalPrims =
     , ("prim_connSend", BuiltinPrim 2 primConnSend)
     , ("prim_connClose", BuiltinPrim 1 primConnClose)
     , ("prim_socketClose", BuiltinPrim 1 primSocketClose)
+    -- HTTP primitives
+    , ("prim_parseHttpRequest", BuiltinPrim 1 primParseHttpRequest)
+    , ("prim_formatHttpResponse", BuiltinPrim 1 primFormatHttpResponse)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1494,3 +1501,111 @@ primSocketClose args =
                 in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primSocketClose args))
+
+-- =============================================================================
+-- HTTP Primitives
+-- =============================================================================
+
+-- | prim_parseHttpRequest : String -> Result String Request
+primParseHttpRequest :: [Value] -> Either EvalError Value
+primParseHttpRequest args =
+  case args of
+    [VString raw] ->
+      case parseHttpRequest raw of
+        Left err -> Right (resultErr err)
+        Right req -> Right (resultOk req)
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primParseHttpRequest args))
+
+-- | prim_formatHttpResponse : Response -> String
+primFormatHttpResponse :: [Value] -> Either EvalError Value
+primFormatHttpResponse args =
+  case args of
+    [VRecord fields] ->
+      case (Map.lookup "status" fields, Map.lookup "headers" fields, Map.lookup "body" fields) of
+        (Just (VInt status), Just headersVal, Just (VString body)) ->
+          let headers = valueToHeaderList headersVal
+              formatted = formatHttpResponse (fromIntegral status) headers body
+          in Right (VString formatted)
+        _ ->
+          Left (NotARecord (VRecord fields))
+    [other] ->
+      Left (NotARecord other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primFormatHttpResponse args))
+
+-- | Parse an HTTP request string into a Request record
+parseHttpRequest :: Text -> Either Text Value
+parseHttpRequest raw =
+  let linesRaw = T.lines raw
+  in case linesRaw of
+    [] -> Left "empty request"
+    (requestLine : headerLines) ->
+      case T.words requestLine of
+        [methodStr, pathStr, _version] ->
+          let method = parseMethod methodStr
+              (headerPart, bodyPart) = break T.null headerLines
+              headers = mapMaybe parseHeader headerPart
+              body = T.unlines (drop 1 bodyPart)
+          in Right $ VRecord $ Map.fromList
+            [ ("method", method)
+            , ("path", VString pathStr)
+            , ("headers", listToValue (map headerToValue headers))
+            , ("body", VString (T.strip body))
+            ]
+        _ -> Left "invalid request line"
+
+parseMethod :: Text -> Value
+parseMethod m =
+  case T.toUpper m of
+    "GET" -> VCon "Lune.Http.GET" []
+    "POST" -> VCon "Lune.Http.POST" []
+    "PUT" -> VCon "Lune.Http.PUT" []
+    "PATCH" -> VCon "Lune.Http.PATCH" []
+    "DELETE" -> VCon "Lune.Http.DELETE" []
+    _ -> VCon "Lune.Http.GET" []
+
+parseHeader :: Text -> Maybe (Text, Text)
+parseHeader line =
+  case T.breakOn ":" line of
+    (key, rest)
+      | not (T.null rest) -> Just (T.strip key, T.strip (T.drop 1 rest))
+      | otherwise -> Nothing
+
+headerToValue :: (Text, Text) -> Value
+headerToValue (k, v) = VRecord $ Map.fromList [("key", VString k), ("value", VString v)]
+
+valueToHeaderList :: Value -> [(Text, Text)]
+valueToHeaderList v =
+  case valueToList v of
+    Nothing -> []
+    Just vals -> mapMaybe extractHeader vals
+  where
+    extractHeader (VRecord fields) =
+      case (Map.lookup "key" fields, Map.lookup "value" fields) of
+        (Just (VString k), Just (VString v')) -> Just (k, v')
+        _ -> Nothing
+    extractHeader _ = Nothing
+
+formatHttpResponse :: Int -> [(Text, Text)] -> Text -> Text
+formatHttpResponse status headers body =
+  let statusLine = "HTTP/1.1 " <> T.pack (show status) <> " " <> statusText status
+      headerLines = map (\(k, v) -> k <> ": " <> v) headers
+      contentLength = "Content-Length: " <> T.pack (show (T.length body))
+  in T.unlines (statusLine : contentLength : headerLines ++ ["", body])
+
+statusText :: Int -> Text
+statusText code =
+  case code of
+    200 -> "OK"
+    201 -> "Created"
+    204 -> "No Content"
+    400 -> "Bad Request"
+    401 -> "Unauthorized"
+    403 -> "Forbidden"
+    404 -> "Not Found"
+    409 -> "Conflict"
+    500 -> "Internal Server Error"
+    _ -> "Unknown"
