@@ -130,8 +130,8 @@ Exports:
 - `readLine : IO String`
 - `readInt  : IO Int`
 - `sleepMs  : Int -> IO Unit`
-- `readFile : String -> IO (Result IO.Error String)`
-- `writeFile : String -> String -> IO (Result IO.Error Unit)`
+- `readFile : String -> IO (Result Error String)`
+- `writeFile : String -> String -> IO (Result Error Unit)`
 
 Types:
 
@@ -139,6 +139,30 @@ Types:
 
 The `IO` effect represents interaction with the external world.
 All observable side effects must occur within `IO`.
+
+---
+
+## 6.2 Lune.Net.Socket
+
+Exports:
+
+Types:
+- `type Socket`
+- `type Connection`
+
+Functions:
+- `listen      : Int -> IO (Result Error Socket)`
+- `accept      : Socket -> IO (Result Error Connection)`
+- `connect     : String -> Int -> IO (Result Error Connection)`
+- `recv        : Connection -> IO (Result Error String)`
+- `send        : Connection -> String -> IO (Result Error Unit)`
+- `closeConn   : Connection -> IO (Result Error Unit)`
+- `closeSocket : Socket -> IO (Result Error Unit)`
+
+The `Socket` type represents a listening TCP socket bound to a port.
+The `Connection` type represents an established TCP connection.
+
+All socket operations return `Result Error a` to allow graceful error handling.
 
 ---
 

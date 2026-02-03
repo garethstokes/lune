@@ -393,10 +393,23 @@ IO (Result e a)
 IO is a monad:
 
 ```haskell
-readFile : String -> IO (Result IOError String)
+readFile : String -> IO (Result Error String)
+writeFile : String -> String -> IO (Result Error Unit)
 ```
 
-### 14.4 Concurrency
+### 14.4 Network IO
+
+TCP socket operations are available via `Lune.Net.Socket`:
+
+```haskell
+listen  : Int -> IO (Result Error Socket)
+accept  : Socket -> IO (Result Error Connection)
+connect : String -> Int -> IO (Result Error Connection)
+recv    : Connection -> IO (Result Error String)
+send    : Connection -> String -> IO (Result Error Unit)
+```
+
+### 14.5 Concurrency
 
 Lune supports:
 
