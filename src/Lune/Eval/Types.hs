@@ -1,5 +1,7 @@
 module Lune.Eval.Types
   ( Env
+  , TVarId
+  , STMAction (..)
   , World (..)
   , Value (..)
   , JsonValue (..)
@@ -15,6 +17,18 @@ import qualified Lune.Syntax as S
 import Lune.Type (Constraint)
 
 type Env = Map Text Value
+
+type TVarId = Int
+
+-- | STM transaction action - builds up reads/writes for atomic commit
+data STMAction
+  = STMPure Value
+  | STMBind STMAction (Value -> STMAction)
+  | STMNewTVar Value
+  | STMReadTVar TVarId
+  | STMWriteTVar TVarId Value
+  | STMRetry
+  | STMOrElse STMAction STMAction
 
 data World = World
   { worldStdout :: [Text]
@@ -34,6 +48,8 @@ data Value
   = VInt Integer
   | VString Text
   | VChar Char
+  | VTVar TVarId
+  | VSTM STMAction
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -86,6 +102,10 @@ instance Show Value where
         "<prim>"
       VIO {} ->
         "<io>"
+      VTVar tvid ->
+        "<tvar:" <> show tvid <> ">"
+      VSTM _ ->
+        "<stm>"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
