@@ -1,1 +1,21 @@
-ElaborateTypecheckError Lune.Database.Decode.int: ConstructorArityMismatch "Lune.Database.DbNull" 1 0
+=== Database Decode Examples ===
+
+Decoding user row: [42, 'Alice', 'alice@example.com']
+  id: 42
+  name: Alice
+  email: alice@example.com
+
+Decoding product with description: [1, 'Widget', 'A useful widget']
+  id: 1
+  name: Widget
+  description: A useful widget
+
+Decoding product with NULL description: [2, 'Gadget', NULL]
+  id: 2
+  name: Gadget
+  description: (none)
+
+Decoding bad row (string instead of int): ['not-an-int', 'Bob', 'bob@example.com']
+Expected error: Decode error at column 0: Expected integer
+
+Done!
