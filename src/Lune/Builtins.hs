@@ -34,6 +34,7 @@ import qualified Database.PostgreSQL.Simple as PG
 import Database.PostgreSQL.Simple.ToField (ToField(..))
 import Database.PostgreSQL.Simple.FromRow (RowParser, field, numFieldsRemaining)
 import Database.PostgreSQL.Simple.Types (Null(..))
+import qualified Database.PostgreSQL.Simple.Transaction as PGT
 import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
@@ -159,6 +160,10 @@ builtinSchemes =
               (TApp (TCon "IO")
                 (TApp (TApp (TCon "Result") (TCon "DbError"))
                   (TApp (TCon "List") (TApp (TCon "List") (TCon "DbValue")))))))))
+    , ("prim_pgBegin", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -604,6 +609,7 @@ builtinEvalPrims =
     , ("prim_pgExecute", BuiltinPrim 2 primPgExecute)
     , ("prim_pgClose", BuiltinPrim 1 primPgClose)
     , ("prim_pgQuery", BuiltinPrim 3 primPgQuery)
+    , ("prim_pgBegin", BuiltinPrim 1 primPgBegin)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1888,6 +1894,25 @@ primPgClose args =
             pure $ Right (world', VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
     _ ->
       Left (NotAFunction (VPrim 1 primPgClose args))
+
+-- | prim_pgBegin : DbConn -> IO (Result DbError Unit)
+primPgBegin :: [Value] -> Either EvalError Value
+primPgBegin args =
+  case args of
+    [VDbConn dbid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            result <- try (PGT.begin conn)
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.QueryFailed" [VString (T.pack (show e))]])
+              Right () ->
+                pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgBegin args))
 
 -- =============================================================================
 -- DbValue Constructor Primitives
