@@ -29,7 +29,7 @@ tagged0 expectedTag result =
       Ok actualTag ->
         case Str.eq actualTag expectedTag of
           True -> Ok result
-          False -> Err { message = Str.append "expected tag: " expectedTag, path = Cons (D.Field "tag") Nil }
+          False -> Err { message = Str.append "expected tag: " expectedTag, path = [D.Field "tag"] }
 
 tagged1 : String -> (a -> b) -> D.Decoder a -> D.Decoder b
 tagged1 expectedTag ctor decoder =
@@ -38,7 +38,7 @@ tagged1 expectedTag ctor decoder =
       Err err -> Err err
       Ok actualTag ->
         case Str.eq actualTag expectedTag of
-          False -> Err { message = Str.append "expected tag: " expectedTag, path = Cons (D.Field "tag") Nil }
+          False -> Err { message = Str.append "expected tag: " expectedTag, path = [D.Field "tag"] }
           True ->
             case D.decodeValue (D.index 0 decoder) (fieldsOf json) of
               Err err -> Err (prependFieldsPath err)
@@ -53,3 +53,4 @@ fieldsOf json =
 prependFieldsPath : D.DecodeError -> D.DecodeError
 prependFieldsPath err =
   { message = err.message, path = Cons (D.Field "fields") err.path }
+  -- Note: Using Cons here is intentional since we're prepending to an existing path

@@ -7,7 +7,7 @@ import Lune.Json as Json
 import Lune.Json.Decode as D
 import Lune.Json.Decode exposing (Decoder)
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Unit, Result(..), List(..), Maybe(..), String, Float)
+import Lune.Prelude exposing (IO, Unit, Result(..), Maybe(..), String, Float)
 
 main : IO Unit
 main =
@@ -37,7 +37,7 @@ decodeNested =
   case Json.parse "{\"data\":{\"value\":42.0}}" of
     Err _ -> IO.println "Parse failed"
     Ok json ->
-      case D.decodeValue (D.at (Cons "data" (Cons "value" Nil)) D.float) json of
+      case D.decodeValue (D.at ["data", "value"] D.float) json of
         Err err -> IO.println (Str.append "Error: " err.message)
         Ok v -> IO.println (Str.append "Nested value: " (Str.fromFloat v))
 

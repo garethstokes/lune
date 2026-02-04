@@ -7,11 +7,11 @@ import Lune.Prelude exposing (List(..))
 map : (a -> b) -> List a -> List b
 map f xs =
   case xs of
-    Nil -> Nil
+    [] -> []
     Cons x xt -> Cons (f x) (map f xt)
 
 foldl : (b -> a -> b) -> b -> List a -> b
 foldl f acc xs =
   case xs of
-    Nil -> acc
+    [] -> acc
     Cons x xt -> foldl f (f acc x) xt

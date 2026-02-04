@@ -29,54 +29,54 @@ succeed value =
 
 fail : String -> Decoder a
 fail message =
-  \_ -> Err { message = message, path = Nil }
+  \_ -> Err { message = message, path = [] }
 
 bool : Decoder Bool
 bool =
   \json ->
     case prim_jsonToBool json of
       Ok b -> Ok b
-      Err msg -> Err { message = msg, path = Nil }
+      Err msg -> Err { message = msg, path = [] }
 
 int : Decoder Int
 int =
   \json ->
     case prim_jsonToInt json of
       Ok n -> Ok n
-      Err msg -> Err { message = msg, path = Nil }
+      Err msg -> Err { message = msg, path = [] }
 
 float : Decoder Float
 float =
   \json ->
     case prim_jsonToFloat json of
       Ok f -> Ok f
-      Err msg -> Err { message = msg, path = Nil }
+      Err msg -> Err { message = msg, path = [] }
 
 string : Decoder String
 string =
   \json ->
     case prim_jsonToString json of
       Ok s -> Ok s
-      Err msg -> Err { message = msg, path = Nil }
+      Err msg -> Err { message = msg, path = [] }
 
 null : a -> Decoder a
 null defaultValue =
   \json ->
     case prim_jsonIsNull json of
       True -> Ok defaultValue
-      False -> Err { message = "expected null", path = Nil }
+      False -> Err { message = "expected null", path = [] }
 
 list : Decoder a -> Decoder (List a)
 list elemDecoder =
   \json ->
     case prim_jsonToArray json of
-      Err msg -> Err { message = msg, path = Nil }
+      Err msg -> Err { message = msg, path = [] }
       Ok elements -> decodeList elemDecoder 0 elements
 
 decodeList : Decoder a -> Int -> List Json -> Result DecodeError (List a)
 decodeList decoder idx elements =
   case elements of
-    Nil -> Ok Nil
+    [] -> Ok []
     Cons x xs ->
       case decoder x of
         Err err -> Err (prependPath (Index idx) err)
@@ -99,7 +99,7 @@ field : String -> Decoder a -> Decoder a
 field name decoder =
   \json ->
     case prim_jsonGetField name json of
-      Err msg -> Err { message = msg, path = Cons (Field name) Nil }
+      Err msg -> Err { message = msg, path = [Field name] }
       Ok fieldJson ->
         case decoder fieldJson of
           Err err -> Err (prependPath (Field name) err)
@@ -109,7 +109,7 @@ index : Int -> Decoder a -> Decoder a
 index idx decoder =
   \json ->
     case prim_jsonGetIndex idx json of
-      Err msg -> Err { message = msg, path = Cons (Index idx) Nil }
+      Err msg -> Err { message = msg, path = [Index idx] }
       Ok elemJson ->
         case decoder elemJson of
           Err err -> Err (prependPath (Index idx) err)
@@ -118,7 +118,7 @@ index idx decoder =
 at : List String -> Decoder a -> Decoder a
 at path decoder =
   case path of
-    Nil -> decoder
+    [] -> decoder
     Cons name rest -> field name (at rest decoder)
 
 map : (a -> b) -> Decoder a -> Decoder b
@@ -196,12 +196,12 @@ andThen continuation decoder =
 oneOf : List (Decoder a) -> Decoder a
 oneOf decoders =
   \json ->
-    tryDecoders decoders { message = "oneOf: no decoders provided", path = Nil } json
+    tryDecoders decoders { message = "oneOf: no decoders provided", path = [] } json
 
 tryDecoders : List (Decoder a) -> DecodeError -> Json -> Result DecodeError a
 tryDecoders decoders lastErr json =
   case decoders of
-    Nil -> Err lastErr
+    [] -> Err lastErr
     Cons decoder rest ->
       case decoder json of
         Ok a -> Ok a

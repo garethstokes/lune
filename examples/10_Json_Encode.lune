@@ -6,7 +6,7 @@ import Lune.IO as IO
 import Lune.Json as Json
 import Lune.Json exposing (Json)
 import Lune.Json.Encode as E
-import Lune.Prelude exposing (IO, Unit, unit, List(..), Bool(..))
+import Lune.Prelude exposing (IO, Unit, unit, Bool(..))
 
 main : IO Unit
 main =
@@ -18,8 +18,13 @@ main =
 
 userJson : Json
 userJson =
-  E.object (Cons { key = "name", value = E.string "Alice" } (Cons { key = "age", value = E.int 30 } (Cons { key = "score", value = E.float 95.5 } (Cons { key = "active", value = E.bool True } Nil))))
+  E.object
+    [ { key = "name", value = E.string "Alice" }
+    , { key = "age", value = E.int 30 }
+    , { key = "score", value = E.float 95.5 }
+    , { key = "active", value = E.bool True }
+    ]
 
 scoresJson : Json
 scoresJson =
-  E.list E.float (Cons 3.14 (Cons 2.71 (Cons 1.41 Nil)))
+  E.list E.float [3.14, 2.71, 1.41]

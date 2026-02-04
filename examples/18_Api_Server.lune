@@ -5,7 +5,7 @@ import Lune.Api as Api
 import Lune.Api.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Maybe(..))
+import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..))
 
 -- Error type
 type AppError
@@ -23,12 +23,12 @@ errorToResponse err =
   case err of
     NotFound msg ->
       { status = 404
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
       }
     BadRequest msg ->
       { status = 400
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
       }
 
@@ -46,7 +46,7 @@ healthHandler : Request -> Context -> Api.Api AppError Response
 healthHandler request ctx =
   Api.pure
     { status = 200
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"status\":\"ok\"}"
     }
 
@@ -54,7 +54,7 @@ getUserHandler : Request -> Context -> Api.Api AppError Response
 getUserHandler request ctx =
   Api.pure
     { status = 200
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"id\":123,\"name\":\"Alice\"}"
     }
 
@@ -62,7 +62,7 @@ createUserHandler : Request -> Context -> Api.Api AppError Response
 createUserHandler request ctx =
   Api.pure
     { status = 201
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"id\":456,\"name\":\"Created\"}"
     }
 

@@ -382,6 +382,7 @@ parseAtom =
   choice
     [ try parseDo
     , parseRecord
+    , parseListLit
     , parenExpr
     , StringLit . T.pack <$> lexeme stringLiteral
     , CharLit <$> lexeme charLiteral
@@ -399,6 +400,21 @@ parseAtom =
 
     charLiteral :: Parser Char
     charLiteral = char '\'' *> L.charLiteral <* char '\''
+
+parseListLit :: Parser Expr
+parseListLit = do
+  _ <- symbol "["
+  scnOptional
+  elements <- parseExpr `sepBy` listSep
+  scnOptional
+  _ <- symbol "]"
+  pure (desugarListExpr elements)
+  where
+    listSep = try (scnOptional *> symbol "," <* scnOptional)
+
+desugarListExpr :: [Expr] -> Expr
+desugarListExpr [] = Var "Nil"
+desugarListExpr (x:xs) = App (App (Var "Cons") x) (desugarListExpr xs)
 
 parseLambda :: Parser Expr
 parseLambda = do
@@ -486,10 +502,26 @@ patternAtom :: Parser Pattern
 patternAtom =
   choice
     [ symbol "_" $> PWildcard
+    , parseListPattern
     , try conPattern
     , PVar <$> identifier
     , between (symbol "(") (symbol ")") parsePattern
     ]
+
+parseListPattern :: Parser Pattern
+parseListPattern = do
+  _ <- symbol "["
+  scnOptional
+  elements <- patternAtom `sepBy` listSep
+  scnOptional
+  _ <- symbol "]"
+  pure (desugarListPattern elements)
+  where
+    listSep = try (scnOptional *> symbol "," <* scnOptional)
+
+desugarListPattern :: [Pattern] -> Pattern
+desugarListPattern [] = PCon "Nil" []
+desugarListPattern (x:xs) = PCon "Cons" [x, desugarListPattern xs]
 
 conPattern :: Parser Pattern
 conPattern = do

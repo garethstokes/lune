@@ -60,8 +60,10 @@ upperIdent ::= [A-Z][a-zA-Z0-9_]*
 Supported literals:
 
 - integers: `0`, `42`, `-5`
+- floats: `3.14`, `0.5`
 - strings: `"hello"`
 - characters: `'x'`
+- lists: `[1, 2, 3]`, `[]`
 
 ### 1.6 Comments
 
@@ -148,9 +150,32 @@ e ::= literal
     | let x = e in e
     | case e of ...
     | do { stmts }
+    | [e, ...]
 ```
 
-### 5.2 Function Application
+### 5.2 List Literals
+
+List literals provide syntactic sugar for constructing lists:
+
+```haskell
+[1, 2, 3]         -- desugars to: Cons 1 (Cons 2 (Cons 3 Nil))
+[]                -- desugars to: Nil
+["a", "b"]        -- desugars to: Cons "a" (Cons "b" Nil)
+[[1, 2], [3, 4]]  -- nested lists are supported
+```
+
+Multi-line lists use Elm-style leading commas:
+
+```haskell
+[ item1
+, item2
+, item3
+]
+```
+
+Trailing commas are not permitted.
+
+### 5.3 Function Application
 
 Application is left-associative:
 
@@ -158,7 +183,7 @@ Application is left-associative:
 f x y = ((f x) y)
 ```
 
-### 5.3 No Operators
+### 5.4 No Operators
 
 Lune has **no infix operators** in v0.1.
 
@@ -250,9 +275,31 @@ Patterns appear only in `case`.
 
 Allowed forms:
 
-- constructor patterns
-- variable patterns
-- wildcard `_`
+- constructor patterns: `Just x`, `Cons h t`
+- variable patterns: `x`
+- wildcard: `_`
+- list patterns: `[]`, `[x]`, `[a, b, c]`
+
+### 8.1 List Patterns
+
+List patterns provide syntactic sugar for matching lists:
+
+```haskell
+case xs of
+  []        -> ...  -- matches empty list (Nil)
+  [x]       -> ...  -- matches single-element list
+  [a, b]    -> ...  -- matches exactly two elements
+  [a, b, c] -> ...  -- matches exactly three elements
+  Cons h t  -> ...  -- matches head and tail (not syntactic sugar)
+```
+
+List patterns desugar to nested `Cons`/`Nil` patterns:
+
+```haskell
+[x, y]  -- desugars to: Cons x (Cons y Nil)
+```
+
+Note: Rest/spread patterns like `[h, ...t]` are not supported. Use `Cons h t` for head-tail matching.
 
 ---
 

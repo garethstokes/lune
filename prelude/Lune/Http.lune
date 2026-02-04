@@ -32,13 +32,13 @@ type alias Response =
 response : Int -> String -> Response
 response status body =
   { status = status
-  , headers = Nil
+  , headers = []
   , body = body
   }
 
 jsonResponse : Int -> Json -> Response
 jsonResponse status json =
   { status = status
-  , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+  , headers = [{ key = "Content-Type", value = "application/json" }]
   , body = prim_jsonStringify json
   }

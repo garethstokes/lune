@@ -9,7 +9,7 @@ type Validation e a =
 appendErrors : List String -> List String -> List String
 appendErrors xs ys =
   case xs of
-    Nil -> ys
+    [] -> ys
     Cons x xt -> Cons x (appendErrors xt ys)
 
 map2 : (a -> b -> c)
@@ -41,7 +41,7 @@ validateAge : Int -> Validation (List String) Int
 validateAge n =
   case Int.gte n 0 of
     True  -> Valid n
-    False -> Invalid (Cons "age must be >= 0" Nil)
+    False -> Invalid ["age must be >= 0"]
 
 mkUser : String -> Int -> User
 mkUser name age =

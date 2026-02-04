@@ -75,7 +75,7 @@ handleRequest config routes request =
 findMatchingRoute : Request -> Routes e ctx -> Maybe (Route e ctx)
 findMatchingRoute request routes =
   case routes of
-    Nil -> Nothing
+    [] -> Nothing
     Cons route rest ->
       case methodMatches request.method route.method of
         False -> findMatchingRoute request rest
@@ -97,6 +97,6 @@ methodMatches m1 m2 =
 notFoundResponse : Response
 notFoundResponse =
   { status = 404
-  , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+  , headers = [{ key = "Content-Type", value = "application/json" }]
   , body = "{\"error\":\"Not Found\"}"
   }
