@@ -306,11 +306,22 @@ typeAtomWith spaceConsumer = typeAtom
 
     typeAtom =
       choice
-        [ between (sym "(") (sym ")") (parseTypeWith spaceConsumer)
+        [ parenType
         , typeRecord
         , TypeVar <$> tvar
         , TypeCon <$> tcon
         ]
+
+    parenType = do
+      _ <- sym "("
+      scnOptional
+      first <- parseTypeWith spaceConsumer
+      rest <- many (try (scnOptional *> sym "," *> scnOptional *> parseTypeWith spaceConsumer))
+      scnOptional
+      _ <- sym ")"
+      case rest of
+        [] -> pure first  -- parenthesized type
+        _  -> pure (desugarTupleType (first : rest))
 
     typeRecord =
       TypeRecord
@@ -555,6 +566,15 @@ desugarTuplePattern pats =
     4 -> PCon "Quad" pats
     5 -> PCon "Quint" pats
     n -> error $ "Tuple patterns must have 2-5 elements, got " ++ show n
+
+desugarTupleType :: [Type] -> Type
+desugarTupleType types =
+  case length types of
+    2 -> foldl TypeApp (TypeCon "Pair") types
+    3 -> foldl TypeApp (TypeCon "Triple") types
+    4 -> foldl TypeApp (TypeCon "Quad") types
+    5 -> foldl TypeApp (TypeCon "Quint") types
+    n -> error $ "Tuple types must have 2-5 elements, got " ++ show n
 
 conPattern :: Parser Pattern
 conPattern = do
