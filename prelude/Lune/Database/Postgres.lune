@@ -3,7 +3,8 @@ module Lune.Database.Postgres exposing (
   execute,
   query,
   queryAs,
-  close
+  close,
+  run
 )
 
 {-| PostgreSQL database operations.
@@ -26,6 +27,7 @@ case result of
 import Lune.Prelude exposing (IO, Result(..), String, Int, Unit, List(..))
 import Lune.Database exposing (DbConn, DbError(..), DbValue)
 import Lune.Database.Decode as Decode exposing (Decoder, DecodeError)
+import Lune.Database.Query as Query exposing (Query)
 
 -- | Connect to a PostgreSQL database
 connect : String -> IO (Result DbError DbConn)
@@ -69,3 +71,8 @@ decodeRows decoder rows =
           case decodeRows decoder rest of
             Err e -> Err e
             Ok decoded -> Ok (Cons a decoded)
+
+-- | Execute a query and return typed results
+run : DbConn -> Query a -> IO (Result DbError (List a))
+run conn q =
+  queryAs (Query.getDecoder q) conn (Query.getSql q) (Query.getParams q)
