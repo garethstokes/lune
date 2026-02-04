@@ -1,0 +1,1 @@
+ElaborateTypecheckError Lune.Database.Decode.int: ConstructorArityMismatch "Lune.Database.DbNull" 1 0

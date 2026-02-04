@@ -1,3 +1,1 @@
-Connecting to PostgreSQL...
-Connection error: Connection failed: libpq: failed (connection to server at "localhost" (::1), port 5432 failed: FATAL:  database "testdb" does not exist
-)
+UnboundName "Lune.Database.Postgres" "pure"

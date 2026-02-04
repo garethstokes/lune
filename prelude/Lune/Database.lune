@@ -2,35 +2,23 @@ module Lune.Database exposing (
   DbConn,
   DbError(..),
   DbValue(..),
-  Decoder,
-  DecodeError,
   errorToString,
   null,
   int,
   float,
   string,
-  bool,
-  decodeInt,
-  decodeFloat,
-  decodeString,
-  decodeBool,
-  decodeNullable,
-  decodeIndex,
-  decodeMap,
-  decodeMap2,
-  decodeMap3,
-  decodeSucceed
+  bool
 )
 
 {-| Core database types for Lune.
 
 This module provides common types shared across database backends.
 See `Lune.Database.Postgres` for PostgreSQL-specific functionality.
+See `Lune.Database.Decode` for typed row decoders.
 -}
 
-import Lune.Prelude exposing (Bool, Float, Int, String, Maybe)
+import Lune.Prelude exposing (Bool, Float, Int, String)
 import Lune.String as Str
-import Lune.Database.Decode as Decode
 
 -- | Opaque database connection handle
 type DbConn = DbConn#
@@ -76,38 +64,3 @@ string = prim_dbString
 -- | Create a boolean database value
 bool : Bool -> DbValue
 bool = prim_dbBool
-
--- Re-export decoder types
-type alias Decoder a = Decode.Decoder a
-type alias DecodeError = Decode.DecodeError
-
--- Re-export decoder functions with decode prefix to avoid name clashes
-decodeInt : Decoder Int
-decodeInt = Decode.int
-
-decodeFloat : Decoder Float
-decodeFloat = Decode.float
-
-decodeString : Decoder String
-decodeString = Decode.string
-
-decodeBool : Decoder Bool
-decodeBool = Decode.bool
-
-decodeNullable : Decoder a -> Decoder (Maybe a)
-decodeNullable = Decode.nullable
-
-decodeIndex : Int -> Decoder a -> Decoder a
-decodeIndex = Decode.index
-
-decodeMap : (a -> b) -> Decoder a -> Decoder b
-decodeMap = Decode.map
-
-decodeMap2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
-decodeMap2 = Decode.map2
-
-decodeMap3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
-decodeMap3 = Decode.map3
-
-decodeSucceed : a -> Decoder a
-decodeSucceed = Decode.succeed
