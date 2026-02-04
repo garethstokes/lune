@@ -223,17 +223,84 @@ limit n query =
 -- | Generate SQL and parameters from a query
 toSql : Query a -> { sql : String, params : List DbValue }
 toSql query =
-  buildSqlResult query.tableName (buildWhere query.conditions 1) query.orderBy query.limitCount
+  case query.queryType of
+    Select -> buildSelectSql query
+    Insert -> buildInsertSql query
+    Update -> buildUpdateSql query
+    Delete -> buildDeleteSql query
 
--- | Helper to construct the final SQL result
-buildSqlResult : String -> { sql : String, params : List DbValue } -> Maybe { column : String, order : Order } -> Maybe Int -> { sql : String, params : List DbValue }
-buildSqlResult tableName whereResult maybeOrder maybeLimit =
+-- | Build SELECT SQL
+buildSelectSql : Query a -> { sql : String, params : List DbValue }
+buildSelectSql query =
+  buildSelectSqlResult query.tableName (buildWhere query.conditions 1) query.orderBy query.limitCount
+
+-- | Helper to construct the final SELECT SQL result
+buildSelectSqlResult : String -> { sql : String, params : List DbValue } -> Maybe { column : String, order : Order } -> Maybe Int -> { sql : String, params : List DbValue }
+buildSelectSqlResult tableName whereResult maybeOrder maybeLimit =
   { sql = Str.append "SELECT * FROM "
       (Str.append tableName
         (Str.append whereResult.sql
           (Str.append (buildOrderBy maybeOrder) (buildLimit maybeLimit))))
   , params = whereResult.params
   }
+
+-- | Build INSERT SQL
+buildInsertSql : Query a -> { sql : String, params : List DbValue }
+buildInsertSql query =
+  case query.assignments of
+    Nil -> { sql = Str.append "INSERT INTO " (Str.append query.tableName " DEFAULT VALUES"), params = Nil }
+    _ -> buildInsertWithValues query
+
+-- | Build INSERT with values
+buildInsertWithValues : Query a -> { sql : String, params : List DbValue }
+buildInsertWithValues query =
+  { sql = Str.append "INSERT INTO "
+      (Str.append query.tableName
+        (Str.append " ("
+          (Str.append (buildColumnList query.assignments)
+            (Str.append ") VALUES ("
+              (Str.append (buildPlaceholders query.assignments 1)
+                (Str.append ")" (buildReturning query.returningFlag)))))))
+  , params = collectAssignmentValues query.assignments
+  }
+
+-- | Build comma-separated column names
+buildColumnList : List Assignment -> String
+buildColumnList assigns =
+  case assigns of
+    Nil -> ""
+    Cons a Nil -> a.column
+    Cons a rest -> Str.append a.column (Str.append ", " (buildColumnList rest))
+
+-- | Build comma-separated placeholders ($1, $2, ...)
+buildPlaceholders : List Assignment -> Int -> String
+buildPlaceholders assigns n =
+  case assigns of
+    Nil -> ""
+    Cons _ Nil -> Str.append "$" (Str.fromInt n)
+    Cons _ rest -> Str.append "$" (Str.append (Str.fromInt n) (Str.append ", " (buildPlaceholders rest (Int.add n 1))))
+
+-- | Collect values from assignments
+collectAssignmentValues : List Assignment -> List DbValue
+collectAssignmentValues assigns =
+  case assigns of
+    Nil -> Nil
+    Cons a rest -> Cons a.value (collectAssignmentValues rest)
+
+-- | Build RETURNING clause
+buildReturning : Bool -> String
+buildReturning flag =
+  case flag of
+    True -> " RETURNING *"
+    False -> ""
+
+-- | Build UPDATE SQL (placeholder for Task 6)
+buildUpdateSql : Query a -> { sql : String, params : List DbValue }
+buildUpdateSql query = { sql = "UPDATE placeholder", params = Nil }
+
+-- | Build DELETE SQL (placeholder for Task 7)
+buildDeleteSql : Query a -> { sql : String, params : List DbValue }
+buildDeleteSql query = { sql = "DELETE placeholder", params = Nil }
 
 -- | Build WHERE clause from conditions
 -- Conditions are reversed (newest first), so we reverse them for correct SQL order
