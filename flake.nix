@@ -28,6 +28,7 @@
             # Native dependencies for Haskell libs
             zlib
             pkg-config
+            postgresql
           ];
 
           shellHook = ''
@@ -38,6 +39,7 @@
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.zlib
+            pkgs.postgresql.lib
           ];
         };
       }
