@@ -1,0 +1,26 @@
+=== CRUD Query Builder Examples ===
+
+1. INSERT with RETURNING:
+   Query.insert users userDecoder
+     |> Query.values [set name, set email]
+     |> Query.returning
+   SQL: INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *
+
+2. INSERT without RETURNING:
+   Query.insert users userDecoder
+     |> Query.values [set name, set email]
+   SQL: INSERT INTO users (name, email) VALUES ($1, $2)
+
+3. UPDATE with WHERE and RETURNING:
+   Query.update users userDecoder
+     |> Query.values [set name]
+     |> Query.where_ (Query.eq users_id 42)
+     |> Query.returning
+   SQL: UPDATE users SET name = $1 WHERE id = $2 RETURNING *
+
+4. DELETE with WHERE:
+   Query.delete users
+     |> Query.where_ (Query.eq users_id 42)
+   SQL: DELETE FROM users WHERE id = $1
+
+Done!
