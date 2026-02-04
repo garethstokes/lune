@@ -10,6 +10,7 @@ module Lune.Builtins
   ) where
 
 import Control.Exception (try, IOException, SomeException)
+import Control.Monad (replicateM)
 import Data.Char (isDigit, isSpace)
 import Data.String (fromString)
 import Data.Maybe (mapMaybe)
@@ -30,6 +31,9 @@ import Lune.Type
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import qualified Database.PostgreSQL.Simple as PG
+import Database.PostgreSQL.Simple.ToField (ToField(..))
+import Database.PostgreSQL.Simple.FromRow (RowParser, field, numFieldsRemaining)
+import Database.PostgreSQL.Simple.Types (Null(..))
 import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
@@ -148,6 +152,13 @@ builtinSchemes =
         (TArrow (TCon "DbConn")
           (TApp (TCon "IO")
             (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
+    , ("prim_pgQuery", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TArrow (TCon "String")
+            (TArrow (TApp (TCon "List") (TCon "DbValue"))
+              (TApp (TCon "IO")
+                (TApp (TApp (TCon "Result") (TCon "DbError"))
+                  (TApp (TCon "List") (TApp (TCon "List") (TCon "DbValue")))))))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -592,6 +603,7 @@ builtinEvalPrims =
     , ("prim_pgConnect", BuiltinPrim 1 primPgConnect)
     , ("prim_pgExecute", BuiltinPrim 2 primPgExecute)
     , ("prim_pgClose", BuiltinPrim 1 primPgClose)
+    , ("prim_pgQuery", BuiltinPrim 3 primPgQuery)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1813,6 +1825,15 @@ primSocketClose args =
 -- Database Primitives
 -- =============================================================================
 
+-- | ToField instance for DbValue to enable parameterized queries
+instance ToField DbValue where
+  toField DbNull = toField Null
+  toField (DbInt n) = toField n
+  toField (DbFloat f) = toField f
+  toField (DbString s) = toField s
+  toField (DbBool b) = toField b
+  toField (DbBytes bs) = toField (PG.Binary bs)
+
 -- | prim_pgConnect : String -> IO (Result DbError DbConn)
 primPgConnect :: [Value] -> Either EvalError Value
 primPgConnect args =
@@ -1897,6 +1918,70 @@ primDbBool :: [Value] -> Either EvalError Value
 primDbBool [VCon "Lune.Prelude.True" []] = Right (VDbValue (DbBool True))
 primDbBool [VCon "Lune.Prelude.False" []] = Right (VDbValue (DbBool False))
 primDbBool args = Left (NotAFunction (VPrim 1 primDbBool args))
+
+-- | prim_pgQuery : DbConn -> String -> List DbValue -> IO (Result DbError (List (List DbValue)))
+primPgQuery :: [Value] -> Either EvalError Value
+primPgQuery args =
+  case args of
+    [VDbConn dbid, VString sql, paramsVal] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            let params = luneListToDbValues paramsVal
+            let sqlConverted = convertPlaceholders sql
+            result <- try $ PG.queryWith dynamicRowParser conn (fromString (T.unpack sqlConverted)) params
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.QueryFailed" [VString (T.pack (show e))]])
+              Right rows ->
+                let luneRows = rowsToLuneList rows
+                in pure $ Right (world, VCon "Lune.Prelude.Ok" [luneRows])
+    _ ->
+      Left (NotAFunction (VPrim 3 primPgQuery args))
+
+-- | Convert Lune List DbValue to Haskell [DbValue]
+luneListToDbValues :: Value -> [DbValue]
+luneListToDbValues (VCon "Lune.Prelude.Nil" []) = []
+luneListToDbValues (VCon "Lune.Prelude.Cons" [VDbValue v, rest]) = v : luneListToDbValues rest
+luneListToDbValues _ = []  -- Invalid list structure
+
+-- | Convert $1, $2, $3... to ? placeholders for postgresql-simple
+convertPlaceholders :: T.Text -> T.Text
+convertPlaceholders = T.pack . go . T.unpack
+  where
+    go [] = []
+    go ('$':rest) =
+      case span isDigit rest of
+        ([], _) -> '$' : go rest
+        (_, remaining) -> '?' : go remaining
+    go (c:rest) = c : go rest
+
+-- | Parse a row with dynamic column count, all as Maybe Text
+dynamicRowParser :: RowParser [DbValue]
+dynamicRowParser = do
+  n <- numFieldsRemaining
+  replicateM n (maybeTextToDbValue <$> field)
+
+-- | Convert Maybe Text to DbValue
+maybeTextToDbValue :: Maybe T.Text -> DbValue
+maybeTextToDbValue Nothing = DbNull
+maybeTextToDbValue (Just t) = DbString t
+
+-- | Convert [[DbValue]] to Lune List (List DbValue)
+rowsToLuneList :: [[DbValue]] -> Value
+rowsToLuneList rows =
+  foldr (\row acc -> VCon "Lune.Prelude.Cons" [rowToLuneList row, acc])
+        (VCon "Lune.Prelude.Nil" [])
+        rows
+
+-- | Convert [DbValue] to Lune List DbValue
+rowToLuneList :: [DbValue] -> Value
+rowToLuneList cols =
+  foldr (\v acc -> VCon "Lune.Prelude.Cons" [VDbValue v, acc])
+        (VCon "Lune.Prelude.Nil" [])
+        cols
 
 -- =============================================================================
 -- HTTP Primitives
