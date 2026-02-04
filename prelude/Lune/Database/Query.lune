@@ -294,9 +294,51 @@ buildReturning flag =
     True -> " RETURNING *"
     False -> ""
 
--- | Build UPDATE SQL (placeholder for Task 6)
+-- | Build UPDATE SQL
 buildUpdateSql : Query a -> { sql : String, params : List DbValue }
-buildUpdateSql query = { sql = "UPDATE placeholder", params = Nil }
+buildUpdateSql query =
+  case query.assignments of
+    Nil -> { sql = Str.append "UPDATE " (Str.append query.tableName " SET "), params = Nil }
+    _ -> buildUpdateWithSets query
+
+-- | Build UPDATE with SET clauses
+buildUpdateWithSets : Query a -> { sql : String, params : List DbValue }
+buildUpdateWithSets query =
+  buildUpdateResult query.tableName query.assignments query.conditions query.returningFlag
+
+-- | Build UPDATE result with proper parameter numbering
+buildUpdateResult : String -> List Assignment -> List Condition -> Bool -> { sql : String, params : List DbValue }
+buildUpdateResult tableName assigns conds retFlag =
+  case buildSetClauses assigns 1 of
+    setResult ->
+      case buildWhere conds (Int.add 1 (listLength assigns)) of
+        whereResult ->
+          { sql = Str.append "UPDATE "
+              (Str.append tableName
+                (Str.append " SET "
+                  (Str.append setResult.sql
+                    (Str.append whereResult.sql (buildReturning retFlag)))))
+          , params = appendList setResult.params whereResult.params
+          }
+
+-- | Build SET clauses (col1 = $1, col2 = $2, ...)
+buildSetClauses : List Assignment -> Int -> { sql : String, params : List DbValue }
+buildSetClauses assigns n =
+  case assigns of
+    Nil -> { sql = "", params = Nil }
+    Cons a Nil ->
+      { sql = Str.append a.column (Str.append " = $" (Str.fromInt n))
+      , params = Cons a.value Nil
+      }
+    Cons a rest ->
+      case buildSetClauses rest (Int.add n 1) of
+        restResult ->
+          { sql = Str.append a.column
+              (Str.append " = $"
+                (Str.append (Str.fromInt n)
+                  (Str.append ", " restResult.sql)))
+          , params = Cons a.value restResult.params
+          }
 
 -- | Build DELETE SQL (placeholder for Task 7)
 buildDeleteSql : Query a -> { sql : String, params : List DbValue }
