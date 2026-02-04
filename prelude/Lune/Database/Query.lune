@@ -24,6 +24,7 @@ module Lune.Database.Query exposing (
   like,
   isNull,
   isNotNull,
+  in_,
   where_,
   orderBy,
   limit,
@@ -254,6 +255,13 @@ isNotNull col =
   , params = Nil
   }
 
+-- | Create an IN condition: column IN (values...)
+in_ : Column a -> List DbValue -> Condition
+in_ col vals =
+  { sql = Str.append col.columnName " IN"
+  , params = vals
+  }
+
 -- | Add a WHERE condition to a query
 where_ : Condition -> Query a -> Query a
 where_ cond query =
@@ -464,12 +472,28 @@ buildClauses conds paramNum =
     Cons cond rest ->
       buildClauseWithRest cond rest paramNum
 
--- | Build a single clause, handling parameterless conditions
+-- | Build a single clause, handling parameterless and multi-param conditions
 buildSingleClause : Condition -> Int -> { sql : String, params : List DbValue }
 buildSingleClause cond paramNum =
   case cond.params of
     Nil -> { sql = cond.sql, params = Nil }
-    _ -> { sql = Str.append cond.sql (Str.append " $" (Str.fromInt paramNum)), params = cond.params }
+    Cons _ Nil -> { sql = Str.append cond.sql (Str.append " $" (Str.fromInt paramNum)), params = cond.params }
+    Cons _ (Cons _ _) -> buildInClause cond paramNum
+
+-- | Build IN clause with multiple placeholders
+buildInClause : Condition -> Int -> { sql : String, params : List DbValue }
+buildInClause cond paramNum =
+  { sql = Str.append cond.sql (Str.append " (" (Str.append (buildInPlaceholders cond.params paramNum) ")"))
+  , params = cond.params
+  }
+
+-- | Build comma-separated placeholders for IN clause
+buildInPlaceholders : List DbValue -> Int -> String
+buildInPlaceholders vals n =
+  case vals of
+    Nil -> ""
+    Cons _ Nil -> Str.append "$" (Str.fromInt n)
+    Cons _ rest -> Str.append "$" (Str.append (Str.fromInt n) (Str.append ", " (buildInPlaceholders rest (Int.add n 1))))
 
 -- | Build clause with remaining conditions
 buildClauseWithRest : Condition -> List Condition -> Int -> { sql : String, params : List DbValue }
@@ -482,14 +506,23 @@ buildClauseWithRest cond rest paramNum =
           , params = restResult.params
           }
     _ ->
-      case buildClauses rest (Int.add paramNum 1) of
+      case buildClauses rest (Int.add paramNum (listLength cond.params)) of
         restResult ->
-          { sql = Str.append cond.sql
-              (Str.append " $"
-                (Str.append (Str.fromInt paramNum)
-                  (Str.append " AND " restResult.sql)))
-          , params = appendList cond.params restResult.params
-          }
+          case cond.params of
+            Cons _ Nil ->
+              { sql = Str.append cond.sql
+                  (Str.append " $"
+                    (Str.append (Str.fromInt paramNum)
+                      (Str.append " AND " restResult.sql)))
+              , params = appendList cond.params restResult.params
+              }
+            _ ->
+              { sql = Str.append cond.sql
+                  (Str.append " ("
+                    (Str.append (buildInPlaceholders cond.params paramNum)
+                      (Str.append ") AND " restResult.sql)))
+              , params = appendList cond.params restResult.params
+              }
 
 -- | Reverse a list
 reverseList : List a -> List a
