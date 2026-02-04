@@ -586,6 +586,12 @@ builtinEvalPrims =
     , ("prim_pgConnect", BuiltinPrim 1 primPgConnect)
     , ("prim_pgExecute", BuiltinPrim 2 primPgExecute)
     , ("prim_pgClose", BuiltinPrim 1 primPgClose)
+    -- DbValue constructors
+    , ("prim_dbNull", BuiltinPrim 0 primDbNull)
+    , ("prim_dbInt", BuiltinPrim 1 primDbInt)
+    , ("prim_dbFloat", BuiltinPrim 1 primDbFloat)
+    , ("prim_dbString", BuiltinPrim 1 primDbString)
+    , ("prim_dbBool", BuiltinPrim 1 primDbBool)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1855,6 +1861,36 @@ primPgClose args =
             pure $ Right (world', VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
     _ ->
       Left (NotAFunction (VPrim 1 primPgClose args))
+
+-- =============================================================================
+-- DbValue Constructor Primitives
+-- =============================================================================
+
+-- | prim_dbNull : DbValue
+primDbNull :: [Value] -> Either EvalError Value
+primDbNull [] = Right (VDbValue DbNull)
+primDbNull args = Left (NotAFunction (VPrim 0 primDbNull args))
+
+-- | prim_dbInt : Int -> DbValue
+primDbInt :: [Value] -> Either EvalError Value
+primDbInt [VInt n] = Right (VDbValue (DbInt n))
+primDbInt args = Left (NotAFunction (VPrim 1 primDbInt args))
+
+-- | prim_dbFloat : Float -> DbValue
+primDbFloat :: [Value] -> Either EvalError Value
+primDbFloat [VFloat f] = Right (VDbValue (DbFloat f))
+primDbFloat args = Left (NotAFunction (VPrim 1 primDbFloat args))
+
+-- | prim_dbString : String -> DbValue
+primDbString :: [Value] -> Either EvalError Value
+primDbString [VString s] = Right (VDbValue (DbString s))
+primDbString args = Left (NotAFunction (VPrim 1 primDbString args))
+
+-- | prim_dbBool : Bool -> DbValue
+primDbBool :: [Value] -> Either EvalError Value
+primDbBool [VCon "Lune.Prelude.True" []] = Right (VDbValue (DbBool True))
+primDbBool [VCon "Lune.Prelude.False" []] = Right (VDbValue (DbBool False))
+primDbBool args = Left (NotAFunction (VPrim 1 primDbBool args))
 
 -- =============================================================================
 -- HTTP Primitives
