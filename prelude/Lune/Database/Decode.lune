@@ -9,7 +9,12 @@ module Lune.Database.Decode exposing (
   float,
   string,
   bool,
-  nullable
+  nullable,
+  map,
+  map2,
+  map3,
+  map4,
+  map5
 )
 
 {-| Database row decoders.
@@ -157,3 +162,73 @@ nullable decoder =
         case decoder row of
           Ok a -> Ok (Just a)
           Err err -> Err err
+
+-- | Transform the result of a decoder
+map : (a -> b) -> Decoder a -> Decoder b
+map f decoder =
+  \row ->
+    case decoder row of
+      Err err -> Err err
+      Ok a -> Ok (f a)
+
+-- | Combine two decoders
+map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+map2 f decoderA decoderB =
+  \row ->
+    case decoderA row of
+      Err err -> Err err
+      Ok a ->
+        case decoderB row of
+          Err err -> Err err
+          Ok b -> Ok (f a b)
+
+-- | Combine three decoders
+map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+map3 f da db dc =
+  \row ->
+    case da row of
+      Err err -> Err err
+      Ok a ->
+        case db row of
+          Err err -> Err err
+          Ok b ->
+            case dc row of
+              Err err -> Err err
+              Ok c -> Ok (f a b c)
+
+-- | Combine four decoders
+map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+map4 f da db dc dd =
+  \row ->
+    case da row of
+      Err err -> Err err
+      Ok a ->
+        case db row of
+          Err err -> Err err
+          Ok b ->
+            case dc row of
+              Err err -> Err err
+              Ok c ->
+                case dd row of
+                  Err err -> Err err
+                  Ok d -> Ok (f a b c d)
+
+-- | Combine five decoders
+map5 : (a -> b -> c -> d -> e -> g) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder g
+map5 fn da db dc dd de =
+  \row ->
+    case da row of
+      Err err -> Err err
+      Ok a ->
+        case db row of
+          Err err -> Err err
+          Ok b ->
+            case dc row of
+              Err err -> Err err
+              Ok c ->
+                case dd row of
+                  Err err -> Err err
+                  Ok d ->
+                    case de row of
+                      Err err -> Err err
+                      Ok e -> Ok (fn a b c d e)
