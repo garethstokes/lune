@@ -19,6 +19,7 @@ module Lune.Database.Query exposing (
   where_,
   orderBy,
   limit,
+  offset,
   toSql,
   getDecoder,
   getSql,
@@ -81,6 +82,7 @@ type alias Query a =
   , assignments : List Assignment
   , orderBy : Maybe { column : String, order : Order }
   , limitCount : Maybe Int
+  , offsetCount : Maybe Int
   , returningFlag : Bool
   }
 
@@ -102,6 +104,7 @@ select tbl decoder =
   , assignments = Nil
   , orderBy = Nothing
   , limitCount = Nothing
+  , offsetCount = Nothing
   , returningFlag = False
   }
 
@@ -115,6 +118,7 @@ insert tbl decoder =
   , assignments = Nil
   , orderBy = Nothing
   , limitCount = Nothing
+  , offsetCount = Nothing
   , returningFlag = False
   }
 
@@ -128,6 +132,7 @@ update tbl decoder =
   , assignments = Nil
   , orderBy = Nothing
   , limitCount = Nothing
+  , offsetCount = Nothing
   , returningFlag = False
   }
 
@@ -141,6 +146,7 @@ delete tbl =
   , assignments = Nil
   , orderBy = Nothing
   , limitCount = Nothing
+  , offsetCount = Nothing
   , returningFlag = False
   }
 
@@ -158,6 +164,7 @@ values assigns query =
   , assignments = appendList assigns query.assignments
   , orderBy = query.orderBy
   , limitCount = query.limitCount
+  , offsetCount = query.offsetCount
   , returningFlag = query.returningFlag
   }
 
@@ -171,6 +178,7 @@ returning query =
   , assignments = query.assignments
   , orderBy = query.orderBy
   , limitCount = query.limitCount
+  , offsetCount = query.offsetCount
   , returningFlag = True
   }
 
@@ -191,6 +199,7 @@ where_ cond query =
   , assignments = query.assignments
   , orderBy = query.orderBy
   , limitCount = query.limitCount
+  , offsetCount = query.offsetCount
   , returningFlag = query.returningFlag
   }
 
@@ -204,6 +213,7 @@ orderBy col ord query =
   , assignments = query.assignments
   , orderBy = Just { column = col.columnName, order = ord }
   , limitCount = query.limitCount
+  , offsetCount = query.offsetCount
   , returningFlag = query.returningFlag
   }
 
@@ -217,6 +227,21 @@ limit n query =
   , assignments = query.assignments
   , orderBy = query.orderBy
   , limitCount = Just n
+  , offsetCount = query.offsetCount
+  , returningFlag = query.returningFlag
+  }
+
+-- | Add OFFSET clause to a query (for pagination)
+offset : Int -> Query a -> Query a
+offset n query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , queryType = query.queryType
+  , conditions = query.conditions
+  , assignments = query.assignments
+  , orderBy = query.orderBy
+  , limitCount = query.limitCount
+  , offsetCount = Just n
   , returningFlag = query.returningFlag
   }
 
@@ -232,15 +257,16 @@ toSql query =
 -- | Build SELECT SQL
 buildSelectSql : Query a -> { sql : String, params : List DbValue }
 buildSelectSql query =
-  buildSelectSqlResult query.tableName (buildWhere query.conditions 1) query.orderBy query.limitCount
+  buildSelectSqlResult query.tableName (buildWhere query.conditions 1) query.orderBy query.limitCount query.offsetCount
 
 -- | Helper to construct the final SELECT SQL result
-buildSelectSqlResult : String -> { sql : String, params : List DbValue } -> Maybe { column : String, order : Order } -> Maybe Int -> { sql : String, params : List DbValue }
-buildSelectSqlResult tableName whereResult maybeOrder maybeLimit =
+buildSelectSqlResult : String -> { sql : String, params : List DbValue } -> Maybe { column : String, order : Order } -> Maybe Int -> Maybe Int -> { sql : String, params : List DbValue }
+buildSelectSqlResult tableName whereResult maybeOrder maybeLimit maybeOffset =
   { sql = Str.append "SELECT * FROM "
       (Str.append tableName
         (Str.append whereResult.sql
-          (Str.append (buildOrderBy maybeOrder) (buildLimit maybeLimit))))
+          (Str.append (buildOrderBy maybeOrder)
+            (Str.append (buildLimit maybeLimit) (buildOffset maybeOffset)))))
   , params = whereResult.params
   }
 
@@ -415,6 +441,13 @@ buildLimit maybeLimit =
   case maybeLimit of
     Nothing -> ""
     Just n -> Str.append " LIMIT " (Str.fromInt n)
+
+-- | Build OFFSET clause
+buildOffset : Maybe Int -> String
+buildOffset maybeOffset =
+  case maybeOffset of
+    Nothing -> ""
+    Just n -> Str.append " OFFSET " (Str.fromInt n)
 
 -- | Append two lists
 appendList : List a -> List a -> List a
