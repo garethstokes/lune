@@ -18,6 +18,8 @@ module Lune.Database.Query exposing (
   eq,
   gt,
   lt,
+  gte,
+  lte,
   where_,
   orderBy,
   limit,
@@ -202,6 +204,20 @@ gt col val =
 lt : Column a -> DbValue -> Condition
 lt col val =
   { sql = Str.append col.columnName " <"
+  , params = Cons val Nil
+  }
+
+-- | Create a greater-than-or-equal condition: column >= value
+gte : Column a -> DbValue -> Condition
+gte col val =
+  { sql = Str.append col.columnName " >="
+  , params = Cons val Nil
+  }
+
+-- | Create a less-than-or-equal condition: column <= value
+lte : Column a -> DbValue -> Condition
+lte col val =
+  { sql = Str.append col.columnName " <="
   , params = Cons val Nil
   }
 
