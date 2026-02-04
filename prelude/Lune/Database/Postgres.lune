@@ -5,7 +5,10 @@ module Lune.Database.Postgres exposing (
   queryAs,
   close,
   run,
-  runOne
+  runOne,
+  begin,
+  commit,
+  rollback
 )
 
 {-| PostgreSQL database operations.
@@ -89,3 +92,15 @@ runOne conn q =
         case rows of
           Nil -> pure (Ok Nothing)
           Cons row _ -> pure (Ok (Just row))
+
+-- | Begin a transaction
+begin : DbConn -> IO (Result DbError Unit)
+begin = prim_pgBegin
+
+-- | Commit a transaction
+commit : DbConn -> IO (Result DbError Unit)
+commit = prim_pgCommit
+
+-- | Rollback a transaction
+rollback : DbConn -> IO (Result DbError Unit)
+rollback = prim_pgRollback
