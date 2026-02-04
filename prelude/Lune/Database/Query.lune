@@ -21,6 +21,7 @@ module Lune.Database.Query exposing (
   gte,
   lte,
   neq,
+  like,
   where_,
   orderBy,
   limit,
@@ -226,6 +227,14 @@ lte col val =
 neq : Column a -> DbValue -> Condition
 neq col val =
   { sql = Str.append col.columnName " <>"
+  , params = Cons val Nil
+  }
+
+-- | Create a LIKE condition: column LIKE pattern
+-- Use % for wildcards in the pattern string
+like : Column String -> DbValue -> Condition
+like col val =
+  { sql = Str.append col.columnName " LIKE"
   , params = Cons val Nil
   }
 
