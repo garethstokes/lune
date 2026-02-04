@@ -2,14 +2,17 @@ module ApiServer exposing (main)
 
 import Lune.IO as IO
 import Lune.Api as Api
+import Lune.Api exposing (ServerConfig)
 import Lune.Api.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
+import Lune.Json as Json
+import Lune.Json.Encode as E
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..))
+import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..), Int, String)
 
 -- Error type
-type AppError
-  = NotFound String
+type AppError =
+  NotFound String
   | BadRequest String
 
 -- Context
@@ -17,20 +20,55 @@ type alias Context =
   { appName : String
   }
 
+-- Domain types and encoders
+type alias User =
+  { id : Int
+  , name : String
+  }
+
+encodeUser : User -> Json.Json
+encodeUser user =
+  E.object
+    [ { key = "id", value = E.int user.id }
+    , { key = "name", value = E.string user.name }
+    ]
+
+type alias HealthStatus =
+  { status : String
+  }
+
+encodeHealth : HealthStatus -> Json.Json
+encodeHealth h =
+  E.object
+    [ { key = "status", value = E.string h.status }
+    ]
+
+type alias ErrorResponse =
+  { error : String
+  }
+
+encodeError : ErrorResponse -> Json.Json
+encodeError e =
+  E.object
+    [ { key = "error", value = E.string e.error }
+    ]
+
+-- Helper to build JSON responses
+jsonResponse : Int -> Json.Json -> Response
+jsonResponse status body =
+  { status = status
+  , headers = [{ key = "Content-Type", value = "application/json" }]
+  , body = Json.stringify body
+  }
+
 -- Error handler
 errorToResponse : AppError -> Response
 errorToResponse err =
   case err of
     NotFound msg ->
-      { status = 404
-      , headers = [{ key = "Content-Type", value = "application/json" }]
-      , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
-      }
+      jsonResponse 404 (encodeError { error = msg })
     BadRequest msg ->
-      { status = 400
-      , headers = [{ key = "Content-Type", value = "application/json" }]
-      , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
-      }
+      jsonResponse 400 (encodeError { error = msg })
 
 -- Routes
 routes : Route.Routes AppError Context
@@ -44,33 +82,22 @@ routes =
 -- Handlers
 healthHandler : Request -> Context -> Api.Api AppError Response
 healthHandler request ctx =
-  Api.pure
-    { status = 200
-    , headers = [{ key = "Content-Type", value = "application/json" }]
-    , body = "{\"status\":\"ok\"}"
-    }
+  Api.pure (jsonResponse 200 (encodeHealth { status = "ok" }))
 
 getUserHandler : Request -> Context -> Api.Api AppError Response
 getUserHandler request ctx =
-  Api.pure
-    { status = 200
-    , headers = [{ key = "Content-Type", value = "application/json" }]
-    , body = "{\"id\":123,\"name\":\"Alice\"}"
-    }
+  Api.pure (jsonResponse 200 (encodeUser { id = 123, name = "Alice" }))
 
 createUserHandler : Request -> Context -> Api.Api AppError Response
 createUserHandler request ctx =
-  Api.pure
-    { status = 201
-    , headers = [{ key = "Content-Type", value = "application/json" }]
-    , body = "{\"id\":456,\"name\":\"Created\"}"
-    }
+  Api.pure (jsonResponse 201 (encodeUser { id = 456, name = "Created" }))
+
+config : ServerConfig AppError Context
+config =
+  { port = 8080
+  , errorHandler = errorToResponse
+  , context = { appName = "MyApp" }
+  }
 
 main : IO Unit
-main =
-  let config =
-        { port = 8080
-        , errorHandler = errorToResponse
-        , context = { appName = "MyApp" }
-        }
-  in Api.serve config routes
+main = Api.serve config routes
