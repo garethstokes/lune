@@ -100,6 +100,7 @@ fail : String -> Decoder a
 
 bool   : Decoder Bool
 int    : Decoder Int
+float  : Decoder Float
 string : Decoder String
 
 null : a -> Decoder a
@@ -194,6 +195,7 @@ type Value = Json
 null   : Value
 bool   : Bool -> Value
 int    : Int -> Value
+float  : Float -> Value
 string : String -> Value
 ```
 
@@ -219,6 +221,7 @@ Internally, JSON values are represented by a runtime-backed structure supporting
 - null
 - boolean
 - integer
+- float (IEEE 754 double)
 - string
 - array
 - object

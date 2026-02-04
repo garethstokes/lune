@@ -140,6 +140,9 @@ inferExpr env expr =
     S.IntLit _ ->
       pure (nullSubst, [], TCon "Int")
 
+    S.FloatLit _ ->
+      pure (nullSubst, [], TCon "Float")
+
     S.CharLit _ ->
       pure (nullSubst, [], TCon "Char")
 

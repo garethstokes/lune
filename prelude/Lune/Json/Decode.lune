@@ -1,12 +1,12 @@
 module Lune.Json.Decode exposing (
   Decoder, PathItem(..), DecodeError,
-  decodeValue, succeed, fail, bool, int, string, null,
+  decodeValue, succeed, fail, bool, int, float, string, null,
   list, maybe, field, index, at,
   map, map2, map3, map4, map5, andThen, oneOf
 )
 
 import Lune.Prelude exposing (
-  Result(..), String, Int, Bool(..), List(..), Maybe(..), Unit, unit
+  Result(..), String, Int, Float, Bool(..), List(..), Maybe(..), Unit, unit
 )
 import Lune.Json exposing (Json)
 import Lune.Int as Int
@@ -43,6 +43,13 @@ int =
   \json ->
     case prim_jsonToInt json of
       Ok n -> Ok n
+      Err msg -> Err { message = msg, path = Nil }
+
+float : Decoder Float
+float =
+  \json ->
+    case prim_jsonToFloat json of
+      Ok f -> Ok f
       Err msg -> Err { message = msg, path = Nil }
 
 string : Decoder String

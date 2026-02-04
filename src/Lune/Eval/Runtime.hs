@@ -34,6 +34,9 @@ evalExpr env expr =
     C.CInt n ->
       Right (VInt n)
 
+    C.CFloat f ->
+      Right (VFloat f)
+
     C.CChar c ->
       Right (VChar c)
 

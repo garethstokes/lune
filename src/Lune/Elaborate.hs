@@ -252,6 +252,9 @@ inferCoreExpr methodIndex env expr =
     S.IntLit n ->
       pure (nullSubst, [], TCon "Int", CInt n)
 
+    S.FloatLit f ->
+      pure (nullSubst, [], TCon "Float", CFloat f)
+
     S.CharLit c ->
       pure (nullSubst, [], TCon "Char", CChar c)
 
@@ -470,6 +473,8 @@ replaceGivenDicts subst given =
           expr
         CInt {} ->
           expr
+        CFloat {} ->
+          expr
         CApp f x ->
           CApp (go f) (go x)
         CLam pats body ->
@@ -548,6 +553,8 @@ resolveInstanceDicts subst dictCandidates =
         CString {} ->
           Right expr
         CInt {} ->
+          Right expr
+        CFloat {} ->
           Right expr
         CApp f x ->
           CApp <$> go f <*> go x

@@ -77,6 +77,7 @@ data JsonValue
   = JNull
   | JBool Bool
   | JInt Integer
+  | JFloat Double
   | JString Text
   | JArray [JsonValue]
   | JObject [(Text, JsonValue)]
@@ -84,6 +85,7 @@ data JsonValue
 
 data Value
   = VInt Integer
+  | VFloat Double
   | VString Text
   | VChar Char
   | VTVar TVarId
@@ -119,6 +121,8 @@ instance Show Value where
     case v of
       VInt n ->
         show n
+      VFloat f ->
+        show f
       VString s ->
         show (T.unpack s)
       VChar c ->

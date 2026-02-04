@@ -1,7 +1,7 @@
 module Lune.Prelude exposing (
   Unit, unit,
   Bool(..),
-  Int, Char, String,
+  Int, Float, Char, String,
   List(..),
   Maybe(..),
   Result(..),
@@ -39,6 +39,7 @@ type Bool =
 -- They are declared here as abstract type names for the typechecker.
 
 type Int = Int#
+type Float = Float#
 type Char = Char#
 type String = String#
 

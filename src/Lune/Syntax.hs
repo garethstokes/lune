@@ -82,6 +82,7 @@ data Expr
   = Var Text
   | StringLit Text
   | IntLit Integer
+  | FloatLit Double
   | CharLit Char
   | App Expr Expr
   | Lam [Pattern] Expr

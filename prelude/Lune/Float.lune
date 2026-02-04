@@ -1,0 +1,42 @@
+module Lune.Float exposing (
+  add, sub, mul, div,
+  eq, gt, lt, gte, lte,
+  fromInt, truncate
+)
+
+{-| Float operations module. -}
+
+import Lune.Prelude exposing (Bool, Int, Float)
+
+add : Float -> Float -> Float
+add = prim_addFloat
+
+sub : Float -> Float -> Float
+sub = prim_subFloat
+
+mul : Float -> Float -> Float
+mul = prim_mulFloat
+
+div : Float -> Float -> Float
+div = prim_divFloat
+
+eq : Float -> Float -> Bool
+eq = prim_eqFloat
+
+gt : Float -> Float -> Bool
+gt = prim_gtFloat
+
+lt : Float -> Float -> Bool
+lt = prim_ltFloat
+
+gte : Float -> Float -> Bool
+gte = prim_geFloat
+
+lte : Float -> Float -> Bool
+lte = prim_leFloat
+
+fromInt : Int -> Float
+fromInt = prim_fromIntFloat
+
+truncate : Float -> Int
+truncate = prim_truncateFloat

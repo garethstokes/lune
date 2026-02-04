@@ -61,7 +61,7 @@ It re-exports the core types and typeclasses required for most programs.
 
 - `Unit`, `unit`
 - `Bool(..)`
-- `Int`, `Char`, `String`
+- `Int`, `Float`, `Char`, `String`
 - `List(..)`
 - `Maybe(..)`
 - `Result(..)`
@@ -96,7 +96,23 @@ Exports:
 - `gte : Int -> Int -> Bool`
 - `lte : Int -> Int -> Bool`
 
-### 4.2 Lune.Bool
+### 4.2 Lune.Float
+
+Exports:
+
+- `add : Float -> Float -> Float`
+- `sub : Float -> Float -> Float`
+- `mul : Float -> Float -> Float`
+- `div : Float -> Float -> Float`
+- `eq  : Float -> Float -> Bool`
+- `gt  : Float -> Float -> Bool`
+- `lt  : Float -> Float -> Bool`
+- `gte : Float -> Float -> Bool`
+- `lte : Float -> Float -> Bool`
+- `fromInt  : Int -> Float`
+- `truncate : Float -> Int`
+
+### 4.3 Lune.Bool
 
 Exports:
 
@@ -114,9 +130,11 @@ Note: These functions are strict and do not short-circuit.
 
 Exports:
 
-- `append  : String -> String -> String`
-- `fromInt : Int -> String`
-- `toInt   : String -> Result String Int`
+- `append    : String -> String -> String`
+- `eq        : String -> String -> Bool`
+- `fromInt   : Int -> String`
+- `fromFloat : Float -> String`
+- `toInt     : String -> Result String Int`
 
 ---
 

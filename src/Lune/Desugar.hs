@@ -28,6 +28,8 @@ desugarExpr expr =
       expr
     IntLit _ ->
       expr
+    FloatLit _ ->
+      expr
     CharLit _ ->
       expr
     App f x ->

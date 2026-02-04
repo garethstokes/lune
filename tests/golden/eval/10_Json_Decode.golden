@@ -1,1 +1,4 @@
-"Test"
+=== JSON Decoding ===
+User: Bob
+Nested value: 42.0
+Optional field is null

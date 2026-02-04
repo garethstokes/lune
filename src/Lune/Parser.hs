@@ -385,6 +385,7 @@ parseAtom =
     , parenExpr
     , StringLit . T.pack <$> lexeme stringLiteral
     , CharLit <$> lexeme charLiteral
+    , try (FloatLit <$> lexeme L.float)
     , IntLit <$> lexeme L.decimal
     , Var <$> identifier
     ]

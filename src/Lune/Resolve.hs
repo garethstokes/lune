@@ -455,6 +455,8 @@ resolveExpr scope expr =
       Right expr
     S.IntLit _ ->
       Right expr
+    S.FloatLit _ ->
+      Right expr
     S.CharLit _ ->
       Right expr
     S.App f x ->

@@ -22,6 +22,7 @@ data CoreExpr
   = CVar Text
   | CString Text
   | CInt Integer
+  | CFloat Double
   | CChar Char
   | CApp CoreExpr CoreExpr
   | CLam [S.Pattern] CoreExpr

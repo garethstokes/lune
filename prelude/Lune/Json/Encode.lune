@@ -3,6 +3,7 @@ module Lune.Json.Encode exposing (
   null,
   bool,
   int,
+  float,
   string,
   list,
   object
@@ -13,7 +14,7 @@ module Lune.Json.Encode exposing (
 Per spec/lune_json_v0_1.md section 4.
 -}
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..))
+import Lune.Prelude exposing (Bool(..), Int, Float, String, List(..))
 import Lune.Json exposing (Json)
 import Lune.List as List
 
@@ -31,6 +32,10 @@ bool = prim_jsonBool
 -- | Encode an integer.
 int : Int -> Value
 int = prim_jsonInt
+
+-- | Encode a float.
+float : Float -> Value
+float = prim_jsonFloat
 
 -- | Encode a string.
 string : String -> Value

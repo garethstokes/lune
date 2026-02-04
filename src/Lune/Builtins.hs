@@ -65,6 +65,19 @@ builtinSchemes =
     , ("prim_eqInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
+    -- Float primitives
+    , ("prim_addFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Float"))))
+    , ("prim_subFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Float"))))
+    , ("prim_mulFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Float"))))
+    , ("prim_divFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Float"))))
+    , ("prim_eqFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Bool"))))
+    , ("prim_gtFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Bool"))))
+    , ("prim_ltFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Bool"))))
+    , ("prim_geFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Bool"))))
+    , ("prim_leFloat", Forall [] [] (TArrow (TCon "Float") (TArrow (TCon "Float") (TCon "Bool"))))
+    , ("prim_fromIntFloat", Forall [] [] (TArrow (TCon "Int") (TCon "Float")))
+    , ("prim_truncateFloat", Forall [] [] (TArrow (TCon "Float") (TCon "Int")))
+    , ("prim_showFloat", Forall [] [] (TArrow (TCon "Float") (TCon "String")))
     , ("prim_and", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
     , ("prim_or", Forall [] [] (TArrow (TCon "Bool") (TArrow (TCon "Bool") (TCon "Bool"))))
     , ("prim_not", Forall [] [] (TArrow (TCon "Bool") (TCon "Bool")))
@@ -84,6 +97,7 @@ builtinSchemes =
     , ("prim_jsonNull", Forall [] [] (TCon "Json"))
     , ("prim_jsonBool", Forall [] [] (TArrow (TCon "Bool") (TCon "Json")))
     , ("prim_jsonInt", Forall [] [] (TArrow (TCon "Int") (TCon "Json")))
+    , ("prim_jsonFloat", Forall [] [] (TArrow (TCon "Float") (TCon "Json")))
     , ("prim_jsonString", Forall [] [] (TArrow (TCon "String") (TCon "Json")))
     , ("prim_jsonArray", Forall ["a"] [] (TArrow (TApp (TCon "List") (TCon "Json")) (TCon "Json")))
     , ("prim_jsonObject", Forall [] [] (TArrow (TApp (TCon "List") (TRecord [("key", TCon "String"), ("value", TCon "Json")])) (TCon "Json")))
@@ -93,6 +107,7 @@ builtinSchemes =
     , ("prim_jsonToArray", Forall [] [] (TArrow (TCon "Json") (TApp (TApp (TCon "Result") (TCon "String")) (TApp (TCon "List") (TCon "Json")))))
     , ("prim_jsonToBool", Forall [] [] (TArrow (TCon "Json") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Bool"))))
     , ("prim_jsonToInt", Forall [] [] (TArrow (TCon "Json") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    , ("prim_jsonToFloat", Forall [] [] (TArrow (TCon "Json") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Float"))))
     , ("prim_jsonToString", Forall [] [] (TArrow (TCon "Json") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "String"))))
     , ("prim_jsonIsNull", Forall [] [] (TArrow (TCon "Json") (TCon "Bool")))
     , ("prim_atomically", Forall ["a"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TApp (TCon "IO") (TVar "a"))))
@@ -475,6 +490,19 @@ builtinEvalPrims =
     , ("prim_subInt", BuiltinPrim 2 primSubInt)
     , ("prim_mulInt", BuiltinPrim 2 primMulInt)
     , ("prim_showInt", BuiltinPrim 1 primShowInt)
+    -- Float primitives
+    , ("prim_addFloat", BuiltinPrim 2 primAddFloat)
+    , ("prim_subFloat", BuiltinPrim 2 primSubFloat)
+    , ("prim_mulFloat", BuiltinPrim 2 primMulFloat)
+    , ("prim_divFloat", BuiltinPrim 2 primDivFloat)
+    , ("prim_eqFloat", BuiltinPrim 2 primEqFloat)
+    , ("prim_gtFloat", BuiltinPrim 2 primGtFloat)
+    , ("prim_ltFloat", BuiltinPrim 2 primLtFloat)
+    , ("prim_geFloat", BuiltinPrim 2 primGeFloat)
+    , ("prim_leFloat", BuiltinPrim 2 primLeFloat)
+    , ("prim_fromIntFloat", BuiltinPrim 1 primFromIntFloat)
+    , ("prim_truncateFloat", BuiltinPrim 1 primTruncateFloat)
+    , ("prim_showFloat", BuiltinPrim 1 primShowFloat)
     , ("prim_and", BuiltinPrim 2 primAnd)
     , ("prim_leInt", BuiltinPrim 2 primLeInt)
     , ("prim_geInt", BuiltinPrim 2 primGeInt)
@@ -489,6 +517,7 @@ builtinEvalPrims =
     , ("prim_jsonNull", BuiltinPrim 0 primJsonNull)
     , ("prim_jsonBool", BuiltinPrim 1 primJsonBool)
     , ("prim_jsonInt", BuiltinPrim 1 primJsonInt)
+    , ("prim_jsonFloat", BuiltinPrim 1 primJsonFloat)
     , ("prim_jsonString", BuiltinPrim 1 primJsonString)
     , ("prim_jsonArray", BuiltinPrim 1 primJsonArray)
     , ("prim_jsonObject", BuiltinPrim 1 primJsonObject)
@@ -498,6 +527,7 @@ builtinEvalPrims =
     , ("prim_jsonToArray", BuiltinPrim 1 primJsonToArray)
     , ("prim_jsonToBool", BuiltinPrim 1 primJsonToBool)
     , ("prim_jsonToInt", BuiltinPrim 1 primJsonToInt)
+    , ("prim_jsonToFloat", BuiltinPrim 1 primJsonToFloat)
     , ("prim_jsonToString", BuiltinPrim 1 primJsonToString)
     , ("prim_jsonIsNull", BuiltinPrim 1 primJsonIsNull)
     -- STM primitives
@@ -636,6 +666,84 @@ primMulInt args =
       Right (VInt (a * b))
     _ ->
       Left (NotAFunction (VPrim 2 primMulInt args))
+
+-- Float primitives
+primAddFloat :: [Value] -> Either EvalError Value
+primAddFloat args =
+  case args of
+    [VFloat a, VFloat b] -> Right (VFloat (a + b))
+    _ -> Left (NotAFunction (VPrim 2 primAddFloat args))
+
+primSubFloat :: [Value] -> Either EvalError Value
+primSubFloat args =
+  case args of
+    [VFloat a, VFloat b] -> Right (VFloat (a - b))
+    _ -> Left (NotAFunction (VPrim 2 primSubFloat args))
+
+primMulFloat :: [Value] -> Either EvalError Value
+primMulFloat args =
+  case args of
+    [VFloat a, VFloat b] -> Right (VFloat (a * b))
+    _ -> Left (NotAFunction (VPrim 2 primMulFloat args))
+
+primDivFloat :: [Value] -> Either EvalError Value
+primDivFloat args =
+  case args of
+    [VFloat a, VFloat b] -> Right (VFloat (a / b))
+    _ -> Left (NotAFunction (VPrim 2 primDivFloat args))
+
+primEqFloat :: [Value] -> Either EvalError Value
+primEqFloat args =
+  case args of
+    [VFloat a, VFloat b] ->
+      if a == b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ -> Left (NotAFunction (VPrim 2 primEqFloat args))
+
+primGtFloat :: [Value] -> Either EvalError Value
+primGtFloat args =
+  case args of
+    [VFloat a, VFloat b] ->
+      if a > b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ -> Left (NotAFunction (VPrim 2 primGtFloat args))
+
+primLtFloat :: [Value] -> Either EvalError Value
+primLtFloat args =
+  case args of
+    [VFloat a, VFloat b] ->
+      if a < b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ -> Left (NotAFunction (VPrim 2 primLtFloat args))
+
+primGeFloat :: [Value] -> Either EvalError Value
+primGeFloat args =
+  case args of
+    [VFloat a, VFloat b] ->
+      if a >= b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ -> Left (NotAFunction (VPrim 2 primGeFloat args))
+
+primLeFloat :: [Value] -> Either EvalError Value
+primLeFloat args =
+  case args of
+    [VFloat a, VFloat b] ->
+      if a <= b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ -> Left (NotAFunction (VPrim 2 primLeFloat args))
+
+primFromIntFloat :: [Value] -> Either EvalError Value
+primFromIntFloat args =
+  case args of
+    [VInt n] -> Right (VFloat (fromIntegral n))
+    _ -> Left (NotAFunction (VPrim 1 primFromIntFloat args))
+
+primTruncateFloat :: [Value] -> Either EvalError Value
+primTruncateFloat args =
+  case args of
+    [VFloat f] -> Right (VInt (truncate f))
+    _ -> Left (NotAFunction (VPrim 1 primTruncateFloat args))
+
+primShowFloat :: [Value] -> Either EvalError Value
+primShowFloat args =
+  case args of
+    [VFloat f] -> Right (VString (T.pack (show f)))
+    _ -> Left (NotAFunction (VPrim 1 primShowFloat args))
 
 primAnd :: [Value] -> Either EvalError Value
 primAnd args =
@@ -811,6 +919,15 @@ primJsonInt args =
     _ ->
       Left (NotAFunction (VPrim 1 primJsonInt args))
 
+-- | prim_jsonFloat : Float -> Json
+primJsonFloat :: [Value] -> Either EvalError Value
+primJsonFloat args =
+  case args of
+    [VFloat f] ->
+      Right (VJson (JFloat f))
+    _ ->
+      Left (NotAFunction (VPrim 1 primJsonFloat args))
+
 -- | prim_jsonString : String -> Json
 primJsonString :: [Value] -> Either EvalError Value
 primJsonString args =
@@ -877,6 +994,7 @@ primJsonType args =
             JNull -> "null"
             JBool _ -> "bool"
             JInt _ -> "int"
+            JFloat _ -> "float"
             JString _ -> "string"
             JArray _ -> "array"
             JObject _ -> "object"
@@ -968,6 +1086,21 @@ primJsonToInt args =
       Left (ExpectedJson other)
     _ ->
       Left (NotAFunction (VPrim 1 primJsonToInt args))
+
+-- | prim_jsonToFloat : Json -> Result String Float
+-- Accepts both JFloat and JInt (promoting int to float)
+primJsonToFloat :: [Value] -> Either EvalError Value
+primJsonToFloat args =
+  case args of
+    [VJson jv] ->
+      case jv of
+        JFloat f -> Right (resultOk (VFloat f))
+        JInt n -> Right (resultOk (VFloat (fromIntegral n)))
+        _ -> Right (resultErr "expected number")
+    [other] ->
+      Left (ExpectedJson other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primJsonToFloat args))
 
 -- | prim_jsonToString : Json -> Result String String
 primJsonToString :: [Value] -> Either EvalError Value
@@ -1087,10 +1220,15 @@ parseString s = go s []
 
 jsonNumber :: Parser JsonValue
 jsonNumber s =
-  let (numStr, rest) = span (\c -> isDigit c || c == '-') s
-  in case reads numStr :: [(Integer, String)] of
-       [(n, "")] -> Right (JInt n, rest)
-       _ -> Left "invalid number"
+  let (numStr, rest) = span isNumChar s
+      isNumChar c = isDigit c || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+'
+  in if any (\c -> c == '.' || c == 'e' || c == 'E') numStr
+       then case reads numStr :: [(Double, String)] of
+              [(f, "")] -> Right (JFloat f, rest)
+              _ -> Left "invalid number"
+       else case reads numStr :: [(Integer, String)] of
+              [(n, "")] -> Right (JInt n, rest)
+              _ -> Left "invalid number"
 
 jsonArray :: Parser JsonValue
 jsonArray s =
@@ -1138,6 +1276,7 @@ stringifyJson jv =
     JBool True -> "true"
     JBool False -> "false"
     JInt n -> T.pack (show n)
+    JFloat f -> T.pack (show f)
     JString s -> "\"" <> escapeString s <> "\""
     JArray arr ->
       "[" <> T.intercalate "," (map stringifyJson arr) <> "]"
