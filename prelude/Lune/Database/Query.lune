@@ -14,6 +14,7 @@ module Lune.Database.Query exposing (
   delete,
   set,
   values,
+  returning,
   eq,
   where_,
   orderBy,
@@ -22,7 +23,8 @@ module Lune.Database.Query exposing (
   getDecoder,
   getSql,
   getParams,
-  getQueryType
+  getQueryType,
+  hasReturning
 )
 
 {-| Query builder for type-safe SQL construction.
@@ -157,6 +159,19 @@ values assigns query =
   , orderBy = query.orderBy
   , limitCount = query.limitCount
   , returningFlag = query.returningFlag
+  }
+
+-- | Add RETURNING clause to INSERT/UPDATE query
+returning : Query a -> Query a
+returning query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , queryType = query.queryType
+  , conditions = query.conditions
+  , assignments = query.assignments
+  , orderBy = query.orderBy
+  , limitCount = query.limitCount
+  , returningFlag = True
   }
 
 -- | Create an equality condition: column = value
@@ -316,3 +331,7 @@ getParams q = (toSql q).params
 -- | Get the query type
 getQueryType : Query a -> QueryType
 getQueryType q = q.queryType
+
+-- | Check if query has RETURNING clause
+hasReturning : Query a -> Bool
+hasReturning q = q.returningFlag
