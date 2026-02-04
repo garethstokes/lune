@@ -1,0 +1,25 @@
+=== Query Builder Examples ===
+
+1. Simple SELECT:
+   Query.select users userDecoder
+   SQL: SELECT * FROM users
+
+2. SELECT with WHERE:
+   Query.where_ (Query.eq users_id (Database.int 42))
+     (Query.select users userDecoder)
+   SQL: SELECT * FROM users WHERE id = $1
+
+3. SELECT with ORDER BY and LIMIT:
+   Query.limit 10
+     (Query.orderBy users_name Asc
+       (Query.select users userDecoder))
+   SQL: SELECT * FROM users ORDER BY name ASC LIMIT 10
+
+4. Combined query:
+   Query.limit 5
+     (Query.orderBy users_name Desc
+       (Query.where_ (Query.eq users_id (Database.int 42))
+         (Query.select users userDecoder)))
+   SQL: SELECT * FROM users WHERE id = $1 ORDER BY name DESC LIMIT 5
+
+Done!
