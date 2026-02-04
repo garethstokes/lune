@@ -5,7 +5,10 @@ module Lune.Database.Query exposing (
   Order(..),
   Condition,
   table,
-  column
+  column,
+  select,
+  eq,
+  where_
 )
 
 {-| Query builder for type-safe SQL construction.
@@ -57,3 +60,30 @@ table name = { name = name }
 -- | Create a column reference
 column : Table -> String -> Column a
 column tbl colName = { tableName = tbl.name, columnName = colName }
+
+-- | Start a SELECT query for a table
+select : Table -> Decoder a -> Query a
+select tbl decoder =
+  { tableName = tbl.name
+  , decoder = decoder
+  , conditions = Nil
+  , orderBy = Nothing
+  , limitCount = Nothing
+  }
+
+-- | Create an equality condition: column = value
+eq : Column a -> DbValue -> Condition
+eq col val =
+  { sql = col.columnName
+  , params = Cons val Nil
+  }
+
+-- | Add a WHERE condition to a query
+where_ : Condition -> Query a -> Query a
+where_ cond query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , conditions = Cons cond query.conditions
+  , orderBy = query.orderBy
+  , limitCount = query.limitCount
+  }
