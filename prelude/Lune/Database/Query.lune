@@ -20,6 +20,7 @@ module Lune.Database.Query exposing (
   lt,
   gte,
   lte,
+  neq,
   where_,
   orderBy,
   limit,
@@ -218,6 +219,13 @@ gte col val =
 lte : Column a -> DbValue -> Condition
 lte col val =
   { sql = Str.append col.columnName " <="
+  , params = Cons val Nil
+  }
+
+-- | Create a not-equal condition: column <> value
+neq : Column a -> DbValue -> Condition
+neq col val =
+  { sql = Str.append col.columnName " <>"
   , params = Cons val Nil
   }
 
