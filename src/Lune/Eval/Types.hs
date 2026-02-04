@@ -4,6 +4,8 @@ module Lune.Eval.Types
   , FiberId
   , SocketId
   , ConnId
+  , DbConnId
+  , DbConnection (..)
   , STMAction (..)
   , FiberState (..)
   , World (..)
@@ -22,6 +24,7 @@ import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import Lune.Type (Constraint)
 import qualified Network.Socket as NS
+import qualified Database.PostgreSQL.Simple as PG
 
 type Env = Map Text Value
 
@@ -29,6 +32,12 @@ type TVarId = Int
 type FiberId = Int
 type SocketId = Int
 type ConnId = Int
+type DbConnId = Int
+
+-- | Generic database connection - supports multiple backends
+data DbConnection
+  = PgConn PG.Connection
+  -- Future: | SqliteConn SQLite.Connection
 
 data FiberState
   = FiberRunning
@@ -63,6 +72,8 @@ data World = World
   , worldNextSocketId :: SocketId     -- Next Socket ID
   , worldConns :: IntMap NS.Socket    -- Connections (also sockets)
   , worldNextConnId :: ConnId         -- Next Connection ID
+  , worldDbConns :: IntMap DbConnection  -- Database connections
+  , worldNextDbConnId :: DbConnId        -- Next DB connection ID
   }
 
 instance Show World where
@@ -71,6 +82,7 @@ instance Show World where
          <> ", fibers = " <> show (IntMap.size (worldFibers w)) <> " entries"
          <> ", sockets = " <> show (IntMap.size (worldSockets w)) <> " entries"
          <> ", conns = " <> show (IntMap.size (worldConns w)) <> " entries"
+         <> ", dbconns = " <> show (IntMap.size (worldDbConns w)) <> " entries"
          <> " }"
 
 data JsonValue
@@ -93,6 +105,7 @@ data Value
   | VFiber FiberId
   | VSocket SocketId
   | VConn ConnId
+  | VDbConn DbConnId
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -160,6 +173,8 @@ instance Show Value where
         "<socket:" <> show sid <> ">"
       VConn cid ->
         "<conn:" <> show cid <> ">"
+      VDbConn dbid ->
+        "<dbconn:" <> show dbid <> ">"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
