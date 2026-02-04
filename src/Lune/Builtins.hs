@@ -9,7 +9,7 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
-import Control.Exception (try, IOException)
+import Control.Exception (try, IOException, SomeException)
 import Data.Char (isDigit, isSpace)
 import Data.Maybe (mapMaybe)
 import Data.IntMap.Strict (IntMap)
@@ -28,6 +28,7 @@ import qualified Lune.Syntax as S
 import Lune.Type
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
+import qualified Database.PostgreSQL.Simple as PG
 import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
@@ -580,6 +581,8 @@ builtinEvalPrims =
     , ("prim_apiAndThen", BuiltinPrim 2 primApiAndThen)
     -- Path matching primitive
     , ("prim_matchPath", BuiltinPrim 2 primMatchPath)
+    -- Database primitives
+    , ("prim_pgConnect", BuiltinPrim 1 primPgConnect)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1790,6 +1793,30 @@ primSocketClose args =
                 in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primSocketClose args))
+
+-- =============================================================================
+-- Database Primitives
+-- =============================================================================
+
+-- | prim_pgConnect : String -> IO (Result DbError DbConn)
+primPgConnect :: [Value] -> Either EvalError Value
+primPgConnect args =
+  case args of
+    [VString connStr] ->
+      Right $ VIO $ \world -> do
+        result <- try (PG.connectPostgreSQL (TE.encodeUtf8 connStr))
+        case result of
+          Left (e :: SomeException) ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.ConnectionFailed" [VString (T.pack (show e))]])
+          Right conn ->
+            let dbid = worldNextDbConnId world
+                world' = world
+                  { worldDbConns = IntMap.insert dbid (PgConn conn) (worldDbConns world)
+                  , worldNextDbConnId = dbid + 1
+                  }
+            in pure $ Right (world', VCon "Lune.Prelude.Ok" [VDbConn dbid])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgConnect args))
 
 -- =============================================================================
 -- HTTP Primitives
