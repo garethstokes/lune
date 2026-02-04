@@ -35,6 +35,9 @@ import Database.PostgreSQL.Simple.ToField (ToField(..))
 import Database.PostgreSQL.Simple.FromRow (RowParser, field, numFieldsRemaining)
 import Database.PostgreSQL.Simple.Types (Null(..))
 import qualified Database.PostgreSQL.Simple.Transaction as PGT
+import Data.Pool (Pool)
+import qualified Data.Pool as Pool
+import Data.Time.Clock (NominalDiffTime)
 import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
@@ -172,6 +175,12 @@ builtinSchemes =
         (TArrow (TCon "DbConn")
           (TApp (TCon "IO")
             (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
+    , ("prim_pgCreatePool", Forall [] []
+        (TArrow (TCon "String")
+          (TArrow (TCon "Int")
+            (TArrow (TCon "Int")
+              (TApp (TCon "IO")
+                (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "DbPool")))))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -620,6 +629,7 @@ builtinEvalPrims =
     , ("prim_pgBegin", BuiltinPrim 1 primPgBegin)
     , ("prim_pgCommit", BuiltinPrim 1 primPgCommit)
     , ("prim_pgRollback", BuiltinPrim 1 primPgRollback)
+    , ("prim_pgCreatePool", BuiltinPrim 3 primPgCreatePool)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1961,6 +1971,31 @@ primPgRollback args =
                 pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
     _ ->
       Left (NotAFunction (VPrim 1 primPgRollback args))
+
+-- | prim_pgCreatePool : String -> Int -> Int -> IO (Result DbError DbPool)
+primPgCreatePool :: [Value] -> Either EvalError Value
+primPgCreatePool args =
+  case args of
+    [VString connStr, VInt maxConns, VInt idleTimeout] ->
+      Right $ VIO $ \world -> do
+        let createConn = PG.connectPostgreSQL (TE.encodeUtf8 connStr)
+            destroyConn = PG.close
+            stripes = 1
+            idleTime = fromIntegral idleTimeout :: NominalDiffTime
+            maxPerStripe = fromIntegral maxConns
+        result <- try (Pool.createPool createConn destroyConn stripes idleTime maxPerStripe)
+        case result of
+          Left (e :: SomeException) ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.ConnectionFailed" [VString (T.pack (show e))]])
+          Right pool ->
+            let poolId = worldNextDbPoolId world
+                world' = world
+                  { worldDbPools = IntMap.insert poolId (PgPool pool) (worldDbPools world)
+                  , worldNextDbPoolId = poolId + 1
+                  }
+            in pure $ Right (world', VCon "Lune.Prelude.Ok" [VDbPool poolId])
+    _ ->
+      Left (NotAFunction (VPrim 3 primPgCreatePool args))
 
 -- =============================================================================
 -- DbValue Constructor Primitives

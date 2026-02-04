@@ -44,6 +44,7 @@ library
       postgresql-simple >= 0.6,
       resource-pool >= 0.2,
       text,
+      time,
       transformers,
       megaparsec,
       parser-combinators
