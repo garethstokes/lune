@@ -2,18 +2,18 @@ module HelloPostgres exposing (main)
 
 {-| Hello Postgres - Database connectivity example.
 
-This demonstrates Milestone 1 of the database module:
+This demonstrates Milestone 2 of the database module:
 - Connecting to PostgreSQL
-- Executing raw SQL
-- Closing the connection
+- Parameterized queries with $1, $2 syntax
+- Handling query results as List (List DbValue)
 
 Note: Requires PostgreSQL running locally with a 'testdb' database.
 Create it with: createdb testdb
 -}
 
 import Lune.IO as IO
-import Lune.Prelude exposing (IO, Result(..), Unit, Int)
-import Lune.Database exposing (DbConn, DbError, errorToString)
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Bool(..))
+import Lune.Database as Database exposing (DbConn, DbError, DbValue(..), errorToString)
 import Lune.Database.Postgres as Postgres
 import Lune.String as Str
 
@@ -28,15 +28,59 @@ main =
       Ok conn ->
         do
           IO.println "Connected!"
-          execResult <- Postgres.execute conn "SELECT 1"
-          case execResult of
+
+          IO.println "Running: SELECT 1 as num"
+          queryResult <- Postgres.query conn "SELECT 1 as num" []
+          case queryResult of
             Err e ->
               IO.println (Str.append "Query error: " (errorToString e))
-            Ok rowCount ->
-              IO.println (Str.append "Query executed! Rows affected: " (Str.fromInt rowCount))
+            Ok rows ->
+              do
+                IO.println "Query succeeded!"
+                printRows rows
+
+          IO.println ""
+          IO.println "Running: SELECT $1 as greeting"
+          paramResult <- Postgres.query conn "SELECT $1 as greeting" [Database.string "Hello from Lune!"]
+          case paramResult of
+            Err e ->
+              IO.println (Str.append "Param query error: " (errorToString e))
+            Ok rows ->
+              do
+                IO.println "Parameterized query succeeded!"
+                printRows rows
+
           closeResult <- Postgres.close conn
           case closeResult of
             Err e ->
               IO.println (Str.append "Close error: " (errorToString e))
             Ok _ ->
               IO.println "Connection closed."
+
+printRows : List (List DbValue) -> IO Unit
+printRows rows =
+  case rows of
+    Nil -> IO.println "(no rows)"
+    Cons row rest ->
+      do
+        IO.println (Str.append "  Row: " (showRow row))
+        printRows rest
+
+showRow : List DbValue -> String
+showRow cols =
+  case cols of
+    Nil -> ""
+    Cons val Nil -> showDbValue val
+    Cons val rest -> Str.append (showDbValue val) (Str.append ", " (showRow rest))
+
+showDbValue : DbValue -> String
+showDbValue val =
+  case val of
+    DbNull -> "NULL"
+    DbInt n -> Str.fromInt n
+    DbFloat f -> Str.fromFloat f
+    DbString s -> s
+    DbBool b ->
+      case b of
+        True -> "true"
+        False -> "false"
