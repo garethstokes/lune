@@ -585,6 +585,7 @@ builtinEvalPrims =
     -- Database primitives
     , ("prim_pgConnect", BuiltinPrim 1 primPgConnect)
     , ("prim_pgExecute", BuiltinPrim 2 primPgExecute)
+    , ("prim_pgClose", BuiltinPrim 1 primPgClose)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1838,6 +1839,22 @@ primPgExecute args =
                 pure $ Right (world, VCon "Lune.Prelude.Ok" [VInt (fromIntegral rowCount)])
     _ ->
       Left (NotAFunction (VPrim 2 primPgExecute args))
+
+-- | prim_pgClose : DbConn -> IO (Result DbError Unit)
+primPgClose :: [Value] -> Either EvalError Value
+primPgClose args =
+  case args of
+    [VDbConn dbid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            PG.close conn
+            let world' = world { worldDbConns = IntMap.delete dbid (worldDbConns world) }
+            pure $ Right (world', VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgClose args))
 
 -- =============================================================================
 -- HTTP Primitives
