@@ -64,6 +64,7 @@ Supported literals:
 - strings: `"hello"`
 - characters: `'x'`
 - lists: `[1, 2, 3]`, `[]`
+- tuples: `(1, "hello")`, `(a, b, c)`
 
 ### 1.6 Comments
 
@@ -175,7 +176,22 @@ Multi-line lists use Elm-style leading commas:
 
 Trailing commas are not permitted.
 
-### 5.3 Function Application
+### 5.3 Tuple Literals
+
+Tuple literals provide syntactic sugar for constructing tuples (2-5 elements):
+
+```haskell
+(1, 2)           -- desugars to: Pair 1 2
+(a, b, c)        -- desugars to: Triple a b c
+(1, 2, 3, 4)     -- desugars to: Quad 1 2 3 4
+(a, b, c, d, e)  -- desugars to: Quint a b c d e
+```
+
+Tuples larger than 5 elements are not supported; use records instead.
+
+Note: A single parenthesized expression `(x)` is NOT a tuple—it's just `x`.
+
+### 5.4 Function Application
 
 Application is left-associative:
 
@@ -183,7 +199,7 @@ Application is left-associative:
 f x y = ((f x) y)
 ```
 
-### 5.4 No Operators
+### 5.5 No Operators
 
 Lune has **no infix operators** in v0.1.
 
@@ -279,6 +295,7 @@ Allowed forms:
 - variable patterns: `x`
 - wildcard: `_`
 - list patterns: `[]`, `[x]`, `[a, b, c]`
+- tuple patterns: `(x, y)`, `(a, _, c)`
 
 ### 8.1 List Patterns
 
@@ -300,6 +317,22 @@ List patterns desugar to nested `Cons`/`Nil` patterns:
 ```
 
 Note: Rest/spread patterns like `[h, ...t]` are not supported. Use `Cons h t` for head-tail matching.
+
+### 8.2 Tuple Patterns
+
+Tuple patterns match tuple values:
+
+```haskell
+case point of
+  (x, y) -> ...      -- matches Pair
+  (a, b, c) -> ...   -- matches Triple
+```
+
+Tuple patterns desugar to constructor patterns:
+
+```haskell
+(x, y)  -- desugars to: Pair x y
+```
 
 ---
 
