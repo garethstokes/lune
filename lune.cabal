@@ -42,6 +42,7 @@ library
       filepath,
       network >= 3.1,
       postgresql-simple >= 0.6,
+      resource-pool >= 0.2,
       text,
       transformers,
       megaparsec,
