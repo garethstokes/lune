@@ -181,6 +181,10 @@ builtinSchemes =
             (TArrow (TCon "Int")
               (TApp (TCon "IO")
                 (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "DbPool")))))))
+    , ("prim_pgDestroyPool", Forall [] []
+        (TArrow (TCon "DbPool")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -630,6 +634,7 @@ builtinEvalPrims =
     , ("prim_pgCommit", BuiltinPrim 1 primPgCommit)
     , ("prim_pgRollback", BuiltinPrim 1 primPgRollback)
     , ("prim_pgCreatePool", BuiltinPrim 3 primPgCreatePool)
+    , ("prim_pgDestroyPool", BuiltinPrim 1 primPgDestroyPool)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1996,6 +2001,22 @@ primPgCreatePool args =
             in pure $ Right (world', VCon "Lune.Prelude.Ok" [VDbPool poolId])
     _ ->
       Left (NotAFunction (VPrim 3 primPgCreatePool args))
+
+-- | prim_pgDestroyPool : DbPool -> IO (Result DbError Unit)
+primPgDestroyPool :: [Value] -> Either EvalError Value
+primPgDestroyPool args =
+  case args of
+    [VDbPool poolId] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup poolId (worldDbPools world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgPool pool) -> do
+            Pool.destroyAllResources pool
+            let world' = world { worldDbPools = IntMap.delete poolId (worldDbPools world) }
+            pure $ Right (world', VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgDestroyPool args))
 
 -- =============================================================================
 -- DbValue Constructor Primitives
