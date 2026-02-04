@@ -5,6 +5,8 @@ module Lune.Prelude exposing (
   List(..),
   Maybe(..),
   Result(..),
+  Pair(..), Triple(..), Quad(..), Quint(..),
+  fst, snd,
 
   IO,
   Atomic, Shared,
@@ -54,6 +56,30 @@ type Maybe a =
 type Result e a =
   Err e
   | Ok a
+
+-- ===== Tuples (2-5 elements) =====
+
+type Pair a b =
+  Pair a b
+
+type Triple a b c =
+  Triple a b c
+
+type Quad a b c d =
+  Quad a b c d
+
+type Quint a b c d e =
+  Quint a b c d e
+
+fst : Pair a b -> a
+fst p =
+  case p of
+    Pair x _ -> x
+
+snd : Pair a b -> b
+snd p =
+  case p of
+    Pair _ y -> y
 
 -- ===== Effects / concurrency =====
 
