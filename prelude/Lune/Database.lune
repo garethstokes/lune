@@ -1,5 +1,6 @@
 module Lune.Database exposing (
   DbConn,
+  DbPool,
   DbError(..),
   DbValue(..),
   errorToString,
@@ -22,6 +23,9 @@ import Lune.String as Str
 
 -- | Opaque database connection handle
 type DbConn = DbConn#
+
+-- | Opaque database connection pool handle
+type DbPool = DbPool#
 
 -- | Database operation errors
 type DbError =
