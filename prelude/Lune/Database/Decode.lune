@@ -79,7 +79,7 @@ getAt idx xs =
   case xs of
     Nil -> Nothing
     Cons x rest ->
-      case Int.eq idx 0 of
+      case Int.lte idx 0 of
         True -> Just x
         False -> getAt (Int.sub idx 1) rest
 
@@ -93,7 +93,7 @@ int =
         case Str.toInt s of
           Ok n -> Ok n
           Err _ -> Err { message = "Expected integer", column = 0 }
-      Cons DbNull _ -> Err { message = "Expected integer, got NULL", column = 0 }
+      Cons (DbNull) _ -> Err { message = "Expected integer, got NULL", column = 0 }
       _ -> Err { message = "Expected integer", column = 0 }
 
 -- | Decode a float value
@@ -104,7 +104,7 @@ float =
       Cons (DbFloat f) _ -> Ok f
       Cons (DbInt n) _ -> Ok (Float.fromInt n)
       Cons (DbString s) _ -> Err { message = "Expected float", column = 0 }
-      Cons DbNull _ -> Err { message = "Expected float, got NULL", column = 0 }
+      Cons (DbNull) _ -> Err { message = "Expected float, got NULL", column = 0 }
       _ -> Err { message = "Expected float", column = 0 }
 
 -- | Decode a string value
@@ -119,7 +119,7 @@ string =
         case b of
           True -> Ok "true"
           False -> Ok "false"
-      Cons DbNull _ -> Err { message = "Expected string, got NULL", column = 0 }
+      Cons (DbNull) _ -> Err { message = "Expected string, got NULL", column = 0 }
       _ -> Err { message = "Expected string", column = 0 }
 
 -- | Decode a boolean value
@@ -129,7 +129,7 @@ bool =
     case row of
       Cons (DbBool b) _ -> Ok b
       Cons (DbString s) _ -> parseBoolString s
-      Cons DbNull _ -> Err { message = "Expected boolean, got NULL", column = 0 }
+      Cons (DbNull) _ -> Err { message = "Expected boolean, got NULL", column = 0 }
       _ -> Err { message = "Expected boolean", column = 0 }
 
 -- | Helper to parse boolean from string
@@ -159,7 +159,7 @@ nullable : Decoder a -> Decoder (Maybe a)
 nullable decoder =
   \row ->
     case row of
-      Cons DbNull _ -> Ok Nothing
+      Cons (DbNull) _ -> Ok Nothing
       _ ->
         case decoder row of
           Ok a -> Ok (Just a)
