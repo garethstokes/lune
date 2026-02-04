@@ -1,0 +1,126 @@
+module DatabaseDecode exposing (main)
+
+{-| Database Decode example.
+
+This demonstrates Milestone 3 of the database module:
+- Typed decoders for database rows
+- Using map2/map3 to combine decoders
+- queryAs for type-safe query results
+
+Note: This example shows the decoder API without requiring a database.
+The decoders work on List DbValue which you get from Postgres.query.
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Maybe(..), Int, String, Bool(..))
+import Lune.Database as Database exposing (DbValue(..))
+import Lune.Database.Decode as Decode exposing (Decoder, DecodeError)
+import Lune.String as Str
+
+-- Example: A User record
+type alias User =
+  { id : Int
+  , name : String
+  , email : String
+  }
+
+-- Decoder for User
+-- Assumes columns: id (index 0), name (index 1), email (index 2)
+userDecoder : Decoder User
+userDecoder =
+  Decode.map3 (\id name email -> { id = id, name = name, email = email })
+    (Decode.index 0 Decode.int)
+    (Decode.index 1 Decode.string)
+    (Decode.index 2 Decode.string)
+
+-- Example: A Product with nullable description
+type alias Product =
+  { id : Int
+  , name : String
+  , description : Maybe String
+  }
+
+productDecoder : Decoder Product
+productDecoder =
+  Decode.map3 (\id name desc -> { id = id, name = name, description = desc })
+    (Decode.index 0 Decode.int)
+    (Decode.index 1 Decode.string)
+    (Decode.index 2 (Decode.nullable Decode.string))
+
+-- Test data: simulated database rows
+userRow : List DbValue
+userRow = Cons (DbInt 42) (Cons (DbString "Alice") (Cons (DbString "alice@example.com") Nil))
+
+productRowWithDesc : List DbValue
+productRowWithDesc = Cons (DbInt 1) (Cons (DbString "Widget") (Cons (DbString "A useful widget") Nil))
+
+productRowNullDesc : List DbValue
+productRowNullDesc = Cons (DbInt 2) (Cons (DbString "Gadget") (Cons DbNull Nil))
+
+badRow : List DbValue
+badRow = Cons (DbString "not-an-int") (Cons (DbString "Bob") (Cons (DbString "bob@example.com") Nil))
+
+main : IO Unit
+main =
+  do
+    IO.println "=== Database Decode Examples ==="
+    IO.println ""
+    decodeUserExample
+    IO.println ""
+    decodeProductWithDesc
+    IO.println ""
+    decodeProductNullDesc
+    IO.println ""
+    decodeErrorExample
+    IO.println ""
+    IO.println "Done!"
+
+decodeUserExample : IO Unit
+decodeUserExample =
+  do
+    IO.println "Decoding user row: [42, 'Alice', 'alice@example.com']"
+    case Decode.decodeRow userDecoder userRow of
+      Err err -> IO.println (Str.append "Error: " (Decode.errorToString err))
+      Ok user ->
+        do
+          IO.println (Str.append "  id: " (Str.fromInt user.id))
+          IO.println (Str.append "  name: " user.name)
+          IO.println (Str.append "  email: " user.email)
+
+decodeProductWithDesc : IO Unit
+decodeProductWithDesc =
+  do
+    IO.println "Decoding product with description: [1, 'Widget', 'A useful widget']"
+    case Decode.decodeRow productDecoder productRowWithDesc of
+      Err err -> IO.println (Str.append "Error: " (Decode.errorToString err))
+      Ok product ->
+        do
+          IO.println (Str.append "  id: " (Str.fromInt product.id))
+          IO.println (Str.append "  name: " product.name)
+          printDescription product.description
+
+decodeProductNullDesc : IO Unit
+decodeProductNullDesc =
+  do
+    IO.println "Decoding product with NULL description: [2, 'Gadget', NULL]"
+    case Decode.decodeRow productDecoder productRowNullDesc of
+      Err err -> IO.println (Str.append "Error: " (Decode.errorToString err))
+      Ok product ->
+        do
+          IO.println (Str.append "  id: " (Str.fromInt product.id))
+          IO.println (Str.append "  name: " product.name)
+          printDescription product.description
+
+printDescription : Maybe String -> IO Unit
+printDescription desc =
+  case desc of
+    Nothing -> IO.println "  description: (none)"
+    Just d -> IO.println (Str.append "  description: " d)
+
+decodeErrorExample : IO Unit
+decodeErrorExample =
+  do
+    IO.println "Decoding bad row (string instead of int): ['not-an-int', 'Bob', 'bob@example.com']"
+    case Decode.decodeRow userDecoder badRow of
+      Err err -> IO.println (Str.append "Expected error: " (Decode.errorToString err))
+      Ok _ -> IO.println "Unexpected success!"
