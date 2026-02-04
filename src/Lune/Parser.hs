@@ -518,8 +518,19 @@ patternAtom =
     , parseListPattern
     , try conPattern
     , PVar <$> identifier
-    , between (symbol "(") (symbol ")") parsePattern
+    , parenPattern
     ]
+  where
+    parenPattern = do
+      _ <- symbol "("
+      scnOptional
+      first <- parsePattern
+      rest <- many (try (scnOptional *> symbol "," *> scnOptional *> parsePattern))
+      scnOptional
+      _ <- symbol ")"
+      case rest of
+        [] -> pure first  -- parenthesized pattern
+        _  -> pure (desugarTuplePattern (first : rest))
 
 parseListPattern :: Parser Pattern
 parseListPattern = do
@@ -535,6 +546,15 @@ parseListPattern = do
 desugarListPattern :: [Pattern] -> Pattern
 desugarListPattern [] = PCon "Nil" []
 desugarListPattern (x:xs) = PCon "Cons" [x, desugarListPattern xs]
+
+desugarTuplePattern :: [Pattern] -> Pattern
+desugarTuplePattern pats =
+  case length pats of
+    2 -> PCon "Pair" pats
+    3 -> PCon "Triple" pats
+    4 -> PCon "Quad" pats
+    5 -> PCon "Quint" pats
+    n -> error $ "Tuple patterns must have 2-5 elements, got " ++ show n
 
 conPattern :: Parser Pattern
 conPattern = do
