@@ -8,7 +8,8 @@ module Lune.Database.Postgres exposing (
   runOne,
   begin,
   commit,
-  rollback
+  rollback,
+  transaction
 )
 
 {-| PostgreSQL database operations.
@@ -104,3 +105,27 @@ commit = prim_pgCommit
 -- | Rollback a transaction
 rollback : DbConn -> IO (Result DbError Unit)
 rollback = prim_pgRollback
+
+-- | Execute an action inside a transaction
+-- Commits on Ok result, rolls back on Err result
+-- The callback receives the connection and returns IO (Result DbError a)
+transaction : DbConn -> (DbConn -> IO (Result DbError a)) -> IO (Result DbError a)
+transaction conn action =
+  do
+    beginResult <- begin conn
+    case beginResult of
+      Err e -> pure (Err e)
+      Ok _ ->
+        do
+          actionResult <- action conn
+          case actionResult of
+            Err e ->
+              do
+                _ <- rollback conn
+                pure (Err e)
+            Ok a ->
+              do
+                commitResult <- commit conn
+                case commitResult of
+                  Err e -> pure (Err e)
+                  Ok _ -> pure (Ok a)
