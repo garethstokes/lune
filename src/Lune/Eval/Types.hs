@@ -133,6 +133,7 @@ data Value
   | VSocket SocketId
   | VConn ConnId
   | VDbConn DbConnId
+  | VDbPool DbPoolId
   | VDbValue DbValue
   | VDbRow DbRow
   | VCon Text [Value]
@@ -204,6 +205,8 @@ instance Show Value where
         "<conn:" <> show cid <> ">"
       VDbConn dbid ->
         "<dbconn:" <> show dbid <> ">"
+      VDbPool poolid ->
+        "<dbpool:" <> show poolid <> ">"
       VDbValue dv ->
         "<dbvalue:" <> show dv <> ">"
       VDbRow _ ->
