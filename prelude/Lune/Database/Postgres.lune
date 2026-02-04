@@ -1,0 +1,34 @@
+module Lune.Database.Postgres exposing (
+  connect,
+  execute,
+  close
+)
+
+{-| PostgreSQL database operations.
+
+This module provides PostgreSQL-specific database connectivity.
+Use `connect` to establish a connection, then `execute` to run SQL.
+
+Example:
+```
+result <- Postgres.connect "postgresql://localhost/testdb"
+case result of
+  Ok conn -> Postgres.execute conn "SELECT 1"
+  Err e -> IO.println (Database.errorToString e)
+```
+-}
+
+import Lune.Prelude exposing (IO, Result, String, Int, Unit)
+import Lune.Database exposing (DbConn, DbError)
+
+-- | Connect to a PostgreSQL database
+connect : String -> IO (Result DbError DbConn)
+connect = prim_pgConnect
+
+-- | Execute a SQL statement, returning the number of affected rows
+execute : DbConn -> String -> IO (Result DbError Int)
+execute = prim_pgExecute
+
+-- | Close a database connection
+close : DbConn -> IO (Result DbError Unit)
+close = prim_pgClose

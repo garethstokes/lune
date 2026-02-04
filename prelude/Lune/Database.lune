@@ -1,0 +1,31 @@
+module Lune.Database exposing (
+  DbConn,
+  DbError(..),
+  errorToString
+)
+
+{-| Core database types for Lune.
+
+This module provides common types shared across database backends.
+See `Lune.Database.Postgres` for PostgreSQL-specific functionality.
+-}
+
+import Lune.Prelude exposing (String)
+import Lune.String as Str
+
+-- | Opaque database connection handle
+type DbConn = DbConn#
+
+-- | Database operation errors
+type DbError =
+  ConnectionFailed String
+  | QueryFailed String
+  | InvalidConnection
+
+-- | Convert a database error to a human-readable string
+errorToString : DbError -> String
+errorToString err =
+  case err of
+    ConnectionFailed msg -> Str.append "Connection failed: " msg
+    QueryFailed msg -> Str.append "Query failed: " msg
+    InvalidConnection -> "Invalid database connection"

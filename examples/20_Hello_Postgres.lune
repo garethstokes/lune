@@ -1,0 +1,42 @@
+module HelloPostgres exposing (main)
+
+{-| Hello Postgres - Database connectivity example.
+
+This demonstrates Milestone 1 of the database module:
+- Connecting to PostgreSQL
+- Executing raw SQL
+- Closing the connection
+
+Note: Requires PostgreSQL running locally with a 'testdb' database.
+Create it with: createdb testdb
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, Int)
+import Lune.Database exposing (DbConn, DbError, errorToString)
+import Lune.Database.Postgres as Postgres
+import Lune.String as Str
+
+main : IO Unit
+main =
+  do
+    IO.println "Connecting to PostgreSQL..."
+    result <- Postgres.connect "postgresql://localhost/testdb"
+    case result of
+      Err e ->
+        IO.println (Str.append "Connection error: " (errorToString e))
+      Ok conn ->
+        do
+          IO.println "Connected!"
+          execResult <- Postgres.execute conn "SELECT 1"
+          case execResult of
+            Err e ->
+              IO.println (Str.append "Query error: " (errorToString e))
+            Ok rowCount ->
+              IO.println (Str.append "Query executed! Rows affected: " (Str.fromInt rowCount))
+          closeResult <- Postgres.close conn
+          case closeResult of
+            Err e ->
+              IO.println (Str.append "Close error: " (errorToString e))
+            Ok _ ->
+              IO.println "Connection closed."
