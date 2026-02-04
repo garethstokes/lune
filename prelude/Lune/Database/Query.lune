@@ -1,0 +1,59 @@
+module Lune.Database.Query exposing (
+  Table,
+  Column,
+  Query,
+  Order(..),
+  Condition,
+  table,
+  column
+)
+
+{-| Query builder for type-safe SQL construction.
+
+Build queries using composable functions instead of raw SQL strings.
+
+Example:
+```
+users : Table
+users = table "users"
+
+users_id : Column Int
+users_id = column users "id"
+
+users_name : Column String
+users_name = column users "name"
+```
+-}
+
+import Lune.Prelude exposing (String, Int, List(..), Maybe(..))
+import Lune.Database exposing (DbValue)
+import Lune.Database.Decode exposing (Decoder)
+
+-- | A database table reference
+type alias Table = { name : String }
+
+-- | A column reference with phantom type for the column's Lune type
+type alias Column a = { tableName : String, columnName : String }
+
+-- | Sort order for ORDER BY
+type Order = Asc | Desc
+
+-- | A WHERE condition (opaque, built with eq, gt, lt, etc.)
+type alias Condition = { sql : String, params : List DbValue }
+
+-- | A query that returns values of type 'a'
+type alias Query a =
+  { tableName : String
+  , decoder : Decoder a
+  , conditions : List Condition
+  , orderBy : Maybe { column : String, order : Order }
+  , limitCount : Maybe Int
+  }
+
+-- | Create a table reference
+table : String -> Table
+table name = { name = name }
+
+-- | Create a column reference
+column : Table -> String -> Column a
+column tbl colName = { tableName = tbl.name, columnName = colName }
