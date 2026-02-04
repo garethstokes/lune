@@ -1,0 +1,159 @@
+module Lune.Database.Decode exposing (
+  Decoder,
+  DecodeError,
+  decodeRow,
+  succeed,
+  fail,
+  index,
+  int,
+  float,
+  string,
+  bool,
+  nullable
+)
+
+{-| Database row decoders.
+
+Decoders extract typed values from database rows, similar to JSON decoders.
+Columns are accessed by index (matching SELECT clause order).
+
+Example:
+```
+type alias User = { id : Int, name : String }
+
+userDecoder : Decoder User
+userDecoder =
+  map2 (\id name -> { id = id, name = name })
+    (index 0 int)
+    (index 1 string)
+```
+-}
+
+import Lune.Prelude exposing (
+  Result(..), String, Int, Float, Bool(..), List(..), Maybe(..)
+)
+import Lune.Database exposing (DbValue(..))
+import Lune.String as Str
+import Lune.Int as Int
+import Lune.Float as Float
+
+-- | A decode error with message and column index
+type alias DecodeError = { message : String, column : Int }
+
+-- | A decoder extracts a typed value from a row (List DbValue)
+type alias Decoder a = List DbValue -> Result DecodeError a
+
+-- | Run a decoder on a row
+decodeRow : Decoder a -> List DbValue -> Result DecodeError a
+decodeRow decoder row = decoder row
+
+-- | A decoder that always succeeds with the given value
+succeed : a -> Decoder a
+succeed value = \_ -> Ok value
+
+-- | A decoder that always fails with the given message
+fail : String -> Decoder a
+fail message = \_ -> Err { message = message, column = 0 }
+
+-- | Get a value at a specific column index
+index : Int -> Decoder a -> Decoder a
+index idx decoder =
+  \row ->
+    case getAt idx row of
+      Nothing -> Err { message = Str.append "Column index out of bounds: " (Str.fromInt idx), column = idx }
+      Just val ->
+        case decoder [val] of
+          Err err -> Err { message = err.message, column = idx }
+          Ok a -> Ok a
+
+-- | Helper to get element at index
+getAt : Int -> List a -> Maybe a
+getAt idx xs =
+  case xs of
+    Nil -> Nothing
+    Cons x rest ->
+      case Int.eq idx 0 of
+        True -> Just x
+        False -> getAt (Int.sub idx 1) rest
+
+-- | Decode an integer value
+int : Decoder Int
+int =
+  \row ->
+    case row of
+      Cons (DbInt n) _ -> Ok n
+      Cons (DbString s) _ ->
+        case Str.toInt s of
+          Ok n -> Ok n
+          Err _ -> Err { message = "Expected integer", column = 0 }
+      Cons DbNull _ -> Err { message = "Expected integer, got NULL", column = 0 }
+      _ -> Err { message = "Expected integer", column = 0 }
+
+-- | Decode a float value
+float : Decoder Float
+float =
+  \row ->
+    case row of
+      Cons (DbFloat f) _ -> Ok f
+      Cons (DbInt n) _ -> Ok (Float.fromInt n)
+      Cons (DbString s) _ -> Err { message = "Expected float", column = 0 }
+      Cons DbNull _ -> Err { message = "Expected float, got NULL", column = 0 }
+      _ -> Err { message = "Expected float", column = 0 }
+
+-- | Decode a string value
+string : Decoder String
+string =
+  \row ->
+    case row of
+      Cons (DbString s) _ -> Ok s
+      Cons (DbInt n) _ -> Ok (Str.fromInt n)
+      Cons (DbFloat f) _ -> Ok (Str.fromFloat f)
+      Cons (DbBool b) _ ->
+        case b of
+          True -> Ok "true"
+          False -> Ok "false"
+      Cons DbNull _ -> Err { message = "Expected string, got NULL", column = 0 }
+      _ -> Err { message = "Expected string", column = 0 }
+
+-- | Decode a boolean value
+bool : Decoder Bool
+bool =
+  \row ->
+    case row of
+      Cons (DbBool b) _ -> Ok b
+      Cons (DbString s) _ -> parseBoolString s
+      Cons DbNull _ -> Err { message = "Expected boolean, got NULL", column = 0 }
+      _ -> Err { message = "Expected boolean", column = 0 }
+
+-- | Helper to parse boolean from string
+parseBoolString : String -> Result DecodeError Bool
+parseBoolString s =
+  case Str.eq s "t" of
+    True -> Ok True
+    False ->
+      case Str.eq s "true" of
+        True -> Ok True
+        False ->
+          case Str.eq s "1" of
+            True -> Ok True
+            False ->
+              case Str.eq s "f" of
+                True -> Ok False
+                False ->
+                  case Str.eq s "false" of
+                    True -> Ok False
+                    False ->
+                      case Str.eq s "0" of
+                        True -> Ok False
+                        False -> Err { message = "Expected boolean", column = 0 }
+
+-- | Make a decoder nullable (returns Maybe)
+nullable : Decoder a -> Decoder (Maybe a)
+nullable decoder =
+  \row ->
+    case row of
+      Cons DbNull _ -> Ok Nothing
+      _ ->
+        case decoder row of
+          Ok a -> Ok (Just a)
+          Err err -> Err err
