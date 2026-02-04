@@ -10,7 +10,11 @@ module Lune.Database.Query exposing (
   eq,
   where_,
   orderBy,
-  limit
+  limit,
+  toSql,
+  getDecoder,
+  getSql,
+  getParams
 )
 
 {-| Query builder for type-safe SQL construction.
@@ -33,6 +37,8 @@ users_name = column users "name"
 import Lune.Prelude exposing (String, Int, List(..), Maybe(..))
 import Lune.Database exposing (DbValue)
 import Lune.Database.Decode exposing (Decoder)
+import Lune.String as Str
+import Lune.Int as Int
 
 -- | A database table reference
 type alias Table = { name : String }
@@ -109,3 +115,87 @@ limit n query =
   , orderBy = query.orderBy
   , limitCount = Just n
   }
+
+-- | Generate SQL and parameters from a query
+toSql : Query a -> { sql : String, params : List DbValue }
+toSql query =
+  buildSqlResult query.tableName (buildWhere query.conditions 1) query.orderBy query.limitCount
+
+-- | Helper to construct the final SQL result
+buildSqlResult : String -> { sql : String, params : List DbValue } -> Maybe { column : String, order : Order } -> Maybe Int -> { sql : String, params : List DbValue }
+buildSqlResult tableName whereResult maybeOrder maybeLimit =
+  { sql = Str.append "SELECT * FROM "
+      (Str.append tableName
+        (Str.append whereResult.sql
+          (Str.append (buildOrderBy maybeOrder) (buildLimit maybeLimit))))
+  , params = whereResult.params
+  }
+
+-- | Build WHERE clause from conditions
+buildWhere : List Condition -> Int -> { sql : String, params : List DbValue }
+buildWhere conds paramNum =
+  case conds of
+    Nil -> { sql = "", params = Nil }
+    Cons cond Nil ->
+      { sql = Str.append " WHERE "
+          (Str.append cond.sql
+            (Str.append " = $" (Str.fromInt paramNum)))
+      , params = cond.params
+      }
+    Cons cond rest ->
+      combineConditions cond rest paramNum
+
+-- | Helper to combine multiple conditions with AND
+combineConditions : Condition -> List Condition -> Int -> { sql : String, params : List DbValue }
+combineConditions cond rest paramNum =
+  { sql = Str.append (buildWhere rest paramNum).sql
+      (Str.append " AND "
+        (Str.append cond.sql
+          (Str.append " = $" (Str.fromInt (Int.add paramNum (listLength cond.params))))))
+  , params = appendList (buildWhere rest paramNum).params cond.params
+  }
+
+-- | Build ORDER BY clause
+buildOrderBy : Maybe { column : String, order : Order } -> String
+buildOrderBy maybeOrder =
+  case maybeOrder of
+    Nothing -> ""
+    Just ord ->
+      Str.append " ORDER BY "
+        (Str.append ord.column
+          (case ord.order of
+            Asc -> " ASC"
+            Desc -> " DESC"))
+
+-- | Build LIMIT clause
+buildLimit : Maybe Int -> String
+buildLimit maybeLimit =
+  case maybeLimit of
+    Nothing -> ""
+    Just n -> Str.append " LIMIT " (Str.fromInt n)
+
+-- | Append two lists
+appendList : List a -> List a -> List a
+appendList xs ys =
+  case xs of
+    Nil -> ys
+    Cons x rest -> Cons x (appendList rest ys)
+
+-- | Get list length
+listLength : List a -> Int
+listLength xs =
+  case xs of
+    Nil -> 0
+    Cons _ rest -> Int.add 1 (listLength rest)
+
+-- | Get the decoder from a query
+getDecoder : Query a -> Decoder a
+getDecoder q = q.decoder
+
+-- | Get generated SQL from a query
+getSql : Query a -> String
+getSql q = (toSql q).sql
+
+-- | Get parameters from a query
+getParams : Query a -> List DbValue
+getParams q = (toSql q).params
