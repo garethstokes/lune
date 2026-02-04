@@ -9,7 +9,9 @@ module Lune.Database.Postgres exposing (
   begin,
   commit,
   rollback,
-  transaction
+  transaction,
+  createPool,
+  destroyPool
 )
 
 {-| PostgreSQL database operations.
@@ -30,7 +32,7 @@ case result of
 -}
 
 import Lune.Prelude exposing (IO, Result(..), String, Int, Unit, List(..), Maybe(..))
-import Lune.Database exposing (DbConn, DbError(..), DbValue)
+import Lune.Database exposing (DbConn, DbPool, DbError(..), DbValue)
 import Lune.Database.Decode as Decode exposing (Decoder, DecodeError)
 import Lune.Database.Query as Query exposing (Query)
 
@@ -129,3 +131,12 @@ transaction conn action =
                 case commitResult of
                   Err e -> pure (Err e)
                   Ok _ -> pure (Ok a)
+
+-- | Create a connection pool
+-- Parameters: connection string, max connections, idle timeout (seconds)
+createPool : String -> Int -> Int -> IO (Result DbError DbPool)
+createPool = prim_pgCreatePool
+
+-- | Destroy a connection pool, closing all connections
+destroyPool : DbPool -> IO (Result DbError Unit)
+destroyPool = prim_pgDestroyPool
