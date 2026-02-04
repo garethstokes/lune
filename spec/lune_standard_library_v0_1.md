@@ -65,6 +65,7 @@ It re-exports the core types and typeclasses required for most programs.
 - `List(..)`
 - `Maybe(..)`
 - `Result(..)`
+- `Pair(..)`, `Triple(..)`, `Quad(..)`, `Quint(..)`
 
 #### Exported effect and concurrency types
 
@@ -78,8 +79,10 @@ It re-exports the core types and typeclasses required for most programs.
 - `Applicative(..)`
 - `Monad(..)`
 
-No functions other than constructors and typeclass methods are exported
-directly from `Lune.Prelude`.
+#### Exported functions
+
+- `fst : Pair a b -> a`
+- `snd : Pair a b -> b`
 
 ---
 
