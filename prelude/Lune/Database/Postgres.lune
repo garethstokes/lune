@@ -2,6 +2,7 @@ module Lune.Database.Postgres exposing (
   connect,
   execute,
   query,
+  queryAs,
   close
 )
 
@@ -22,8 +23,9 @@ case result of
 ```
 -}
 
-import Lune.Prelude exposing (IO, Result, String, Int, Unit, List)
-import Lune.Database exposing (DbConn, DbError, DbValue)
+import Lune.Prelude exposing (IO, Result(..), String, Int, Unit, List(..))
+import Lune.Database exposing (DbConn, DbError(..), DbValue)
+import Lune.Database.Decode as Decode exposing (Decoder, DecodeError)
 
 -- | Connect to a PostgreSQL database
 connect : String -> IO (Result DbError DbConn)
@@ -43,3 +45,27 @@ query = prim_pgQuery
 -- | Close a database connection
 close : DbConn -> IO (Result DbError Unit)
 close = prim_pgClose
+
+-- | Query with parameters, decoding each row with the given decoder.
+-- Parameters use $1, $2, $3... syntax.
+-- Returns a list of decoded values.
+queryAs : Decoder a -> DbConn -> String -> List DbValue -> IO (Result DbError (List a))
+queryAs decoder conn sql params =
+  do
+    result <- query conn sql params
+    case result of
+      Err e -> pure (Err e)
+      Ok rows -> pure (decodeRows decoder rows)
+
+-- | Decode all rows with the given decoder
+decodeRows : Decoder a -> List (List DbValue) -> Result DbError (List a)
+decodeRows decoder rows =
+  case rows of
+    Nil -> Ok Nil
+    Cons row rest ->
+      case Decode.decodeRow decoder row of
+        Err decodeErr -> Err (QueryFailed (Decode.errorToString decodeErr))
+        Ok a ->
+          case decodeRows decoder rest of
+            Err e -> Err e
+            Ok decoded -> Ok (Cons a decoded)
