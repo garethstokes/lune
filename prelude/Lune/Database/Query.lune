@@ -340,9 +340,14 @@ buildSetClauses assigns n =
           , params = Cons a.value restResult.params
           }
 
--- | Build DELETE SQL (placeholder for Task 7)
+-- | Build DELETE SQL
 buildDeleteSql : Query a -> { sql : String, params : List DbValue }
-buildDeleteSql query = { sql = "DELETE placeholder", params = Nil }
+buildDeleteSql query =
+  case buildWhere query.conditions 1 of
+    whereResult ->
+      { sql = Str.append "DELETE FROM " (Str.append query.tableName whereResult.sql)
+      , params = whereResult.params
+      }
 
 -- | Build WHERE clause from conditions
 -- Conditions are reversed (newest first), so we reverse them for correct SQL order
