@@ -164,6 +164,10 @@ builtinSchemes =
         (TArrow (TCon "DbConn")
           (TApp (TCon "IO")
             (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
+    , ("prim_pgCommit", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -610,6 +614,7 @@ builtinEvalPrims =
     , ("prim_pgClose", BuiltinPrim 1 primPgClose)
     , ("prim_pgQuery", BuiltinPrim 3 primPgQuery)
     , ("prim_pgBegin", BuiltinPrim 1 primPgBegin)
+    , ("prim_pgCommit", BuiltinPrim 1 primPgCommit)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1913,6 +1918,25 @@ primPgBegin args =
                 pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
     _ ->
       Left (NotAFunction (VPrim 1 primPgBegin args))
+
+-- | prim_pgCommit : DbConn -> IO (Result DbError Unit)
+primPgCommit :: [Value] -> Either EvalError Value
+primPgCommit args =
+  case args of
+    [VDbConn dbid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            result <- try (PGT.commit conn)
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.QueryFailed" [VString (T.pack (show e))]])
+              Right () ->
+                pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgCommit args))
 
 -- =============================================================================
 -- DbValue Constructor Primitives
