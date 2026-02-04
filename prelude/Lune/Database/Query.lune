@@ -3,7 +3,9 @@ module Lune.Database.Query exposing (
   Column,
   Query,
   Order(..),
+  QueryType(..),
   Condition,
+  Assignment,
   table,
   column,
   select,
@@ -14,7 +16,8 @@ module Lune.Database.Query exposing (
   toSql,
   getDecoder,
   getSql,
-  getParams
+  getParams,
+  getQueryType
 )
 
 {-| Query builder for type-safe SQL construction.
@@ -34,7 +37,7 @@ users_name = column users "name"
 ```
 -}
 
-import Lune.Prelude exposing (String, Int, List(..), Maybe(..))
+import Lune.Prelude exposing (String, Int, Bool(..), List(..), Maybe(..))
 import Lune.Database exposing (DbValue)
 import Lune.Database.Decode exposing (Decoder)
 import Lune.String as Str
@@ -52,13 +55,22 @@ type Order = Asc | Desc
 -- | A WHERE condition (opaque, built with eq, gt, lt, etc.)
 type alias Condition = { sql : String, params : List DbValue }
 
+-- | Query type discriminator
+type QueryType = Select | Insert | Update | Delete
+
+-- | A column assignment for INSERT/UPDATE
+type alias Assignment = { column : String, value : DbValue }
+
 -- | A query that returns values of type 'a'
 type alias Query a =
   { tableName : String
   , decoder : Decoder a
+  , queryType : QueryType
   , conditions : List Condition
+  , assignments : List Assignment
   , orderBy : Maybe { column : String, order : Order }
   , limitCount : Maybe Int
+  , returningFlag : Bool
   }
 
 -- | Create a table reference
@@ -74,9 +86,12 @@ select : Table -> Decoder a -> Query a
 select tbl decoder =
   { tableName = tbl.name
   , decoder = decoder
+  , queryType = Select
   , conditions = Nil
+  , assignments = Nil
   , orderBy = Nothing
   , limitCount = Nothing
+  , returningFlag = False
   }
 
 -- | Create an equality condition: column = value
@@ -91,9 +106,12 @@ where_ : Condition -> Query a -> Query a
 where_ cond query =
   { tableName = query.tableName
   , decoder = query.decoder
+  , queryType = query.queryType
   , conditions = Cons cond query.conditions
+  , assignments = query.assignments
   , orderBy = query.orderBy
   , limitCount = query.limitCount
+  , returningFlag = query.returningFlag
   }
 
 -- | Add ORDER BY clause to a query
@@ -101,9 +119,12 @@ orderBy : Column a -> Order -> Query b -> Query b
 orderBy col ord query =
   { tableName = query.tableName
   , decoder = query.decoder
+  , queryType = query.queryType
   , conditions = query.conditions
+  , assignments = query.assignments
   , orderBy = Just { column = col.columnName, order = ord }
   , limitCount = query.limitCount
+  , returningFlag = query.returningFlag
   }
 
 -- | Add LIMIT clause to a query
@@ -111,9 +132,12 @@ limit : Int -> Query a -> Query a
 limit n query =
   { tableName = query.tableName
   , decoder = query.decoder
+  , queryType = query.queryType
   , conditions = query.conditions
+  , assignments = query.assignments
   , orderBy = query.orderBy
   , limitCount = Just n
+  , returningFlag = query.returningFlag
   }
 
 -- | Generate SQL and parameters from a query
@@ -223,3 +247,7 @@ getSql q = (toSql q).sql
 -- | Get parameters from a query
 getParams : Query a -> List DbValue
 getParams q = (toSql q).params
+
+-- | Get the query type
+getQueryType : Query a -> QueryType
+getQueryType q = q.queryType
