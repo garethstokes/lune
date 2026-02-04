@@ -9,6 +9,9 @@ module Lune.Database.Query exposing (
   table,
   column,
   select,
+  insert,
+  set,
+  values,
   eq,
   where_,
   orderBy,
@@ -92,6 +95,36 @@ select tbl decoder =
   , orderBy = Nothing
   , limitCount = Nothing
   , returningFlag = False
+  }
+
+-- | Start an INSERT query for a table
+insert : Table -> Decoder a -> Query a
+insert tbl decoder =
+  { tableName = tbl.name
+  , decoder = decoder
+  , queryType = Insert
+  , conditions = Nil
+  , assignments = Nil
+  , orderBy = Nothing
+  , limitCount = Nothing
+  , returningFlag = False
+  }
+
+-- | Create a column assignment
+set : Column a -> DbValue -> Assignment
+set col val = { column = col.columnName, value = val }
+
+-- | Add column assignments to an INSERT query
+values : List Assignment -> Query a -> Query a
+values assigns query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , queryType = query.queryType
+  , conditions = query.conditions
+  , assignments = appendList assigns query.assignments
+  , orderBy = query.orderBy
+  , limitCount = query.limitCount
+  , returningFlag = query.returningFlag
   }
 
 -- | Create an equality condition: column = value
