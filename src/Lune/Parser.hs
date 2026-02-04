@@ -393,10 +393,14 @@ parseAtom =
   where
     parenExpr = do
       _ <- symbol "("
-      e <- parseExpr
-      scnOptional  -- allow newline before closing paren
+      scnOptional
+      first <- parseExpr
+      rest <- many (try (scnOptional *> symbol "," *> scnOptional *> parseExpr))
+      scnOptional
       _ <- symbol ")"
-      pure e
+      case rest of
+        [] -> pure first  -- parenthesized expression
+        _  -> pure (desugarTupleExpr (first : rest))
 
     charLiteral :: Parser Char
     charLiteral = char '\'' *> L.charLiteral <* char '\''
@@ -415,6 +419,15 @@ parseListLit = do
 desugarListExpr :: [Expr] -> Expr
 desugarListExpr [] = Var "Nil"
 desugarListExpr (x:xs) = App (App (Var "Cons") x) (desugarListExpr xs)
+
+desugarTupleExpr :: [Expr] -> Expr
+desugarTupleExpr exprs =
+  case length exprs of
+    2 -> foldl App (Var "Pair") exprs
+    3 -> foldl App (Var "Triple") exprs
+    4 -> foldl App (Var "Quad") exprs
+    5 -> foldl App (Var "Quint") exprs
+    n -> error $ "Tuples must have 2-5 elements, got " ++ show n
 
 parseLambda :: Parser Expr
 parseLambda = do
