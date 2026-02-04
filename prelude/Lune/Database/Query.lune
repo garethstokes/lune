@@ -16,6 +16,8 @@ module Lune.Database.Query exposing (
   values,
   returning,
   eq,
+  gt,
+  lt,
   where_,
   orderBy,
   limit,
@@ -185,7 +187,21 @@ returning query =
 -- | Create an equality condition: column = value
 eq : Column a -> DbValue -> Condition
 eq col val =
-  { sql = col.columnName
+  { sql = Str.append col.columnName " ="
+  , params = Cons val Nil
+  }
+
+-- | Create a greater-than condition: column > value
+gt : Column a -> DbValue -> Condition
+gt col val =
+  { sql = Str.append col.columnName " >"
+  , params = Cons val Nil
+  }
+
+-- | Create a less-than condition: column < value
+lt : Column a -> DbValue -> Condition
+lt col val =
+  { sql = Str.append col.columnName " <"
   , params = Cons val Nil
   }
 
@@ -395,7 +411,7 @@ buildClauses conds paramNum =
   case conds of
     Nil -> { sql = "", params = Nil }
     Cons cond Nil ->
-      { sql = Str.append cond.sql (Str.append " = $" (Str.fromInt paramNum))
+      { sql = Str.append cond.sql (Str.append " $" (Str.fromInt paramNum))
       , params = cond.params
       }
     Cons cond rest ->
@@ -407,7 +423,7 @@ buildClauseWithRest cond rest paramNum =
   case buildClauses rest (Int.add paramNum 1) of
     restResult ->
       { sql = Str.append cond.sql
-          (Str.append " = $"
+          (Str.append " $"
             (Str.append (Str.fromInt paramNum)
               (Str.append " AND " restResult.sql)))
       , params = appendList cond.params restResult.params
