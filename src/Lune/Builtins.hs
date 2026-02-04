@@ -132,6 +132,20 @@ builtinSchemes =
     , ("prim_connSend", Forall [] [] (TArrow (TCon "Connection") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
     , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
+    -- Database primitives
+    , ("prim_pgConnect", Forall [] []
+        (TArrow (TCon "String")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "DbConn")))))
+    , ("prim_pgExecute", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TArrow (TCon "String")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Int"))))))
+    , ("prim_pgClose", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
     -- HTTP primitives
     , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) httpRequestType)))
     , ("prim_formatHttpResponse", Forall [] [] (TArrow httpResponseType (TCon "String")))
