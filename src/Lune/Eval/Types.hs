@@ -6,6 +6,8 @@ module Lune.Eval.Types
   , ConnId
   , DbConnId
   , DbConnection (..)
+  , DbValue (..)
+  , DbRow (..)
   , STMAction (..)
   , FiberState (..)
   , World (..)
@@ -24,6 +26,7 @@ import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import Lune.Type (Constraint)
 import qualified Network.Socket as NS
+import qualified Data.ByteString as BS
 import qualified Database.PostgreSQL.Simple as PG
 
 type Env = Map Text Value
@@ -38,6 +41,20 @@ type DbConnId = Int
 data DbConnection
   = PgConn PG.Connection
   -- Future: | SqliteConn SQLite.Connection
+
+-- | Database value - represents a single cell value
+data DbValue
+  = DbNull
+  | DbInt Integer
+  | DbFloat Double
+  | DbString Text
+  | DbBool Bool
+  | DbBytes BS.ByteString
+  deriving (Eq, Show)
+
+-- | Database row - column name to value mapping
+newtype DbRow = DbRow { unDbRow :: Map Text DbValue }
+  deriving (Eq, Show)
 
 data FiberState
   = FiberRunning
@@ -106,6 +123,8 @@ data Value
   | VSocket SocketId
   | VConn ConnId
   | VDbConn DbConnId
+  | VDbValue DbValue
+  | VDbRow DbRow
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -175,6 +194,10 @@ instance Show Value where
         "<conn:" <> show cid <> ">"
       VDbConn dbid ->
         "<dbconn:" <> show dbid <> ">"
+      VDbValue dv ->
+        "<dbvalue:" <> show dv <> ">"
+      VDbRow _ ->
+        "<dbrow>"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
