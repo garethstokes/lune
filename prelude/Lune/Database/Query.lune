@@ -22,6 +22,8 @@ module Lune.Database.Query exposing (
   lte,
   neq,
   like,
+  isNull,
+  isNotNull,
   where_,
   orderBy,
   limit,
@@ -238,6 +240,20 @@ like col val =
   , params = Cons val Nil
   }
 
+-- | Create an IS NULL condition: column IS NULL
+isNull : Column a -> Condition
+isNull col =
+  { sql = Str.append col.columnName " IS NULL"
+  , params = Nil
+  }
+
+-- | Create an IS NOT NULL condition: column IS NOT NULL
+isNotNull : Column a -> Condition
+isNotNull col =
+  { sql = Str.append col.columnName " IS NOT NULL"
+  , params = Nil
+  }
+
 -- | Add a WHERE condition to a query
 where_ : Condition -> Query a -> Query a
 where_ cond query =
@@ -444,23 +460,36 @@ buildClauses conds paramNum =
   case conds of
     Nil -> { sql = "", params = Nil }
     Cons cond Nil ->
-      { sql = Str.append cond.sql (Str.append " $" (Str.fromInt paramNum))
-      , params = cond.params
-      }
+      buildSingleClause cond paramNum
     Cons cond rest ->
       buildClauseWithRest cond rest paramNum
+
+-- | Build a single clause, handling parameterless conditions
+buildSingleClause : Condition -> Int -> { sql : String, params : List DbValue }
+buildSingleClause cond paramNum =
+  case cond.params of
+    Nil -> { sql = cond.sql, params = Nil }
+    _ -> { sql = Str.append cond.sql (Str.append " $" (Str.fromInt paramNum)), params = cond.params }
 
 -- | Build clause with remaining conditions
 buildClauseWithRest : Condition -> List Condition -> Int -> { sql : String, params : List DbValue }
 buildClauseWithRest cond rest paramNum =
-  case buildClauses rest (Int.add paramNum 1) of
-    restResult ->
-      { sql = Str.append cond.sql
-          (Str.append " $"
-            (Str.append (Str.fromInt paramNum)
-              (Str.append " AND " restResult.sql)))
-      , params = appendList cond.params restResult.params
-      }
+  case cond.params of
+    Nil ->
+      case buildClauses rest paramNum of
+        restResult ->
+          { sql = Str.append cond.sql (Str.append " AND " restResult.sql)
+          , params = restResult.params
+          }
+    _ ->
+      case buildClauses rest (Int.add paramNum 1) of
+        restResult ->
+          { sql = Str.append cond.sql
+              (Str.append " $"
+                (Str.append (Str.fromInt paramNum)
+                  (Str.append " AND " restResult.sql)))
+          , params = appendList cond.params restResult.params
+          }
 
 -- | Reverse a list
 reverseList : List a -> List a
