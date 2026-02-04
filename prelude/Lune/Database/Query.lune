@@ -10,6 +10,8 @@ module Lune.Database.Query exposing (
   column,
   select,
   insert,
+  update,
+  delete,
   set,
   values,
   eq,
@@ -40,11 +42,15 @@ users_name = column users "name"
 ```
 -}
 
-import Lune.Prelude exposing (String, Int, Bool(..), List(..), Maybe(..))
+import Lune.Prelude exposing (String, Int, Bool(..), List(..), Maybe(..), Unit, unit, Result(..))
 import Lune.Database exposing (DbValue)
 import Lune.Database.Decode exposing (Decoder)
 import Lune.String as Str
 import Lune.Int as Int
+
+-- | Decoder that always succeeds with Unit
+unitDecoder : Decoder Unit
+unitDecoder = \_ -> Ok unit
 
 -- | A database table reference
 type alias Table = { name : String }
@@ -103,6 +109,32 @@ insert tbl decoder =
   { tableName = tbl.name
   , decoder = decoder
   , queryType = Insert
+  , conditions = Nil
+  , assignments = Nil
+  , orderBy = Nothing
+  , limitCount = Nothing
+  , returningFlag = False
+  }
+
+-- | Start an UPDATE query for a table
+update : Table -> Decoder a -> Query a
+update tbl decoder =
+  { tableName = tbl.name
+  , decoder = decoder
+  , queryType = Update
+  , conditions = Nil
+  , assignments = Nil
+  , orderBy = Nothing
+  , limitCount = Nothing
+  , returningFlag = False
+  }
+
+-- | Start a DELETE query for a table
+delete : Table -> Query Unit
+delete tbl =
+  { tableName = tbl.name
+  , decoder = unitDecoder
+  , queryType = Delete
   , conditions = Nil
   , assignments = Nil
   , orderBy = Nothing
