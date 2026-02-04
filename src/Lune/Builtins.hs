@@ -148,6 +148,12 @@ builtinSchemes =
         (TArrow (TCon "DbConn")
           (TApp (TCon "IO")
             (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
+    -- DbValue constructors
+    , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
+    , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
+    , ("prim_dbFloat", Forall [] [] (TArrow (TCon "Float") (TCon "DbValue")))
+    , ("prim_dbString", Forall [] [] (TArrow (TCon "String") (TCon "DbValue")))
+    , ("prim_dbBool", Forall [] [] (TArrow (TCon "Bool") (TCon "DbValue")))
     -- HTTP primitives
     , ("prim_parseHttpRequest", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) httpRequestType)))
     , ("prim_formatHttpResponse", Forall [] [] (TArrow httpResponseType (TCon "String")))
