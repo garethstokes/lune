@@ -1,7 +1,13 @@
 module Lune.Database exposing (
   DbConn,
   DbError(..),
-  errorToString
+  DbValue(..),
+  errorToString,
+  null,
+  int,
+  float,
+  string,
+  bool
 )
 
 {-| Core database types for Lune.
@@ -10,7 +16,7 @@ This module provides common types shared across database backends.
 See `Lune.Database.Postgres` for PostgreSQL-specific functionality.
 -}
 
-import Lune.Prelude exposing (String)
+import Lune.Prelude exposing (Bool, Float, Int, String)
 import Lune.String as Str
 
 -- | Opaque database connection handle
@@ -22,6 +28,14 @@ type DbError =
   | QueryFailed String
   | InvalidConnection
 
+-- | Database value - represents a single cell value
+type DbValue =
+  DbNull
+  | DbInt Int
+  | DbFloat Float
+  | DbString String
+  | DbBool Bool
+
 -- | Convert a database error to a human-readable string
 errorToString : DbError -> String
 errorToString err =
@@ -29,3 +43,23 @@ errorToString err =
     ConnectionFailed msg -> Str.append "Connection failed: " msg
     QueryFailed msg -> Str.append "Query failed: " msg
     InvalidConnection -> "Invalid database connection"
+
+-- | Create a null database value
+null : DbValue
+null = prim_dbNull
+
+-- | Create an integer database value
+int : Int -> DbValue
+int = prim_dbInt
+
+-- | Create a float database value
+float : Float -> DbValue
+float = prim_dbFloat
+
+-- | Create a string database value
+string : String -> DbValue
+string = prim_dbString
+
+-- | Create a boolean database value
+bool : Bool -> DbValue
+bool = prim_dbBool
