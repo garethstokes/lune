@@ -4,7 +4,8 @@ module Lune.Database.Postgres exposing (
   query,
   queryAs,
   close,
-  run
+  run,
+  runOne
 )
 
 {-| PostgreSQL database operations.
@@ -24,7 +25,7 @@ case result of
 ```
 -}
 
-import Lune.Prelude exposing (IO, Result(..), String, Int, Unit, List(..))
+import Lune.Prelude exposing (IO, Result(..), String, Int, Unit, List(..), Maybe(..))
 import Lune.Database exposing (DbConn, DbError(..), DbValue)
 import Lune.Database.Decode as Decode exposing (Decoder, DecodeError)
 import Lune.Database.Query as Query exposing (Query)
@@ -76,3 +77,15 @@ decodeRows decoder rows =
 run : DbConn -> Query a -> IO (Result DbError (List a))
 run conn q =
   queryAs (Query.getDecoder q) conn (Query.getSql q) (Query.getParams q)
+
+-- | Execute a query and return at most one typed result
+runOne : DbConn -> Query a -> IO (Result DbError (Maybe a))
+runOne conn q =
+  do
+    result <- run conn (Query.limit 1 q)
+    case result of
+      Err e -> pure (Err e)
+      Ok rows ->
+        case rows of
+          Nil -> pure (Ok Nothing)
+          Cons row _ -> pure (Ok (Just row))
