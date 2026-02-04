@@ -168,6 +168,10 @@ builtinSchemes =
         (TArrow (TCon "DbConn")
           (TApp (TCon "IO")
             (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
+    , ("prim_pgRollback", Forall [] []
+        (TArrow (TCon "DbConn")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "DbError")) (TCon "Unit")))))
     -- DbValue constructors
     , ("prim_dbNull", Forall [] [] (TCon "DbValue"))
     , ("prim_dbInt", Forall [] [] (TArrow (TCon "Int") (TCon "DbValue")))
@@ -615,6 +619,7 @@ builtinEvalPrims =
     , ("prim_pgQuery", BuiltinPrim 3 primPgQuery)
     , ("prim_pgBegin", BuiltinPrim 1 primPgBegin)
     , ("prim_pgCommit", BuiltinPrim 1 primPgCommit)
+    , ("prim_pgRollback", BuiltinPrim 1 primPgRollback)
     -- DbValue constructors
     , ("prim_dbNull", BuiltinPrim 0 primDbNull)
     , ("prim_dbInt", BuiltinPrim 1 primDbInt)
@@ -1937,6 +1942,25 @@ primPgCommit args =
                 pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
     _ ->
       Left (NotAFunction (VPrim 1 primPgCommit args))
+
+-- | prim_pgRollback : DbConn -> IO (Result DbError Unit)
+primPgRollback :: [Value] -> Either EvalError Value
+primPgRollback args =
+  case args of
+    [VDbConn dbid] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            result <- try (PGT.rollback conn)
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.QueryFailed" [VString (T.pack (show e))]])
+              Right () ->
+                pure $ Right (world, VCon "Lune.Prelude.Ok" [VCon "Lune.Prelude.Unit" []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primPgRollback args))
 
 -- =============================================================================
 -- DbValue Constructor Primitives
