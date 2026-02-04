@@ -8,7 +8,9 @@ module Lune.Database.Query exposing (
   column,
   select,
   eq,
-  where_
+  where_,
+  orderBy,
+  limit
 )
 
 {-| Query builder for type-safe SQL construction.
@@ -86,4 +88,24 @@ where_ cond query =
   , conditions = Cons cond query.conditions
   , orderBy = query.orderBy
   , limitCount = query.limitCount
+  }
+
+-- | Add ORDER BY clause to a query
+orderBy : Column a -> Order -> Query b -> Query b
+orderBy col ord query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , conditions = query.conditions
+  , orderBy = Just { column = col.columnName, order = ord }
+  , limitCount = query.limitCount
+  }
+
+-- | Add LIMIT clause to a query
+limit : Int -> Query a -> Query a
+limit n query =
+  { tableName = query.tableName
+  , decoder = query.decoder
+  , conditions = query.conditions
+  , orderBy = query.orderBy
+  , limitCount = Just n
   }
