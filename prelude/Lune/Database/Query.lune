@@ -132,28 +132,52 @@ buildSqlResult tableName whereResult maybeOrder maybeLimit =
   }
 
 -- | Build WHERE clause from conditions
+-- Conditions are reversed (newest first), so we reverse them for correct SQL order
 buildWhere : List Condition -> Int -> { sql : String, params : List DbValue }
 buildWhere conds paramNum =
   case conds of
     Nil -> { sql = "", params = Nil }
+    Cons _ _ -> buildWhereNonEmpty (reverseList conds) paramNum
+
+-- | Build WHERE for non-empty condition list
+buildWhereNonEmpty : List Condition -> Int -> { sql : String, params : List DbValue }
+buildWhereNonEmpty conds paramNum =
+  case buildClauses conds paramNum of
+    result -> { sql = Str.append " WHERE " result.sql, params = result.params }
+
+-- | Build clause fragments for all conditions
+buildClauses : List Condition -> Int -> { sql : String, params : List DbValue }
+buildClauses conds paramNum =
+  case conds of
+    Nil -> { sql = "", params = Nil }
     Cons cond Nil ->
-      { sql = Str.append " WHERE "
-          (Str.append cond.sql
-            (Str.append " = $" (Str.fromInt paramNum)))
+      { sql = Str.append cond.sql (Str.append " = $" (Str.fromInt paramNum))
       , params = cond.params
       }
     Cons cond rest ->
-      combineConditions cond rest paramNum
+      buildClauseWithRest cond rest paramNum
 
--- | Helper to combine multiple conditions with AND
-combineConditions : Condition -> List Condition -> Int -> { sql : String, params : List DbValue }
-combineConditions cond rest paramNum =
-  { sql = Str.append (buildWhere rest paramNum).sql
-      (Str.append " AND "
-        (Str.append cond.sql
-          (Str.append " = $" (Str.fromInt (Int.add paramNum (listLength cond.params))))))
-  , params = appendList (buildWhere rest paramNum).params cond.params
-  }
+-- | Build clause with remaining conditions
+buildClauseWithRest : Condition -> List Condition -> Int -> { sql : String, params : List DbValue }
+buildClauseWithRest cond rest paramNum =
+  case buildClauses rest (Int.add paramNum 1) of
+    restResult ->
+      { sql = Str.append cond.sql
+          (Str.append " = $"
+            (Str.append (Str.fromInt paramNum)
+              (Str.append " AND " restResult.sql)))
+      , params = appendList cond.params restResult.params
+      }
+
+-- | Reverse a list
+reverseList : List a -> List a
+reverseList xs = reverseHelper xs Nil
+
+reverseHelper : List a -> List a -> List a
+reverseHelper xs acc =
+  case xs of
+    Nil -> acc
+    Cons x rest -> reverseHelper rest (Cons x acc)
 
 -- | Build ORDER BY clause
 buildOrderBy : Maybe { column : String, order : Order } -> String
