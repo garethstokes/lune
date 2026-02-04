@@ -11,6 +11,7 @@ module Lune.Builtins
 
 import Control.Exception (try, IOException, SomeException)
 import Data.Char (isDigit, isSpace)
+import Data.String (fromString)
 import Data.Maybe (mapMaybe)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
@@ -583,6 +584,7 @@ builtinEvalPrims =
     , ("prim_matchPath", BuiltinPrim 2 primMatchPath)
     -- Database primitives
     , ("prim_pgConnect", BuiltinPrim 1 primPgConnect)
+    , ("prim_pgExecute", BuiltinPrim 2 primPgExecute)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -1817,6 +1819,25 @@ primPgConnect args =
             in pure $ Right (world', VCon "Lune.Prelude.Ok" [VDbConn dbid])
     _ ->
       Left (NotAFunction (VPrim 1 primPgConnect args))
+
+-- | prim_pgExecute : DbConn -> String -> IO (Result DbError Int)
+primPgExecute :: [Value] -> Either EvalError Value
+primPgExecute args =
+  case args of
+    [VDbConn dbid, VString sql] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup dbid (worldDbConns world) of
+          Nothing ->
+            pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.InvalidConnection" []])
+          Just (PgConn conn) -> do
+            result <- try $ PG.execute_ conn (fromString (T.unpack sql))
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon "Lune.Prelude.Err" [VCon "Lune.Database.QueryFailed" [VString (T.pack (show e))]])
+              Right rowCount ->
+                pure $ Right (world, VCon "Lune.Prelude.Ok" [VInt (fromIntegral rowCount)])
+    _ ->
+      Left (NotAFunction (VPrim 2 primPgExecute args))
 
 -- =============================================================================
 -- HTTP Primitives
