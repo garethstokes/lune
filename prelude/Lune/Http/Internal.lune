@@ -1,0 +1,158 @@
+module Lune.Http.Internal exposing (
+  parseHttpRequest,
+  formatHttpResponse,
+  statusText,
+  parseMethod
+)
+
+import Lune.Prelude exposing (String, Int, Result(..), List(..), Maybe(..), Bool(..))
+import Lune.Http exposing (Request, Response, Method(..))
+import Lune.String as Str
+
+parseHttpRequest : String -> Result String Request
+parseHttpRequest raw =
+  case listMap stripCR (Str.lines raw) of
+    Nil -> Err "empty request"
+    Cons requestLine rest ->
+      case parseRequestLine requestLine of
+        Err e -> Err e
+        Ok mp -> buildRequest mp rest
+
+buildRequest : { method : Method, path : String } -> List String -> Result String Request
+buildRequest mp rest =
+  buildFromParsed mp (splitHeadersBody rest)
+
+buildFromParsed : { method : Method, path : String } -> { headers : List { key : String, value : String }, body : String } -> Result String Request
+buildFromParsed mp hb =
+  Ok { method = mp.method
+     , path = mp.path
+     , headers = hb.headers
+     , body = Str.trim hb.body
+     }
+
+formatHttpResponse : Response -> String
+formatHttpResponse resp =
+  Str.join "\n"
+    (listAppend
+      (Cons (Str.append "HTTP/1.1 "
+               (Str.append (Str.fromInt resp.status)
+                 (Str.append " " (statusText resp.status))))
+        (Cons (Str.append "Content-Length: "
+                 (Str.fromInt (Str.length resp.body)))
+          (listMap formatHeader resp.headers)))
+      (Cons "" (Cons resp.body Nil)))
+
+statusText : Int -> String
+statusText code =
+  case prim_eqInt code 200 of
+    True -> "OK"
+    False ->
+      case prim_eqInt code 201 of
+        True -> "Created"
+        False ->
+          case prim_eqInt code 204 of
+            True -> "No Content"
+            False ->
+              case prim_eqInt code 400 of
+                True -> "Bad Request"
+                False ->
+                  case prim_eqInt code 401 of
+                    True -> "Unauthorized"
+                    False ->
+                      case prim_eqInt code 403 of
+                        True -> "Forbidden"
+                        False ->
+                          case prim_eqInt code 404 of
+                            True -> "Not Found"
+                            False ->
+                              case prim_eqInt code 409 of
+                                True -> "Conflict"
+                                False ->
+                                  case prim_eqInt code 500 of
+                                    True -> "Internal Server Error"
+                                    False -> "Unknown"
+
+parseMethod : String -> Method
+parseMethod m =
+  case Str.eq (Str.toUpper m) "GET" of
+    True -> GET
+    False ->
+      case Str.eq (Str.toUpper m) "POST" of
+        True -> POST
+        False ->
+          case Str.eq (Str.toUpper m) "PUT" of
+            True -> PUT
+            False ->
+              case Str.eq (Str.toUpper m) "PATCH" of
+                True -> PATCH
+                False ->
+                  case Str.eq (Str.toUpper m) "DELETE" of
+                    True -> DELETE
+                    False -> GET
+
+-- ===== Internal helpers =====
+
+parseRequestLine : String -> Result String { method : Method, path : String }
+parseRequestLine line =
+  case splitOnSpace line of
+    Cons methodStr (Cons path _) ->
+      Ok { method = parseMethod methodStr, path = path }
+    _ -> Err "invalid request line"
+
+splitHeadersBody : List String -> { headers : List { key : String, value : String }, body : String }
+splitHeadersBody ls =
+  splitHBHelper ls Nil
+
+splitHBHelper : List String -> List { key : String, value : String } -> { headers : List { key : String, value : String }, body : String }
+splitHBHelper ls acc =
+  case ls of
+    Nil -> { headers = listReverse acc, body = "" }
+    Cons line rest ->
+      case Str.isEmpty (Str.trim line) of
+        True -> { headers = listReverse acc, body = Str.join "\n" rest }
+        False ->
+          case parseHeaderLine line of
+            Nothing -> splitHBHelper rest acc
+            Just header -> splitHBHelper rest (Cons header acc)
+
+parseHeaderLine : String -> Maybe { key : String, value : String }
+parseHeaderLine line =
+  case Str.indexOf ":" line of
+    Nothing -> Nothing
+    Just idx ->
+      Just { key = Str.trim (Str.take idx line)
+           , value = Str.trim (Str.drop (prim_addInt idx 1) line)
+           }
+
+formatHeader : { key : String, value : String } -> String
+formatHeader h = Str.append h.key (Str.append ": " h.value)
+
+splitOnSpace : String -> List String
+splitOnSpace s = Str.split " " s
+
+stripCR : String -> String
+stripCR s =
+  case Str.endsWith "\r" s of
+    True -> Str.take (prim_subInt (Str.length s) 1) s
+    False -> s
+
+listMap : (a -> b) -> List a -> List b
+listMap f xs =
+  case xs of
+    Nil -> Nil
+    Cons x rest -> Cons (f x) (listMap f rest)
+
+listReverse : List a -> List a
+listReverse xs = listReverseHelper xs Nil
+
+listReverseHelper : List a -> List a -> List a
+listReverseHelper xs acc =
+  case xs of
+    Nil -> acc
+    Cons x rest -> listReverseHelper rest (Cons x acc)
+
+listAppend : List a -> List a -> List a
+listAppend xs ys =
+  case xs of
+    Nil -> ys
+    Cons x rest -> Cons x (listAppend rest ys)
