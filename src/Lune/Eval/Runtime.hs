@@ -12,7 +12,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
+import qualified Lune.Eval.FFI as FFI
 import Lune.Eval.Types
+import Lune.Type (Type (..))
 
 runIO :: Value -> IO (Either EvalError (World, Value))
 runIO v =
@@ -75,6 +77,28 @@ evalExpr env expr =
 
     C.CDictWanted c ->
       Left (UnexpectedDictWanted c)
+
+    C.CForeignImport convention symbol ty ->
+      foreignPrim convention symbol ty
+
+foreignPrim :: S.ForeignConvention -> Text -> Type -> Either EvalError Value
+foreignPrim S.CCall symbol ty =
+  let arity = countArgs ty
+   in Right (VPrim arity (foreignCall symbol) [])
+  where
+    countArgs t =
+      case t of
+        TArrow _ b -> 1 + countArgs b
+        _ -> 0
+
+foreignCall :: Text -> [Value] -> Either EvalError Value
+foreignCall symbol args =
+  Right $ VIO $ \world -> do
+    result <- FFI.ffiCall symbol args
+    case result of
+      Left err -> pure $ Left err
+      Right val -> pure $ Right (world, val)
+
 
 force :: Value -> Either EvalError Value
 force v =
