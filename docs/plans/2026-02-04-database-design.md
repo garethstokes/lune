@@ -20,7 +20,7 @@ A type-safe database layer for Lune, starting with PostgreSQL. Built using verti
 
 ```
 Lune.Database              -- Core types (Connection, Error, Query)
-Lune.Database.Postgres     -- Postgres connection and types
+Lune.Database.Postgres.Connection -- Postgres connection and types
 Lune.Database.Query        -- Query builder DSL
 Lune.Database.Schema       -- Table and Column definitions
 ```
@@ -29,32 +29,31 @@ Lune.Database.Schema       -- Table and Column definitions
 
 ## Milestone 1: Hello Postgres
 
-**Goal:** Connect to PostgreSQL and execute raw SQL, proving the Haskell FFI pipeline works.
+**Goal:** Connect to PostgreSQL and execute raw SQL, proving the pure Lune wire protocol works.
 
 **Delivers:**
 ```lune
-import Lune.Database.Postgres as Postgres
+import Lune.Database.Postgres.Connection as Conn
+import Lune.Database.Postgres.Query as Query
 import Lune.Database exposing (Connection, Error)
 
 main : IO Unit
 main =
   do
-    result <- Postgres.connect "postgres://localhost/testdb"
+    result <- Conn.connect "localhost" 5432 "testdb" "user" Nothing
     case result of
-      Err e -> IO.println (Database.errorToString e)
+      Err e -> IO.println (show e) -- Assuming a Show instance for the error
       Ok conn ->
         do
-          queryResult <- Postgres.execute conn "SELECT 1 as num"
+          queryResult <- Query.query conn "SELECT 1 as num"
           case queryResult of
-            Err e -> IO.println (Database.errorToString e)
+            Err e -> IO.println (show e)
             Ok rows -> IO.println "Query succeeded!"
 ```
 
 **Implementation:**
-- Add `postgresql-simple` to Haskell dependencies
-- `prim_pgConnect : String -> IO (Result Error Connection)`
-- `prim_pgExecute : Connection -> String -> IO (Result Error RawResult)`
-- `Connection` is an opaque type wrapping Haskell's connection
+- Pure Lune implementation of the PostgreSQL wire protocol.
+- `Connection` is an opaque type wrapping the socket and state.
 - `Error` ADT: `ConnectionFailed String | QueryFailed String | ...`
 
 **Test:** Example that connects and runs `SELECT 1`.

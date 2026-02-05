@@ -9,25 +9,11 @@ The PostgreSQL FFI-based primitives (`prim_pg*`) have been removed in favor of a
 - **30_Generic_Pool_Test.lune** - Demonstrates the generic connection pool with PostgreSQL
 - **31_SQLite_Pool_Example.lune** - Shows how to use the generic pool with SQLite (hypothetical)
 
-### Deprecated Examples (FFI-based - No Longer Work)
+### New Pure Lune API
 
-The following examples used the old FFI-based `Lune.Database.Postgres` module which has been removed:
-
-- 20_Hello_Postgres.lune
-- 21_Database_Decode.lune
-- 22_Database_Query.lune
-- 23_Database_CRUD.lune
-- 24_Database_Helpers.lune
-- 25_Database_Transaction.lune
-- 26_Database_Pool.lune
-
-These examples demonstrate concepts that are still valid, but need to be rewritten to use the pure Lune modules:
+The new API uses modules for connection, querying, and pooling.
 
 ```lune
--- Old FFI approach (REMOVED):
-import Lune.Database.Postgres as Postgres
-result <- Postgres.connect "postgresql://localhost/testdb"
-
 -- New pure Lune approach:
 import Lune.Database.Postgres.Connection as Conn
 import Lune.Database.Postgres.Query as Query

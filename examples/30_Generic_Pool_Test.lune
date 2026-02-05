@@ -13,6 +13,8 @@ import Lune.IO as IO
 import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..))
 import Lune.Database.Postgres.Pool as Pool
 import Lune.Database.Postgres.Query as Query
+import Lune.Database.Postgres.Connection as Conn
+import Lune.Json.Encode as Encode
 
 main : IO Unit
 main =
@@ -42,7 +44,7 @@ main =
       Err e ->
         do
           IO.print "Error: "
-          IO.println e.message
+          IO.println (Encode.encode 0 (Conn.errorEncoder e))
       Ok rows ->
         do
           IO.println "Query successful!"

@@ -5,8 +5,6 @@ module Lune.Eval.Types
   , SocketId
   , ConnId
   , TlsConnId
-  , DbValue (..)
-  , DbRow (..)
   , STMAction (..)
   , FiberState (..)
   , World (..)
@@ -35,20 +33,6 @@ type FiberId = Int
 type SocketId = Int
 type ConnId = Int
 type TlsConnId = Int
-
--- | Database value - represents a single cell value
-data DbValue
-  = DbNull
-  | DbInt Integer
-  | DbFloat Double
-  | DbString Text
-  | DbBool Bool
-  | DbBytes BS.ByteString
-  deriving (Eq, Show)
-
--- | Database row - column name to value mapping
-newtype DbRow = DbRow { unDbRow :: Map Text DbValue }
-  deriving (Eq, Show)
 
 data FiberState
   = FiberRunning
@@ -117,10 +101,8 @@ data Value
   | VFiber FiberId
   | VSocket SocketId
   | VConn ConnId
-  | VDbValue DbValue
   | VBytes BS.ByteString
   | VTlsConn TlsConnId
-  | VDbRow DbRow
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -188,10 +170,6 @@ instance Show Value where
         "<socket:" <> show sid <> ">"
       VConn cid ->
         "<conn:" <> show cid <> ">"
-      VDbValue dv ->
-        "<dbvalue:" <> show dv <> ">"
-      VDbRow _ ->
-        "<dbrow>"
       VBytes bs ->
         "<bytes:" <> show (BS.length bs) <> ">"
       VTlsConn tid ->

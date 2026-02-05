@@ -1,0 +1,1 @@
+ModuleParseError "prelude/Lune/Database/Postgres/Pool.lune" "prelude/Lune/Database/Postgres/Pool.lune:54:6:\n   |\n54 |     }\n   |      ^\nunexpected \"<newline> \"\nexpecting \"in\" or '.'\n"
