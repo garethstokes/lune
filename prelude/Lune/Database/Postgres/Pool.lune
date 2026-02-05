@@ -1,0 +1,187 @@
+module Lune.Database.Postgres.Pool exposing (
+  Pool,
+  PoolConfig,
+  createPool,
+  destroyPool,
+  withConnection
+)
+
+{-| STM-based PostgreSQL connection pool.
+
+Manages a pool of reusable connections with configurable maximum size.
+Uses STM (Atomic) for thread-safe acquire/release without locks.
+
+When all connections are in use, `withConnection` blocks (via STM retry)
+until one is released by another fiber.
+
+Example:
+```
+pool <- Pool.createPool
+  { host = "localhost"
+  , port = 5432
+  , database = "mydb"
+  , user = "myuser"
+  , password = Nothing
+  , maxConnections = 10
+  }
+result <- Pool.withConnection pool (\conn ->
+  PgQuery.query conn "SELECT 1"
+)
+Pool.destroyPool pool
+```
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String, Maybe(..), Bool(..), Monad(..))
+import Lune.Atomic as Atomic exposing (Atomic, Shared)
+import Lune.Int as Int
+import Lune.Database.Postgres.Connection as Conn exposing (PgConn)
+import Lune.Database.Postgres.Protocol exposing (PgError)
+
+type alias PoolConfig =
+  { host : String
+  , port : Int
+  , database : String
+  , user : String
+  , password : Maybe String
+  , maxConnections : Int
+  }
+
+type alias Pool =
+  { config : PoolConfig
+  , idle : Shared (List PgConn)
+  , inUse : Shared Int
+  , closed : Shared Bool
+  }
+
+-- | Create a new connection pool
+-- No connections are opened eagerly; they are created on demand up to maxConnections.
+createPool : PoolConfig -> IO Pool
+createPool config =
+  do
+    idleVar <- Atomic.commit (Atomic.new Nil)
+    inUseVar <- Atomic.commit (Atomic.new 0)
+    closedVar <- Atomic.commit (Atomic.new False)
+    pure { config = config, idle = idleVar, inUse = inUseVar, closed = closedVar }
+
+-- | Destroy the pool, closing all idle connections
+destroyPool : Pool -> IO Unit
+destroyPool pool =
+  do
+    conns <- Atomic.commit
+      (do
+        Atomic.write pool.closed True
+        idleConns <- Atomic.read pool.idle
+        Atomic.write pool.idle Nil
+        pure idleConns
+      )
+    closeAll conns
+
+closeAll : List PgConn -> IO Unit
+closeAll conns =
+  case conns of
+    Nil -> pure Unit
+    Cons c rest ->
+      do
+        _ <- Conn.close c
+        closeAll rest
+
+-- | Use a connection from the pool, automatically releasing it when done
+-- If an error occurs during the action, the connection is still returned to the pool.
+withConnection : Pool -> (PgConn -> IO (Result PgError a)) -> IO (Result PgError a)
+withConnection pool action =
+  do
+    acquireResult <- acquire pool
+    case acquireResult of
+      Err e -> pure (Err e)
+      Ok conn ->
+        do
+          result <- action conn
+          release pool conn
+          pure result
+
+-- Internal: acquire a connection from the pool
+acquire : Pool -> IO (Result PgError PgConn)
+acquire pool =
+  do
+    outcome <- Atomic.commit (tryAcquire pool)
+    handleAcquireOutcome pool outcome
+
+-- STM transaction: try to take an idle connection or reserve a slot for a new one
+-- Returns: Ok (Just conn) if we got an idle connection
+--          Ok Nothing if we reserved a slot and should open a new connection
+--          Err if the pool is closed
+--          Retries (waits) if at max capacity with no idle connections
+tryAcquire : Pool -> Atomic (Result PgError (Maybe PgConn))
+tryAcquire pool =
+  do
+    isClosed <- Atomic.read pool.closed
+    case isClosed of
+      True -> pure (Err { severity = "ERROR", code = "08003", message = "Connection pool is closed" })
+      False ->
+        do
+          idleConns <- Atomic.read pool.idle
+          case idleConns of
+            Cons conn rest ->
+              do
+                Atomic.write pool.idle rest
+                used <- Atomic.read pool.inUse
+                Atomic.write pool.inUse (Int.add used 1)
+                pure (Ok (Just conn))
+            Nil ->
+              do
+                used <- Atomic.read pool.inUse
+                case Int.lt used pool.config.maxConnections of
+                  True ->
+                    do
+                      Atomic.write pool.inUse (Int.add used 1)
+                      pure (Ok Nothing)
+                  False ->
+                    Atomic.wait
+
+handleAcquireOutcome : Pool -> Result PgError (Maybe PgConn) -> IO (Result PgError PgConn)
+handleAcquireOutcome pool outcome =
+  case outcome of
+    Err e -> pure (Err e)
+    Ok maybeConn ->
+      case maybeConn of
+        Just conn -> pure (Ok conn)
+        Nothing -> openNewConnection pool
+
+-- Internal: open a new connection using the pool's config
+openNewConnection : Pool -> IO (Result PgError PgConn)
+openNewConnection pool =
+  do
+    connResult <- connectWithConfig pool.config
+    case connResult of
+      Err e ->
+        do
+          Atomic.commit
+            (do
+              used <- Atomic.read pool.inUse
+              Atomic.write pool.inUse (Int.sub used 1)
+            )
+          pure (Err e)
+      Ok conn -> pure (Ok conn)
+
+connectWithConfig : PoolConfig -> IO (Result PgError PgConn)
+connectWithConfig config =
+  case config.password of
+    Nothing -> Conn.connect config.host config.port config.database config.user
+    Just pw -> Conn.connectWithPassword config.host config.port config.database config.user pw
+
+-- Internal: release a connection back to the pool
+release : Pool -> PgConn -> IO Unit
+release pool conn =
+  Atomic.commit
+    (do
+      isClosed <- Atomic.read pool.closed
+      case isClosed of
+        True -> pure Unit
+        False ->
+          do
+            idleConns <- Atomic.read pool.idle
+            Atomic.write pool.idle (Cons conn idleConns)
+            used <- Atomic.read pool.inUse
+            Atomic.write pool.inUse (Int.sub used 1)
+            pure Unit
+    )
