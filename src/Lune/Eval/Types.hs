@@ -4,11 +4,7 @@ module Lune.Eval.Types
   , FiberId
   , SocketId
   , ConnId
-  , DbConnId
-  , DbPoolId
   , TlsConnId
-  , DbConnection (..)
-  , DbPool (..)
   , DbValue (..)
   , DbRow (..)
   , STMAction (..)
@@ -30,8 +26,6 @@ import qualified Lune.Syntax as S
 import Lune.Type (Constraint)
 import qualified Network.Socket as NS
 import qualified Data.ByteString as BS
-import qualified Database.PostgreSQL.Simple as PG
-import Data.Pool (Pool)
 import qualified Network.Connection as NC
 
 type Env = Map Text Value
@@ -40,17 +34,7 @@ type TVarId = Int
 type FiberId = Int
 type SocketId = Int
 type ConnId = Int
-type DbConnId = Int
-type DbPoolId = Int
 type TlsConnId = Int
-
--- | Generic database connection - supports multiple backends
-data DbConnection
-  = PgConn PG.Connection
-  -- Future: | SqliteConn SQLite.Connection
-
--- | Database connection pool
-data DbPool = PgPool (Pool PG.Connection)
 
 -- | Database value - represents a single cell value
 data DbValue
@@ -99,10 +83,6 @@ data World = World
   , worldNextSocketId :: SocketId     -- Next Socket ID
   , worldConns :: IntMap NS.Socket    -- Connections (also sockets)
   , worldNextConnId :: ConnId         -- Next Connection ID
-  , worldDbConns :: IntMap DbConnection  -- Database connections
-  , worldNextDbConnId :: DbConnId        -- Next DB connection ID
-  , worldDbPools :: IntMap DbPool        -- Database connection pools
-  , worldNextDbPoolId :: DbPoolId        -- Next DB pool ID
   , worldTlsConns :: IntMap NC.Connection  -- TLS connections
   , worldNextTlsConnId :: TlsConnId        -- Next TLS connection ID
   , worldTlsContext :: Maybe NC.ConnectionContext  -- Shared TLS context
@@ -114,8 +94,6 @@ instance Show World where
          <> ", fibers = " <> show (IntMap.size (worldFibers w)) <> " entries"
          <> ", sockets = " <> show (IntMap.size (worldSockets w)) <> " entries"
          <> ", conns = " <> show (IntMap.size (worldConns w)) <> " entries"
-         <> ", dbconns = " <> show (IntMap.size (worldDbConns w)) <> " entries"
-         <> ", dbpools = " <> show (IntMap.size (worldDbPools w)) <> " entries"
          <> ", tlsconns = " <> show (IntMap.size (worldTlsConns w)) <> " entries"
          <> " }"
 
@@ -139,8 +117,6 @@ data Value
   | VFiber FiberId
   | VSocket SocketId
   | VConn ConnId
-  | VDbConn DbConnId
-  | VDbPool DbPoolId
   | VDbValue DbValue
   | VBytes BS.ByteString
   | VTlsConn TlsConnId
@@ -212,10 +188,6 @@ instance Show Value where
         "<socket:" <> show sid <> ">"
       VConn cid ->
         "<conn:" <> show cid <> ">"
-      VDbConn dbid ->
-        "<dbconn:" <> show dbid <> ">"
-      VDbPool poolid ->
-        "<dbpool:" <> show poolid <> ">"
       VDbValue dv ->
         "<dbvalue:" <> show dv <> ">"
       VDbRow _ ->

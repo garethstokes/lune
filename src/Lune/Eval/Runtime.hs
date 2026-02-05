@@ -18,7 +18,7 @@ runIO :: Value -> IO (Either EvalError (World, Value))
 runIO v =
   case v of
     VIO act ->
-      act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing)
+      act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing)
     other ->
       pure (Left (NotAnIO other))
 
