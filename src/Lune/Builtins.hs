@@ -210,6 +210,16 @@ builtinSchemes =
             (TApp (TCon "Maybe")
               (TApp (TCon "List")
                 (TRecord [("key", TCon "String"), ("value", TCon "String")]))))))
+    , ("prim_parseQueryString", Forall [] []
+        (TArrow (TCon "String")
+          (TApp (TCon "List")
+            (TRecord [("key", TCon "String"), ("value", TCon "String")]))))
+    , ("prim_getHeader", Forall [] []
+        (TArrow (TCon "String")
+          (TArrow
+            (TApp (TCon "List")
+              (TRecord [("key", TCon "String"), ("value", TCon "String")]))
+            (TApp (TCon "Maybe") (TCon "String")))))
     ]
 
 builtinInstanceDicts :: Map (Text, Text) Text
@@ -636,6 +646,8 @@ builtinEvalPrims =
     , ("prim_apiAndThen", BuiltinPrim 2 primApiAndThen)
     -- Path matching primitive
     , ("prim_matchPath", BuiltinPrim 2 primMatchPath)
+    , ("prim_parseQueryString", BuiltinPrim 1 primParseQueryString)
+    , ("prim_getHeader", BuiltinPrim 2 primGetHeader)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -2364,3 +2376,43 @@ primMatchPath args =
 
     paramToValue :: (Text, Text) -> Value
     paramToValue (k, v) = VRecord $ Map.fromList [("key", VString k), ("value", VString v)]
+
+-- | prim_parseQueryString : String -> List { key : String, value : String }
+-- Parses query parameters from a URL path like "/foo?a=1&b=2"
+-- Returns the key-value pairs. If no query string, returns empty list.
+primParseQueryString :: [Value] -> Either EvalError Value
+primParseQueryString args =
+  case args of
+    [VString rawPath] ->
+      let queryStr = case T.breakOn "?" rawPath of
+            (_, rest) | T.null rest -> ""
+                      | otherwise -> T.drop 1 rest
+          pairs = if T.null queryStr then []
+                  else map parsePair (T.splitOn "&" queryStr)
+      in Right (listToValue (map pairToValue pairs))
+    _ ->
+      Left (NotAFunction (VPrim 1 primParseQueryString args))
+  where
+    parsePair :: Text -> (Text, Text)
+    parsePair p =
+      case T.breakOn "=" p of
+        (k, rest) | T.null rest -> (k, "")
+                  | otherwise -> (k, T.drop 1 rest)
+
+    pairToValue :: (Text, Text) -> Value
+    pairToValue (k, v) = VRecord $ Map.fromList [("key", VString k), ("value", VString v)]
+
+-- | prim_getHeader : String -> List { key : String, value : String } -> Maybe String
+-- Case-insensitive header lookup.
+primGetHeader :: [Value] -> Either EvalError Value
+primGetHeader args =
+  case args of
+    [VString name, headersVal] ->
+      let headers = valueToHeaderList headersVal
+          lowerName = T.toLower name
+          found = lookup lowerName [(T.toLower k, v) | (k, v) <- headers]
+      in case found of
+        Nothing -> Right (VCon (preludeCon "Nothing") [])
+        Just v -> Right (VCon (preludeCon "Just") [VString v])
+    _ ->
+      Left (NotAFunction (VPrim 2 primGetHeader args))
