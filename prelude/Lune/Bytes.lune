@@ -1,0 +1,85 @@
+module Lune.Bytes exposing (
+  Bytes,
+  empty,
+  fromList,
+  toList,
+  length,
+  concat,
+  slice,
+  packInt32BE,
+  unpackInt32BE,
+  packInt16BE,
+  unpackInt16BE
+)
+
+{-| Binary data manipulation.
+
+This module provides a `Bytes` type for working with raw binary data,
+useful for implementing wire protocols (PostgreSQL, Redis, etc.).
+
+Example:
+```
+-- Pack a message length as 4 bytes big-endian
+let lenBytes = Bytes.packInt32BE 42
+
+-- Concatenate bytes
+let header = Bytes.concat typeBytes lenBytes
+
+-- Unpack received data
+case Bytes.unpackInt32BE receivedBytes of
+  Ok len -> -- use the length
+  Err e -> -- handle error
+```
+-}
+
+import Lune.Prelude exposing (Result, Int, List, Unit)
+import Lune.IO exposing (Error)
+
+-- | Opaque binary data type, backed by ByteString
+type Bytes = Bytes#
+
+-- | Empty bytes (zero length)
+empty : Bytes
+empty = prim_bytesEmpty
+
+-- | Create bytes from a list of integers (0-255 each)
+-- Values are truncated to the low 8 bits
+fromList : List Int -> Bytes
+fromList = prim_bytesFromList
+
+-- | Convert bytes to a list of integers (0-255 each)
+toList : Bytes -> List Int
+toList = prim_bytesToList
+
+-- | Get the length of bytes in number of bytes
+length : Bytes -> Int
+length = prim_bytesLength
+
+-- | Concatenate two byte sequences
+concat : Bytes -> Bytes -> Bytes
+concat = prim_bytesConcat
+
+-- | Extract a slice: slice start length bytes
+-- Returns bytes from position `start` with `length` bytes
+slice : Int -> Int -> Bytes -> Bytes
+slice = prim_bytesSlice
+
+-- | Pack a 32-bit integer as 4 bytes, big-endian
+-- Used for message lengths in wire protocols
+packInt32BE : Int -> Bytes
+packInt32BE = prim_bytesPackInt32BE
+
+-- | Unpack first 4 bytes as a 32-bit big-endian integer
+-- Returns Err if bytes is shorter than 4 bytes
+unpackInt32BE : Bytes -> Result Error Int
+unpackInt32BE = prim_bytesUnpackInt32BE
+
+-- | Pack a 16-bit integer as 2 bytes, big-endian
+-- Used for field counts in wire protocols
+packInt16BE : Int -> Bytes
+packInt16BE = prim_bytesPackInt16BE
+
+-- | Unpack first 2 bytes as a 16-bit big-endian integer
+-- Returns Err if bytes is shorter than 2 bytes
+unpackInt16BE : Bytes -> Result Error Int
+unpackInt16BE = prim_bytesUnpackInt16BE

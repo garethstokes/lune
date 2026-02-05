@@ -1,0 +1,26 @@
+=== Bytes Manipulation Example ===
+
+Creating bytes from [72, 101, 108, 108, 111] (ASCII 'Hello')
+Length: 5
+
+Packing 305419896 (0x12345678) as 4 bytes big-endian
+Bytes: [18, 52, 86, 120]
+Unpacked back: 305419896
+
+Packing 1000 as 2 bytes big-endian
+Bytes: [3, 232]
+Unpacked back: 1000
+
+Concatenating 2-byte and 4-byte sequences
+Total length: 6
+
+Slicing bytes 2-6 (the 32-bit portion from header)
+Slice length: 4
+
+=== Wire Protocol Pattern ===
+1. Read 1 byte for message type
+2. Read 4 bytes, unpack as Int32 for length
+3. Read (length - 4) bytes for payload
+4. Decode payload based on message type
+
+Done!

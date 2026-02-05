@@ -1,0 +1,121 @@
+module BytesExample exposing (main)
+
+{-| Bytes manipulation example.
+
+This demonstrates the Bytes module for binary data:
+- Creating bytes from lists
+- Packing/unpacking integers (big-endian)
+- Concatenation and slicing
+
+These primitives are the foundation for implementing
+wire protocols (PostgreSQL, Redis, etc.) in pure Lune.
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String)
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.String as Str
+
+main : IO Unit
+main =
+  do
+    IO.println "=== Bytes Manipulation Example ==="
+    IO.println ""
+    demoFromList
+    demoPack32
+    demoPack16
+    demoConcat
+    demoSlice
+    demoWireProtocol
+
+-- Create bytes from a list of ints
+demoFromList : IO Unit
+demoFromList =
+  do
+    IO.println "Creating bytes from [72, 101, 108, 108, 111] (ASCII 'Hello')"
+    IO.println (Str.append "Length: " (Str.fromInt (Bytes.length helloBytes)))
+    IO.println ""
+
+helloBytes : Bytes
+helloBytes = Bytes.fromList (Cons 72 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))))
+
+-- Pack and unpack a 32-bit integer
+demoPack32 : IO Unit
+demoPack32 =
+  do
+    IO.println "Packing 305419896 (0x12345678) as 4 bytes big-endian"
+    IO.println (Str.append "Bytes: " (showIntList (Bytes.toList packed32)))
+    case Bytes.unpackInt32BE packed32 of
+      Ok n ->
+        IO.println (Str.append "Unpacked back: " (Str.fromInt n))
+      Err _ ->
+        IO.println "Error unpacking"
+    IO.println ""
+
+packed32 : Bytes
+packed32 = Bytes.packInt32BE 305419896
+
+-- Pack a 16-bit integer
+demoPack16 : IO Unit
+demoPack16 =
+  do
+    IO.println "Packing 1000 as 2 bytes big-endian"
+    IO.println (Str.append "Bytes: " (showIntList (Bytes.toList packed16)))
+    case Bytes.unpackInt16BE packed16 of
+      Ok n ->
+        IO.println (Str.append "Unpacked back: " (Str.fromInt n))
+      Err _ ->
+        IO.println "Error unpacking"
+    IO.println ""
+
+packed16 : Bytes
+packed16 = Bytes.packInt16BE 1000
+
+-- Concatenation
+demoConcat : IO Unit
+demoConcat =
+  do
+    IO.println "Concatenating 2-byte and 4-byte sequences"
+    IO.println (Str.append "Total length: " (Str.fromInt (Bytes.length header)))
+    IO.println ""
+
+header : Bytes
+header = Bytes.concat packed16 packed32
+
+-- Slicing
+demoSlice : IO Unit
+demoSlice =
+  do
+    IO.println "Slicing bytes 2-6 (the 32-bit portion from header)"
+    IO.println (Str.append "Slice length: " (Str.fromInt (Bytes.length sliced)))
+    IO.println ""
+
+sliced : Bytes
+sliced = Bytes.slice 2 4 header
+
+-- Wire protocol pattern
+demoWireProtocol : IO Unit
+demoWireProtocol =
+  do
+    IO.println "=== Wire Protocol Pattern ==="
+    IO.println "1. Read 1 byte for message type"
+    IO.println "2. Read 4 bytes, unpack as Int32 for length"
+    IO.println "3. Read (length - 4) bytes for payload"
+    IO.println "4. Decode payload based on message type"
+    IO.println ""
+    IO.println "Done!"
+
+-- Helper to show a list of ints
+showIntList : List Int -> String
+showIntList xs =
+  case xs of
+    Nil -> "[]"
+    Cons n rest ->
+      Str.append "[" (showIntListHelper n rest)
+
+showIntListHelper : Int -> List Int -> String
+showIntListHelper n rest =
+  case rest of
+    Nil -> Str.append (Str.fromInt n) "]"
+    Cons m more ->
+      Str.append (Str.fromInt n) (Str.append ", " (showIntListHelper m more))
