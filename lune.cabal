@@ -30,6 +30,7 @@ library
 
   other-modules:
       Lune.Builtins
+      Lune.Eval.FFI
       Lune.Eval.Types
       Lune.Eval.Runtime
 
@@ -46,7 +47,8 @@ library
       time,
       transformers,
       megaparsec,
-      parser-combinators
+      parser-combinators,
+      unix >= 2.7
 
   default-language: Haskell2010
   default-extensions: OverloadedStrings
