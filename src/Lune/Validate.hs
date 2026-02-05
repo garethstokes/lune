@@ -84,6 +84,9 @@ validateDecl env decl =
     DeclClass _ _ supers methods -> do
       mapM_ (validateConstraint env) supers
       mapM_ (validateClassMethodSig env) methods
+    DeclForeignImport _ _ _ (QualType constraints ty) -> do
+      mapM_ (validateConstraint env) constraints
+      validateType env ty
     DeclValue {} ->
       Right ()
     DeclInstance {} ->

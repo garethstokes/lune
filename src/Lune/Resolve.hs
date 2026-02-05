@@ -147,9 +147,13 @@ buildExportTable modules =
 exportsForModule :: S.Module -> Either ResolveError ModuleExports
 exportsForModule m = do
   let definedValues =
-        Set.fromList
+        Set.fromList $
           [ name
           | S.DeclValue name _ _ <- S.modDecls m
+          ]
+          <>
+          [ name
+          | S.DeclForeignImport _ _ name _ <- S.modDecls m
           ]
 
       definedTypes =
@@ -396,9 +400,13 @@ localValueMap modName decls =
   valuesMap <> ctorsMap <> methodsMap
   where
     valuesMap =
-      Map.fromList
+      Map.fromList $
         [ (name, qualifyName modName name)
         | S.DeclValue name _ _ <- decls
+        ]
+        <>
+        [ (name, qualifyName modName name)
+        | S.DeclForeignImport _ _ name _ <- decls
         ]
 
     ctorsMap =
@@ -442,6 +450,8 @@ resolveDecl scope decl =
           )
           methods
       Right (S.DeclInstance cls headTy methods')
+    S.DeclForeignImport convention symbol name qualTy ->
+      Right (S.DeclForeignImport convention symbol (qualifyName (scopeModule scope) name) qualTy)
   where
     qualCtor (S.TypeCtor name tys) =
       S.TypeCtor (qualifyName (scopeModule scope) name) tys

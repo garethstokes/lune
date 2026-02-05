@@ -86,7 +86,8 @@ typecheckModule m = do
       instanceCandidates = builtinInstanceCandidates <> instanceCandidatesFromEnv aliasEnv instanceEnv
 
   checkInstanceMethods env0 aliasEnv classEnv instanceCandidates instanceEnv
-  go classEnv env0 [] instanceCandidates (valueDecls decls)
+  valuePairs <- go classEnv env0 [] instanceCandidates (valueDecls decls)
+  pure (foreignSchemes ++ valuePairs)
   where
     m' = desugarModule m
     decls = S.modDecls m'
@@ -94,6 +95,11 @@ typecheckModule m = do
     aliasEnv = buildAliasEnv decls
     sigEnv = buildSigEnv aliasEnv decls
     ctorEnv = buildCtorEnv aliasEnv decls
+
+    foreignSchemes =
+      [ (name, schemeFromQualType aliasEnv qualTy)
+      | S.DeclForeignImport _ _ name qualTy <- decls
+      ]
 
     go _ _ acc _ [] =
       Right (reverse acc)
@@ -111,6 +117,12 @@ checkSigKinds kindEnv classKinds =
     step () decl =
       case decl of
         S.DeclTypeSig name qualTy ->
+          case kindCheckQualType kindEnv classKinds qualTy of
+            Left err ->
+              Left (InTypeSig name err)
+            Right () ->
+              Right ()
+        S.DeclForeignImport _ _ name qualTy ->
           case kindCheckQualType kindEnv classKinds qualTy of
             Left err ->
               Left (InTypeSig name err)
@@ -361,6 +373,10 @@ buildSigEnv aliasEnv decls =
     [ (name, schemeFromQualType aliasEnv qualTy)
     | S.DeclTypeSig name qualTy <- decls
     ]
+    <> Map.fromList
+      [ (name, schemeFromQualType aliasEnv qualTy)
+      | S.DeclForeignImport _ _ name qualTy <- decls
+      ]
 
 buildCtorEnv :: AliasEnv -> [S.Decl] -> TypeEnv
 buildCtorEnv aliasEnv decls =
