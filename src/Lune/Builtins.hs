@@ -556,6 +556,7 @@ builtinEvalPrims =
     , ("prim_subInt", BuiltinPrim 2 primSubInt)
     , ("prim_mulInt", BuiltinPrim 2 primMulInt)
     , ("prim_showInt", BuiltinPrim 1 primShowInt)
+    , ("prim_eqInt", BuiltinPrim 2 primEqInt)
     -- Float primitives
     , ("prim_addFloat", BuiltinPrim 2 primAddFloat)
     , ("prim_subFloat", BuiltinPrim 2 primSubFloat)
@@ -867,6 +868,14 @@ primGeInt args =
       if a >= b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
     _ ->
       Left (NotAFunction (VPrim 2 primGeInt args))
+
+primEqInt :: [Value] -> Either EvalError Value
+primEqInt args =
+  case args of
+    [VInt a, VInt b] ->
+      if a == b then Right (VCon "Lune.Prelude.True" []) else Right (VCon "Lune.Prelude.False" [])
+    _ ->
+      Left (NotAFunction (VPrim 2 primEqInt args))
 
 primAppendString :: [Value] -> Either EvalError Value
 primAppendString args =

@@ -1,0 +1,46 @@
+module Lune.Char exposing (
+  toInt,
+  fromInt,
+  toLower,
+  toUpper,
+  isSpace,
+  eq
+)
+
+import Lune.Prelude exposing (Int, Char, Bool(..))
+
+toInt : Char -> Int
+toInt = prim_charToInt
+
+fromInt : Int -> Char
+fromInt = prim_intToChar
+
+toLower : Char -> Char
+toLower c =
+  case prim_and (prim_geInt (toInt c) 65) (prim_leInt (toInt c) 90) of
+    True -> fromInt (prim_addInt (toInt c) 32)
+    False -> c
+
+toUpper : Char -> Char
+toUpper c =
+  case prim_and (prim_geInt (toInt c) 97) (prim_leInt (toInt c) 122) of
+    True -> fromInt (prim_subInt (toInt c) 32)
+    False -> c
+
+isSpace : Char -> Bool
+isSpace c =
+  case prim_eqInt (toInt c) 32 of
+    True -> True
+    False ->
+      case prim_eqInt (toInt c) 9 of
+        True -> True
+        False ->
+          case prim_eqInt (toInt c) 10 of
+            True -> True
+            False ->
+              case prim_eqInt (toInt c) 13 of
+                True -> True
+                False -> False
+
+eq : Char -> Char -> Bool
+eq a b = prim_eqInt (toInt a) (toInt b)

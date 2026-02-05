@@ -1,8 +1,18 @@
-module Lune.String exposing (append, eq, fromInt, fromFloat, toInt)
+module Lune.String exposing (
+  append, eq, fromInt, fromFloat, toInt,
+  toChars, fromChars, fromChar,
+  length, isEmpty,
+  split, join,
+  toLower, toUpper,
+  startsWith, endsWith, contains,
+  trim, trimLeft, trimRight,
+  drop, take,
+  indexOf,
+  lines, unlines
+)
 
-{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
-
-import Lune.Prelude exposing (Bool(..), Int, Float, Result(..), String)
+import Lune.Prelude exposing (Bool(..), Int, Float, Char, String, Result(..), List(..), Maybe(..))
+import Lune.Char as Char
 
 append : String -> String -> String
 append = prim_appendString
@@ -18,3 +28,182 @@ fromFloat = prim_showFloat
 
 toInt : String -> Result String Int
 toInt = prim_parseInt
+
+toChars : String -> List Char
+toChars = prim_stringToChars
+
+fromChars : List Char -> String
+fromChars = prim_charsToString
+
+fromChar : Char -> String
+fromChar c = fromChars (Cons c Nil)
+
+length : String -> Int
+length s = listLength (toChars s)
+
+isEmpty : String -> Bool
+isEmpty s =
+  case toChars s of
+    Nil -> True
+    _ -> False
+
+toLower : String -> String
+toLower s = fromChars (listMap Char.toLower (toChars s))
+
+toUpper : String -> String
+toUpper s = fromChars (listMap Char.toUpper (toChars s))
+
+startsWith : String -> String -> Bool
+startsWith prefix s =
+  charsStartsWith (toChars prefix) (toChars s)
+
+endsWith : String -> String -> Bool
+endsWith suffix s =
+  charsStartsWith (listReverse (toChars suffix)) (listReverse (toChars s))
+
+contains : String -> String -> Bool
+contains needle haystack =
+  charsContains (toChars needle) (toChars haystack)
+
+split : String -> String -> List String
+split delimiter s =
+  case isEmpty delimiter of
+    True -> Cons s Nil
+    False ->
+      splitHelper (toChars delimiter) (toChars s) Nil
+
+join : String -> List String -> String
+join sep parts =
+  case parts of
+    Nil -> ""
+    Cons first rest ->
+      listFoldl (\acc x -> append (append acc sep) x) first rest
+
+trim : String -> String
+trim s = trimLeft (trimRight s)
+
+trimLeft : String -> String
+trimLeft s = fromChars (dropWhileChars Char.isSpace (toChars s))
+
+trimRight : String -> String
+trimRight s = fromChars (listReverse (dropWhileChars Char.isSpace (listReverse (toChars s))))
+
+drop : Int -> String -> String
+drop n s = fromChars (listDrop n (toChars s))
+
+take : Int -> String -> String
+take n s = fromChars (listTake n (toChars s))
+
+indexOf : String -> String -> Maybe Int
+indexOf needle haystack =
+  indexOfHelper (toChars needle) (toChars haystack) 0
+
+lines : String -> List String
+lines s = split "\n" s
+
+unlines : List String -> String
+unlines ls = join "\n" ls
+
+-- ===== Internal helpers =====
+
+charsStartsWith : List Char -> List Char -> Bool
+charsStartsWith prefix str =
+  case prefix of
+    Nil -> True
+    Cons p ps ->
+      case str of
+        Nil -> False
+        Cons s ss ->
+          case Char.eq p s of
+            True -> charsStartsWith ps ss
+            False -> False
+
+charsContains : List Char -> List Char -> Bool
+charsContains needle haystack =
+  case needle of
+    Nil -> True
+    _ ->
+      case haystack of
+        Nil -> False
+        Cons _ rest ->
+          case charsStartsWith needle haystack of
+            True -> True
+            False -> charsContains needle rest
+
+splitHelper : List Char -> List Char -> List Char -> List String
+splitHelper delim chars acc =
+  case chars of
+    Nil -> Cons (fromChars (listReverse acc)) Nil
+    Cons c rest ->
+      case charsStartsWith delim chars of
+        True ->
+          Cons (fromChars (listReverse acc))
+               (splitHelper delim (listDrop (listLength delim) chars) Nil)
+        False ->
+          splitHelper delim rest (Cons c acc)
+
+indexOfHelper : List Char -> List Char -> Int -> Maybe Int
+indexOfHelper needle haystack idx =
+  case needle of
+    Nil -> Just idx
+    _ ->
+      case haystack of
+        Nil -> Nothing
+        Cons _ rest ->
+          case charsStartsWith needle haystack of
+            True -> Just idx
+            False -> indexOfHelper needle rest (prim_addInt idx 1)
+
+dropWhileChars : (Char -> Bool) -> List Char -> List Char
+dropWhileChars pred chars =
+  case chars of
+    Nil -> Nil
+    Cons c rest ->
+      case pred c of
+        True -> dropWhileChars pred rest
+        False -> Cons c rest
+
+listLength : List a -> Int
+listLength xs =
+  case xs of
+    Nil -> 0
+    Cons _ rest -> prim_addInt 1 (listLength rest)
+
+listMap : (a -> b) -> List a -> List b
+listMap f xs =
+  case xs of
+    Nil -> Nil
+    Cons x rest -> Cons (f x) (listMap f rest)
+
+listReverse : List a -> List a
+listReverse xs = listReverseHelper xs Nil
+
+listReverseHelper : List a -> List a -> List a
+listReverseHelper xs acc =
+  case xs of
+    Nil -> acc
+    Cons x rest -> listReverseHelper rest (Cons x acc)
+
+listDrop : Int -> List a -> List a
+listDrop n xs =
+  case prim_leInt n 0 of
+    True -> xs
+    False ->
+      case xs of
+        Nil -> Nil
+        Cons _ rest -> listDrop (prim_subInt n 1) rest
+
+listTake : Int -> List a -> List a
+listTake n xs =
+  case prim_leInt n 0 of
+    True -> Nil
+    False ->
+      case xs of
+        Nil -> Nil
+        Cons x rest -> Cons x (listTake (prim_subInt n 1) rest)
+
+listFoldl : (b -> a -> b) -> b -> List a -> b
+listFoldl f acc xs =
+  case xs of
+    Nil -> acc
+    Cons x rest -> listFoldl f (f acc x) rest
