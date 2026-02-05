@@ -13,6 +13,7 @@ import Control.Exception (try, IOException, SomeException)
 import Control.Monad (replicateM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as BS
+import qualified Data.Char as Char
 import Data.Char (isDigit, isSpace)
 import Data.String (fromString)
 import Data.Maybe (mapMaybe)
@@ -90,6 +91,11 @@ builtinSchemes =
     , ("prim_eqString", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "String") (TCon "Bool"))))
     , ("prim_showInt", Forall [] [] (TArrow (TCon "Int") (TCon "String")))
     , ("prim_parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    -- Char/String conversion primitives
+    , ("prim_stringToChars", Forall [] [] (TArrow (TCon "String") (TApp (TCon "List") (TCon "Char"))))
+    , ("prim_charsToString", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Char")) (TCon "String")))
+    , ("prim_charToInt", Forall [] [] (TArrow (TCon "Char") (TCon "Int")))
+    , ("prim_intToChar", Forall [] [] (TArrow (TCon "Int") (TCon "Char")))
     , ("prim_putStrLn", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TCon "Unit"))))
     , ("prim_readLine", Forall [] [] (TApp (TCon "IO") (TCon "String")))
     , ("prim_readInt", Forall [] [] (TApp (TCon "IO") (TCon "Int")))
@@ -568,6 +574,11 @@ builtinEvalPrims =
     , ("prim_geInt", BuiltinPrim 2 primGeInt)
     , ("prim_appendString", BuiltinPrim 2 primAppendString)
     , ("prim_eqString", BuiltinPrim 2 primEqString)
+    -- Char/String conversion primitives
+    , ("prim_stringToChars", BuiltinPrim 1 primStringToChars)
+    , ("prim_charsToString", BuiltinPrim 1 primCharsToString)
+    , ("prim_charToInt", BuiltinPrim 1 primCharToInt)
+    , ("prim_intToChar", BuiltinPrim 1 primIntToChar)
     , ("$primIOPure", BuiltinPrim 1 primIOPure)
     , ("prim_ioPure", BuiltinPrim 1 primIOPure)
     , ("$primIOBind", BuiltinPrim 2 primIOBind)
@@ -888,6 +899,47 @@ primEqString args =
   where
     isVString'' (VString _) = True
     isVString'' _ = False
+
+-- | prim_stringToChars : String -> List Char
+primStringToChars :: [Value] -> Either EvalError Value
+primStringToChars args =
+  case args of
+    [VString s] ->
+      Right (listToValue (map VChar (T.unpack s)))
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primStringToChars args))
+
+-- | prim_charsToString : List Char -> String
+primCharsToString :: [Value] -> Either EvalError Value
+primCharsToString args =
+  case args of
+    [v] ->
+      case valueToList v of
+        Nothing -> Left (NotARecord v)
+        Just vals ->
+          let chars = mapMaybe extractChar vals
+          in Right (VString (T.pack chars))
+    _ ->
+      Left (NotAFunction (VPrim 1 primCharsToString args))
+  where
+    extractChar (VChar c) = Just c
+    extractChar _ = Nothing
+
+-- | prim_charToInt : Char -> Int
+primCharToInt :: [Value] -> Either EvalError Value
+primCharToInt args =
+  case args of
+    [VChar c] -> Right (VInt (fromIntegral (Char.ord c)))
+    _ -> Left (NotAFunction (VPrim 1 primCharToInt args))
+
+-- | prim_intToChar : Int -> Char
+primIntToChar :: [Value] -> Either EvalError Value
+primIntToChar args =
+  case args of
+    [VInt n] -> Right (VChar (Char.chr (fromIntegral n)))
+    _ -> Left (NotAFunction (VPrim 1 primIntToChar args))
 
 primIOPure :: [Value] -> Either EvalError Value
 primIOPure args =
