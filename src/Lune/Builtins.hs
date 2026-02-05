@@ -2340,8 +2340,10 @@ primApiAndThen args =
 primMatchPath :: [Value] -> Either EvalError Value
 primMatchPath args =
   case args of
-    [VString pattern, VString path] ->
-      let patternParts = filter (not . T.null) $ T.splitOn "/" pattern
+    [VString pattern, VString rawPath] ->
+      -- Strip query string before matching
+      let path = fst (T.breakOn "?" rawPath)
+          patternParts = filter (not . T.null) $ T.splitOn "/" pattern
           pathParts = filter (not . T.null) $ T.splitOn "/" path
       in case matchParts patternParts pathParts of
         Nothing -> Right (VCon (preludeCon "Nothing") [])

@@ -1,0 +1,12 @@
+module QueryRouteMatch exposing (main)
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Unit, Maybe(..))
+
+main : IO Unit
+main =
+  do
+    let result = prim_matchPath "/users" "/users?page=1"
+    case result of
+      Nothing -> IO.println "NO MATCH"
+      Just params -> IO.println "MATCHED"
