@@ -3,6 +3,8 @@ module Lune.Bytes exposing (
   empty,
   fromList,
   toList,
+  fromString,
+  toString,
   length,
   concat,
   slice,
@@ -50,6 +52,15 @@ fromList = prim_bytesFromList
 -- | Convert bytes to a list of integers (0-255 each)
 toList : Bytes -> List Int
 toList = prim_bytesToList
+
+-- | Encode a String as UTF-8 bytes
+fromString : String -> Bytes
+fromString = prim_bytesFromString
+
+-- | Decode UTF-8 bytes to a String
+-- Invalid byte sequences are replaced with the Unicode replacement character
+toString : Bytes -> String
+toString = prim_bytesToString
 
 -- | Get the length of bytes in number of bytes
 length : Bytes -> Int

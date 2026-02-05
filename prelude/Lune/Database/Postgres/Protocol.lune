@@ -1,0 +1,397 @@
+module Lune.Database.Postgres.Protocol exposing (
+  FrontendMessage(..),
+  BackendMessage(..),
+  TransactionStatus(..),
+  FieldDesc,
+  PgError,
+  encodeMessage,
+  decodeMessage,
+  readMessage
+)
+
+{-| PostgreSQL wire protocol (v3) encoding and decoding.
+
+This module implements the PostgreSQL wire protocol as pure Lune code,
+using Bytes for binary data and TLS/TCP for transport.
+
+Reference: https://www.postgresql.org/docs/current/protocol-message-formats.html
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String, Maybe(..), Bool(..), Monad(..))
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.Net.Tls as Tls exposing (TlsConn)
+import Lune.IO exposing (Error)
+import Lune.Int as Int
+import Lune.String as Str
+import Lune.List as List
+
+-- Message types
+
+type FrontendMessage =
+  StartupMessage String String
+  | PasswordMessage String
+  | Query String
+  | Terminate
+
+type BackendMessage =
+  AuthenticationOk
+  | AuthenticationCleartextPassword
+  | AuthenticationMD5Password Bytes
+  | ParameterStatus String String
+  | BackendKeyData Int Int
+  | RowDescription (List FieldDesc)
+  | DataRow (List (Maybe Bytes))
+  | CommandComplete String
+  | ReadyForQuery TransactionStatus
+  | ErrorResponse PgError
+  | NoticeResponse PgError
+  | EmptyQueryResponse
+  | ParseComplete
+  | BindComplete
+  | NoData
+  | UnknownMessage Int Bytes
+
+type TransactionStatus = Idle | InTransaction | Failed
+
+type alias FieldDesc =
+  { name : String
+  , tableOid : Int
+  , columnAttr : Int
+  , typeOid : Int
+  , typeSize : Int
+  , typeMod : Int
+  , format : Int
+  }
+
+type alias PgError =
+  { severity : String
+  , code : String
+  , message : String
+  }
+
+-- Encoding
+
+encodeMessage : FrontendMessage -> Bytes
+encodeMessage msg =
+  case msg of
+    StartupMessage user database ->
+      encodeStartup user database
+    PasswordMessage password ->
+      encodePassword password
+    Query sql ->
+      encodeQuery sql
+    Terminate ->
+      Bytes.concat (byteSingleton 88) (Bytes.packInt32BE 4)
+
+encodeStartup : String -> String -> Bytes
+encodeStartup user database =
+  concatAll (Cons (Bytes.packInt32BE (Int.add 4 (Bytes.length (startupPayload user database)))) (Cons (startupPayload user database) Nil))
+
+startupPayload : String -> String -> Bytes
+startupPayload user database =
+  concatAll
+    (Cons (Bytes.packInt32BE 196608)
+      (Cons (nullTerminate (Bytes.fromString "user"))
+        (Cons (nullTerminate (Bytes.fromString user))
+          (Cons (nullTerminate (Bytes.fromString "database"))
+            (Cons (nullTerminate (Bytes.fromString database))
+              (Cons (byteSingleton 0) Nil))))))
+
+encodePassword : String -> Bytes
+encodePassword password =
+  concatAll
+    (Cons (byteSingleton 112)
+      (Cons (Bytes.packInt32BE (Int.add 4 (Bytes.length (nullTerminate (Bytes.fromString password)))))
+        (Cons (nullTerminate (Bytes.fromString password)) Nil)))
+
+encodeQuery : String -> Bytes
+encodeQuery sql =
+  concatAll
+    (Cons (byteSingleton 81)
+      (Cons (Bytes.packInt32BE (Int.add 4 (Bytes.length (nullTerminate (Bytes.fromString sql)))))
+        (Cons (nullTerminate (Bytes.fromString sql)) Nil)))
+
+nullTerminate : Bytes -> Bytes
+nullTerminate bs =
+  Bytes.concat bs (byteSingleton 0)
+
+byteSingleton : Int -> Bytes
+byteSingleton b =
+  Bytes.fromList (Cons b Nil)
+
+concatAll : List Bytes -> Bytes
+concatAll parts =
+  List.foldl Bytes.concat Bytes.empty parts
+
+-- Decoding
+
+decodeMessage : Int -> Bytes -> Result String BackendMessage
+decodeMessage typeTag payload =
+  case Int.eq typeTag 82 of
+    True -> decodeAuth payload
+    False ->
+      case Int.eq typeTag 83 of
+        True -> decodeParameterStatus payload
+        False ->
+          case Int.eq typeTag 75 of
+            True -> decodeBackendKeyData payload
+            False -> decodeMessageCont typeTag payload
+
+decodeMessageCont : Int -> Bytes -> Result String BackendMessage
+decodeMessageCont typeTag payload =
+  case Int.eq typeTag 84 of
+    True -> decodeRowDescription payload
+    False ->
+      case Int.eq typeTag 68 of
+        True -> decodeDataRow payload
+        False ->
+          case Int.eq typeTag 67 of
+            True -> Ok (CommandComplete (readCString payload 0))
+            False -> decodeMessageCont2 typeTag payload
+
+decodeMessageCont2 : Int -> Bytes -> Result String BackendMessage
+decodeMessageCont2 typeTag payload =
+  case Int.eq typeTag 90 of
+    True -> decodeReadyForQuery payload
+    False ->
+      case Int.eq typeTag 69 of
+        True -> decodeErrorNotice True payload
+        False ->
+          case Int.eq typeTag 78 of
+            True -> decodeErrorNotice False payload
+            False -> decodeMessageCont3 typeTag payload
+
+decodeMessageCont3 : Int -> Bytes -> Result String BackendMessage
+decodeMessageCont3 typeTag payload =
+  case Int.eq typeTag 73 of
+    True -> Ok EmptyQueryResponse
+    False ->
+      case Int.eq typeTag 49 of
+        True -> Ok ParseComplete
+        False ->
+          case Int.eq typeTag 50 of
+            True -> Ok BindComplete
+            False ->
+              case Int.eq typeTag 110 of
+                True -> Ok NoData
+                False -> Ok (UnknownMessage typeTag payload)
+
+decodeAuth : Bytes -> Result String BackendMessage
+decodeAuth payload =
+  case Bytes.unpackInt32BE payload of
+    Err _ -> Err "auth: too short"
+    Ok authType ->
+      case Int.eq authType 0 of
+        True -> Ok AuthenticationOk
+        False ->
+          case Int.eq authType 3 of
+            True -> Ok AuthenticationCleartextPassword
+            False ->
+              case Int.eq authType 5 of
+                True -> Ok (AuthenticationMD5Password (Bytes.slice 4 4 payload))
+                False -> Err (Str.append "auth: unknown type " (Str.fromInt authType))
+
+decodeParameterStatus : Bytes -> Result String BackendMessage
+decodeParameterStatus payload =
+  Ok (ParameterStatus (readCString payload 0) (readCString payload (cstringEndOffset payload 0)))
+
+cstringEndOffset : Bytes -> Int -> Int
+cstringEndOffset buf offset =
+  Int.add 1 (Int.add offset (Bytes.length (Bytes.fromString (readCString buf offset))))
+
+decodeBackendKeyData : Bytes -> Result String BackendMessage
+decodeBackendKeyData payload =
+  case Bytes.unpackInt32BE payload of
+    Err _ -> Err "backendkeydata: too short"
+    Ok pid ->
+      case Bytes.unpackInt32BE (Bytes.slice 4 4 payload) of
+        Err _ -> Err "backendkeydata: too short for secret"
+        Ok secret -> Ok (BackendKeyData pid secret)
+
+decodeRowDescription : Bytes -> Result String BackendMessage
+decodeRowDescription payload =
+  case Bytes.unpackInt16BE payload of
+    Err _ -> Err "rowdesc: too short"
+    Ok fieldCount ->
+      case decodeFields (Bytes.slice 2 (Int.sub (Bytes.length payload) 2) payload) fieldCount of
+        Err e -> Err e
+        Ok fields -> Ok (RowDescription fields)
+
+decodeFields : Bytes -> Int -> Result String (List FieldDesc)
+decodeFields buf count =
+  case Int.eq count 0 of
+    True -> Ok Nil
+    False ->
+      decodeOneField buf (Int.sub count 1)
+
+decodeOneField : Bytes -> Int -> Result String (List FieldDesc)
+decodeOneField buf remaining =
+  case decodeFieldFromBuf buf of
+    Err e -> Err e
+    Ok result ->
+      case result of
+        Cons field (Cons restBuf Nil) ->
+          case decodeFields restBuf remaining of
+            Err e -> Err e
+            Ok fields -> Ok (Cons field fields)
+        _ -> Err "rowdesc: internal error"
+
+decodeFieldFromBuf : Bytes -> Result String (List FieldDesc)
+decodeFieldFromBuf buf =
+  decodeFieldAttrs (readCString buf 0) (Bytes.slice (cstringEndOffset buf 0) (Int.sub (Bytes.length buf) (cstringEndOffset buf 0)) buf)
+
+decodeFieldAttrs : String -> Bytes -> Result String (List FieldDesc)
+decodeFieldAttrs fieldName buf =
+  case Bytes.unpackInt32BE buf of
+    Err _ -> Err "field: too short for tableOid"
+    Ok tableOid ->
+      case Bytes.unpackInt16BE (Bytes.slice 4 2 buf) of
+        Err _ -> Err "field: too short for columnAttr"
+        Ok columnAttr ->
+          case Bytes.unpackInt32BE (Bytes.slice 6 4 buf) of
+            Err _ -> Err "field: too short for typeOid"
+            Ok typeOid ->
+              case Bytes.unpackInt16BE (Bytes.slice 10 2 buf) of
+                Err _ -> Err "field: too short for typeSize"
+                Ok typeSize ->
+                  case Bytes.unpackInt32BE (Bytes.slice 12 4 buf) of
+                    Err _ -> Err "field: too short for typeMod"
+                    Ok typeMod ->
+                      case Bytes.unpackInt16BE (Bytes.slice 16 2 buf) of
+                        Err _ -> Err "field: too short for format"
+                        Ok format ->
+                          Ok (Cons { name = fieldName, tableOid = tableOid, columnAttr = columnAttr, typeOid = typeOid, typeSize = typeSize, typeMod = typeMod, format = format } (Cons (Bytes.slice 18 (Int.sub (Bytes.length buf) 18) buf) Nil))
+
+-- DataRow decoder
+
+decodeDataRow : Bytes -> Result String BackendMessage
+decodeDataRow payload =
+  case Bytes.unpackInt16BE payload of
+    Err _ -> Err "datarow: too short"
+    Ok columnCount ->
+      case decodeColumns (Bytes.slice 2 (Int.sub (Bytes.length payload) 2) payload) columnCount of
+        Err e -> Err e
+        Ok columns -> Ok (DataRow columns)
+
+decodeColumns : Bytes -> Int -> Result String (List (Maybe Bytes))
+decodeColumns buf count =
+  case Int.eq count 0 of
+    True -> Ok Nil
+    False ->
+      case Bytes.unpackInt32BE buf of
+        Err _ -> Err "datarow: column too short"
+        Ok colLen ->
+          decodeColumnValue buf colLen (Int.sub count 1)
+
+decodeColumnValue : Bytes -> Int -> Int -> Result String (List (Maybe Bytes))
+decodeColumnValue buf colLen remaining =
+  case Int.eq colLen (Int.sub 0 1) of
+    True ->
+      case decodeColumns (Bytes.slice 4 (Int.sub (Bytes.length buf) 4) buf) remaining of
+        Err e -> Err e
+        Ok rest -> Ok (Cons Nothing rest)
+    False ->
+      case decodeColumns (Bytes.slice (Int.add 4 colLen) (Int.sub (Bytes.length buf) (Int.add 4 colLen)) buf) remaining of
+        Err e -> Err e
+        Ok rest -> Ok (Cons (Just (Bytes.slice 4 colLen buf)) rest)
+
+-- ReadyForQuery decoder
+
+decodeReadyForQuery : Bytes -> Result String BackendMessage
+decodeReadyForQuery payload =
+  case Bytes.toList payload of
+    Cons status _ ->
+      case Int.eq status 73 of
+        True -> Ok (ReadyForQuery Idle)
+        False ->
+          case Int.eq status 84 of
+            True -> Ok (ReadyForQuery InTransaction)
+            False ->
+              case Int.eq status 69 of
+                True -> Ok (ReadyForQuery Failed)
+                False -> Err "readyforquery: unknown status"
+    Nil -> Err "readyforquery: empty payload"
+
+-- Error/Notice response decoder
+
+decodeErrorNotice : Bool -> Bytes -> Result String BackendMessage
+decodeErrorNotice isError payload =
+  case isError of
+    True -> Ok (ErrorResponse (decodeErrorFields payload 0 { severity = "", code = "", message = "" }))
+    False -> Ok (NoticeResponse (decodeErrorFields payload 0 { severity = "", code = "", message = "" }))
+
+decodeErrorFields : Bytes -> Int -> PgError -> PgError
+decodeErrorFields payload offset acc =
+  case Int.gte offset (Bytes.length payload) of
+    True -> acc
+    False ->
+      case Bytes.toList (Bytes.slice offset 1 payload) of
+        Cons fieldType _ ->
+          case Int.eq fieldType 0 of
+            True -> acc
+            False -> decodeErrorFields payload (errorFieldNextOffset payload offset) (updatePgError fieldType (readCString payload (Int.add offset 1)) acc)
+        Nil -> acc
+
+errorFieldNextOffset : Bytes -> Int -> Int
+errorFieldNextOffset payload offset =
+  Int.add offset (Int.add 2 (Bytes.length (Bytes.fromString (readCString payload (Int.add offset 1)))))
+
+updatePgError : Int -> String -> PgError -> PgError
+updatePgError fieldType value acc =
+  case Int.eq fieldType 83 of
+    True -> { acc | severity = value }
+    False ->
+      case Int.eq fieldType 67 of
+        True -> { acc | code = value }
+        False ->
+          case Int.eq fieldType 77 of
+            True -> { acc | message = value }
+            False -> acc
+
+-- IO: Read one complete message from a TLS connection
+
+readMessage : TlsConn -> IO (Result String BackendMessage)
+readMessage conn =
+  do
+    typeResult <- Tls.recvBytes conn 1
+    case typeResult of
+      Err _ -> pure (Err "readMessage: failed to read type byte")
+      Ok typeBuf ->
+        case Bytes.toList typeBuf of
+          Cons typeTag _ ->
+            do
+              lenResult <- Tls.recvBytes conn 4
+              case lenResult of
+                Err _ -> pure (Err "readMessage: failed to read length")
+                Ok lenBuf ->
+                  case Bytes.unpackInt32BE lenBuf of
+                    Err _ -> pure (Err "readMessage: invalid length")
+                    Ok len ->
+                      readMessagePayload conn typeTag (Int.sub len 4)
+          Nil -> pure (Err "readMessage: empty type read")
+
+readMessagePayload : TlsConn -> Int -> Int -> IO (Result String BackendMessage)
+readMessagePayload conn typeTag payloadLen =
+  case Int.lte payloadLen 0 of
+    True -> pure (decodeMessage typeTag Bytes.empty)
+    False ->
+      do
+        payloadResult <- Tls.recvBytes conn payloadLen
+        case payloadResult of
+          Err _ -> pure (Err "readMessage: failed to read payload")
+          Ok payload -> pure (decodeMessage typeTag payload)
+
+-- Helpers
+
+readCString : Bytes -> Int -> String
+readCString buf offset =
+  Bytes.toString (Bytes.fromList (takeUntilNull (Bytes.toList (Bytes.slice offset (Int.sub (Bytes.length buf) offset) buf))))
+
+takeUntilNull : List Int -> List Int
+takeUntilNull xs =
+  case xs of
+    Nil -> Nil
+    Cons b rest ->
+      case Int.eq b 0 of
+        True -> Nil
+        False -> Cons b (takeUntilNull rest)

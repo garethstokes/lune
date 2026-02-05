@@ -1,8 +1,9 @@
-module Lune.List exposing (map, foldl)
+module Lune.List exposing (map, foldl, length)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
-import Lune.Prelude exposing (List(..))
+import Lune.Prelude exposing (List(..), Int)
+import Lune.Int as Int
 
 map : (a -> b) -> List a -> List b
 map f xs =
@@ -15,3 +16,9 @@ foldl f acc xs =
   case xs of
     [] -> acc
     Cons x xt -> foldl f (f acc x) xt
+
+length : List a -> Int
+length xs =
+  case xs of
+    [] -> 0
+    Cons _ xt -> Int.add 1 (length xt)

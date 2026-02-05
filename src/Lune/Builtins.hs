@@ -167,6 +167,8 @@ builtinSchemes =
     , ("prim_bytesUnpackInt32BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
     , ("prim_bytesPackInt16BE", Forall [] [] (TArrow (TCon "Int") (TCon "Bytes")))
     , ("prim_bytesUnpackInt16BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
+    , ("prim_bytesFromString", Forall [] [] (TArrow (TCon "String") (TCon "Bytes")))
+    , ("prim_bytesToString", Forall [] [] (TArrow (TCon "Bytes") (TCon "String")))
     -- TLS primitives
     , ("prim_tlsConnect", Forall [] []
         (TArrow (TCon "String")
@@ -672,6 +674,8 @@ builtinEvalPrims =
     , ("prim_bytesUnpackInt32BE", BuiltinPrim 1 primBytesUnpackInt32BE)
     , ("prim_bytesPackInt16BE", BuiltinPrim 1 primBytesPackInt16BE)
     , ("prim_bytesUnpackInt16BE", BuiltinPrim 1 primBytesUnpackInt16BE)
+    , ("prim_bytesFromString", BuiltinPrim 1 primBytesFromString)
+    , ("prim_bytesToString", BuiltinPrim 1 primBytesToString)
     -- TLS primitives
     , ("prim_tlsConnect", BuiltinPrim 2 primTlsConnect)
     , ("prim_tlsSendBytes", BuiltinPrim 2 primTlsSendBytes)
@@ -2065,6 +2069,24 @@ primBytesUnpackInt16BE args =
       | otherwise ->
         Right (VCon (preludeCon "Err") [VString "bytes too short for Int16"])
     _ -> Left (NotAFunction (VPrim 1 primBytesUnpackInt16BE args))
+
+-- | prim_bytesFromString : String -> Bytes
+-- Encode a String as UTF-8 bytes
+primBytesFromString :: [Value] -> Either EvalError Value
+primBytesFromString args =
+  case args of
+    [VString s] ->
+      Right (VBytes (TE.encodeUtf8 s))
+    _ -> Left (NotAFunction (VPrim 1 primBytesFromString args))
+
+-- | prim_bytesToString : Bytes -> String
+-- Decode UTF-8 bytes to a String (lenient: replaces invalid sequences)
+primBytesToString :: [Value] -> Either EvalError Value
+primBytesToString args =
+  case args of
+    [VBytes bs] ->
+      Right (VString (TE.decodeUtf8Lenient bs))
+    _ -> Left (NotAFunction (VPrim 1 primBytesToString args))
 
 -- Helper: Convert Lune list of ints to Haskell list
 valueToIntList :: Value -> Maybe [Integer]
