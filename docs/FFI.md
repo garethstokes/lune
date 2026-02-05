@@ -71,6 +71,10 @@ main =
 
 FFI calls bypass Lune's type safety at the boundary. Only whitelisted functions in `src/Lune/Eval/FFI.hs` can be called. Unknown symbols produce a runtime error.
 
+## Known Limitations
+
+FFI calls (like `puts`) write directly to C stdout, while `IO.println` buffers to `worldStdout`. In programs using both, the output order may not match the source code order. This is an inherent limitation of the world-passing IO model combined with real C side effects.
+
 ## Adding New FFI Functions
 
 To whitelist a new C function, edit `src/Lune/Eval/FFI.hs`:

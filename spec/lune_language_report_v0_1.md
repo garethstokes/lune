@@ -465,6 +465,10 @@ foreign import ccall "puts"
 
 FFI calls bypass Lune's type safety at the boundary. Only whitelisted functions can be called; unknown symbols produce a runtime error. See `docs/FFI.md` for the full list of supported C functions and type mappings.
 
+### 13.4 Known Limitations
+
+FFI calls (like `puts`) write directly to C stdout, while `IO.println` buffers to `worldStdout`. In programs using both, the output order may not match the source code order. This is an inherent limitation of the world-passing IO model combined with real C side effects.
+
 ---
 
 ## 14. Runtime & Semantics
