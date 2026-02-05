@@ -135,6 +135,7 @@ data Value
   | VDbConn DbConnId
   | VDbPool DbPoolId
   | VDbValue DbValue
+  | VBytes BS.ByteString
   | VDbRow DbRow
   | VCon Text [Value]
   | VJson JsonValue
@@ -211,6 +212,8 @@ instance Show Value where
         "<dbvalue:" <> show dv <> ">"
       VDbRow _ ->
         "<dbrow>"
+      VBytes bs ->
+        "<bytes:" <> show (BS.length bs) <> ">"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of

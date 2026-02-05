@@ -11,6 +11,8 @@ module Lune.Builtins
 
 import Control.Exception (try, IOException, SomeException)
 import Control.Monad (replicateM)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
+import qualified Data.ByteString as BS
 import Data.Char (isDigit, isSpace)
 import Data.String (fromString)
 import Data.Maybe (mapMaybe)
@@ -142,6 +144,17 @@ builtinSchemes =
     , ("prim_connSend", Forall [] [] (TArrow (TCon "Connection") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
     , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
+    -- Bytes primitives
+    , ("prim_bytesEmpty", Forall [] [] (TCon "Bytes"))
+    , ("prim_bytesFromList", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Int")) (TCon "Bytes")))
+    , ("prim_bytesToList", Forall [] [] (TArrow (TCon "Bytes") (TApp (TCon "List") (TCon "Int"))))
+    , ("prim_bytesLength", Forall [] [] (TArrow (TCon "Bytes") (TCon "Int")))
+    , ("prim_bytesConcat", Forall [] [] (TArrow (TCon "Bytes") (TArrow (TCon "Bytes") (TCon "Bytes"))))
+    , ("prim_bytesSlice", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TArrow (TCon "Bytes") (TCon "Bytes")))))
+    , ("prim_bytesPackInt32BE", Forall [] [] (TArrow (TCon "Int") (TCon "Bytes")))
+    , ("prim_bytesUnpackInt32BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
+    , ("prim_bytesPackInt16BE", Forall [] [] (TArrow (TCon "Int") (TCon "Bytes")))
+    , ("prim_bytesUnpackInt16BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
     -- Database primitives
     , ("prim_pgConnect", Forall [] []
         (TArrow (TCon "String")
@@ -613,6 +626,17 @@ builtinEvalPrims =
     , ("prim_connSend", BuiltinPrim 2 primConnSend)
     , ("prim_connClose", BuiltinPrim 1 primConnClose)
     , ("prim_socketClose", BuiltinPrim 1 primSocketClose)
+    -- Bytes primitives
+    , ("prim_bytesEmpty", BuiltinPrim 0 primBytesEmpty)
+    , ("prim_bytesFromList", BuiltinPrim 1 primBytesFromList)
+    , ("prim_bytesToList", BuiltinPrim 1 primBytesToList)
+    , ("prim_bytesLength", BuiltinPrim 1 primBytesLength)
+    , ("prim_bytesConcat", BuiltinPrim 2 primBytesConcat)
+    , ("prim_bytesSlice", BuiltinPrim 3 primBytesSlice)
+    , ("prim_bytesPackInt32BE", BuiltinPrim 1 primBytesPackInt32BE)
+    , ("prim_bytesUnpackInt32BE", BuiltinPrim 1 primBytesUnpackInt32BE)
+    , ("prim_bytesPackInt16BE", BuiltinPrim 1 primBytesPackInt16BE)
+    , ("prim_bytesUnpackInt16BE", BuiltinPrim 1 primBytesUnpackInt16BE)
     -- HTTP primitives
     , ("prim_parseHttpRequest", BuiltinPrim 1 primParseHttpRequest)
     , ("prim_formatHttpResponse", BuiltinPrim 1 primFormatHttpResponse)
@@ -1851,6 +1875,130 @@ primSocketClose args =
                 in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primSocketClose args))
+
+-- =============================================================================
+-- Bytes Primitives
+-- =============================================================================
+
+-- | prim_bytesEmpty : Bytes
+primBytesEmpty :: [Value] -> Either EvalError Value
+primBytesEmpty [] = Right (VBytes BS.empty)
+primBytesEmpty args = Left (NotAFunction (VPrim 0 primBytesEmpty args))
+
+-- | prim_bytesFromList : List Int -> Bytes
+primBytesFromList :: [Value] -> Either EvalError Value
+primBytesFromList args =
+  case args of
+    [list] ->
+      case valueToIntList list of
+        Just ints ->
+          let bytes = BS.pack (map (fromIntegral . (`mod` 256)) ints)
+          in Right (VBytes bytes)
+        Nothing ->
+          Left (NotAFunction (VPrim 1 primBytesFromList args))
+    _ ->
+      Left (NotAFunction (VPrim 1 primBytesFromList args))
+
+-- | prim_bytesToList : Bytes -> List Int
+primBytesToList :: [Value] -> Either EvalError Value
+primBytesToList args =
+  case args of
+    [VBytes bs] ->
+      let ints = map (VInt . fromIntegral) (BS.unpack bs)
+      in Right (intListToValue ints)
+    _ ->
+      Left (NotAFunction (VPrim 1 primBytesToList args))
+
+-- | prim_bytesLength : Bytes -> Int
+primBytesLength :: [Value] -> Either EvalError Value
+primBytesLength args =
+  case args of
+    [VBytes bs] -> Right (VInt (fromIntegral (BS.length bs)))
+    _ -> Left (NotAFunction (VPrim 1 primBytesLength args))
+
+-- | prim_bytesConcat : Bytes -> Bytes -> Bytes
+primBytesConcat :: [Value] -> Either EvalError Value
+primBytesConcat args =
+  case args of
+    [VBytes a, VBytes b] -> Right (VBytes (BS.append a b))
+    _ -> Left (NotAFunction (VPrim 2 primBytesConcat args))
+
+-- | prim_bytesSlice : Int -> Int -> Bytes -> Bytes
+-- slice(start, length, bytes)
+primBytesSlice :: [Value] -> Either EvalError Value
+primBytesSlice args =
+  case args of
+    [VInt start, VInt len, VBytes bs] ->
+      let start' = fromIntegral start
+          len' = fromIntegral len
+      in Right (VBytes (BS.take len' (BS.drop start' bs)))
+    _ -> Left (NotAFunction (VPrim 3 primBytesSlice args))
+
+-- | prim_bytesPackInt32BE : Int -> Bytes
+-- Pack a 32-bit integer as 4 bytes, big-endian
+primBytesPackInt32BE :: [Value] -> Either EvalError Value
+primBytesPackInt32BE args =
+  case args of
+    [VInt n] ->
+      let n' = fromIntegral n :: Int
+          b0 = fromIntegral ((n' `shiftR` 24) .&. 0xFF)
+          b1 = fromIntegral ((n' `shiftR` 16) .&. 0xFF)
+          b2 = fromIntegral ((n' `shiftR` 8) .&. 0xFF)
+          b3 = fromIntegral (n' .&. 0xFF)
+      in Right (VBytes (BS.pack [b0, b1, b2, b3]))
+    _ -> Left (NotAFunction (VPrim 1 primBytesPackInt32BE args))
+
+-- | prim_bytesUnpackInt32BE : Bytes -> Result Error Int
+-- Unpack first 4 bytes as a 32-bit big-endian integer
+primBytesUnpackInt32BE :: [Value] -> Either EvalError Value
+primBytesUnpackInt32BE args =
+  case args of
+    [VBytes bs]
+      | BS.length bs >= 4 ->
+        let [b0, b1, b2, b3] = map fromIntegral (BS.unpack (BS.take 4 bs))
+            n = (b0 `shiftL` 24) .|. (b1 `shiftL` 16) .|. (b2 `shiftL` 8) .|. b3
+        in Right (VCon (preludeCon "Ok") [VInt (fromIntegral (n :: Int))])
+      | otherwise ->
+        Right (VCon (preludeCon "Err") [VString "bytes too short for Int32"])
+    _ -> Left (NotAFunction (VPrim 1 primBytesUnpackInt32BE args))
+
+-- | prim_bytesPackInt16BE : Int -> Bytes
+-- Pack a 16-bit integer as 2 bytes, big-endian
+primBytesPackInt16BE :: [Value] -> Either EvalError Value
+primBytesPackInt16BE args =
+  case args of
+    [VInt n] ->
+      let n' = fromIntegral n :: Int
+          b0 = fromIntegral ((n' `shiftR` 8) .&. 0xFF)
+          b1 = fromIntegral (n' .&. 0xFF)
+      in Right (VBytes (BS.pack [b0, b1]))
+    _ -> Left (NotAFunction (VPrim 1 primBytesPackInt16BE args))
+
+-- | prim_bytesUnpackInt16BE : Bytes -> Result Error Int
+-- Unpack first 2 bytes as a 16-bit big-endian integer
+primBytesUnpackInt16BE :: [Value] -> Either EvalError Value
+primBytesUnpackInt16BE args =
+  case args of
+    [VBytes bs]
+      | BS.length bs >= 2 ->
+        let [b0, b1] = map fromIntegral (BS.unpack (BS.take 2 bs))
+            n = (b0 `shiftL` 8) .|. b1
+        in Right (VCon (preludeCon "Ok") [VInt (fromIntegral (n :: Int))])
+      | otherwise ->
+        Right (VCon (preludeCon "Err") [VString "bytes too short for Int16"])
+    _ -> Left (NotAFunction (VPrim 1 primBytesUnpackInt16BE args))
+
+-- Helper: Convert Lune list of ints to Haskell list
+valueToIntList :: Value -> Maybe [Integer]
+valueToIntList (VCon name []) | "Nil" `T.isSuffixOf` name = Just []
+valueToIntList (VCon name [VInt n, rest]) | "Cons" `T.isSuffixOf` name =
+  (n :) <$> valueToIntList rest
+valueToIntList _ = Nothing
+
+-- Helper: Convert Haskell list of Values to Lune list
+intListToValue :: [Value] -> Value
+intListToValue [] = VCon (preludeCon "Nil") []
+intListToValue (x:xs) = VCon (preludeCon "Cons") [x, intListToValue xs]
 
 -- =============================================================================
 -- Database Primitives
