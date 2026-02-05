@@ -90,14 +90,34 @@ importDecl = do
 decl :: Parser Decl
 decl =
   choice
-    [ try classDecl
-    , try instanceDecl
-    , try typeAliasDecl
-    , try typeDecl
-    , try newtypeDecl
-    , try typeSigDecl
-    , valueDecl
+    [ P.label "class declaration" (try classDecl)
+    , P.label "instance declaration" (try instanceDecl)
+    , P.label "type alias" (try typeAliasDecl)
+    , P.label "type declaration" (try typeDecl)
+    , P.label "newtype declaration" (try newtypeDecl)
+    , P.label "foreign import" (try foreignImportDecl)
+    , P.label "type signature" (try typeSigDecl)
+    , P.label "value declaration" valueDecl
     ]
+
+foreignImportDecl :: Parser Decl
+foreignImportDecl = do
+  keyword "foreign"
+  keyword "import"
+  convention <- ccall
+  symbolName <- lexeme stringLiteral
+  scnOptional  -- allow optional newline after symbol name
+  name <- identifier
+  symbol ":"
+  ty <- parseQualTypeSameLine
+  scn
+  pure (DeclForeignImport convention (T.pack symbolName) name ty)
+  where
+    ccall = do
+      name <- identifier
+      if name == "ccall"
+        then pure CCall
+        else fail "expected 'ccall'"
 
 typeSigDecl :: Parser Decl
 typeSigDecl = do
