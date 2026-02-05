@@ -1,0 +1,67 @@
+module TlsExample exposing (main)
+
+{-| TLS connection example.
+
+This demonstrates the TLS module for encrypted connections:
+- Connecting to a TLS server
+- Sending and receiving bytes
+- Proper connection cleanup
+
+TLS primitives are the foundation for implementing
+secure wire protocols (PostgreSQL SSL, HTTPS, etc.) in pure Lune.
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String)
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.Net.Tls as Tls exposing (TlsConn)
+import Lune.String as Str
+
+main : IO Unit
+main =
+  do
+    IO.println "=== TLS Connection Example ==="
+    IO.println ""
+    IO.println "TLS provides encrypted network connections."
+    IO.println ""
+    IO.println "1. Connect to a TLS server:"
+    IO.println "   result <- Tls.connect hostname port"
+    IO.println ""
+    IO.println "2. Send bytes:"
+    IO.println "   _ <- Tls.sendBytes conn (Bytes.fromList [...])"
+    IO.println ""
+    IO.println "3. Receive bytes (up to N):"
+    IO.println "   response <- Tls.recvBytes conn 1024"
+    IO.println ""
+    IO.println "4. Close connection:"
+    IO.println "   Tls.close conn"
+    IO.println ""
+    IO.println "=== Type Signatures ==="
+    IO.println "connect : String -> Int -> IO (Result Error TlsConn)"
+    IO.println "sendBytes : TlsConn -> Bytes -> IO (Result Error Unit)"
+    IO.println "recvBytes : TlsConn -> Int -> IO (Result Error Bytes)"
+    IO.println "close : TlsConn -> IO (Result Error Unit)"
+    IO.println ""
+    IO.println "=== Example: Simple HTTPS Request ==="
+    IO.println "-- Connect to example.com over TLS"
+    IO.println "result <- Tls.connect \"example.com\" 443"
+    IO.println "case result of"
+    IO.println "  Err e -> IO.println \"Connection failed\""
+    IO.println "  Ok conn ->"
+    IO.println "    do"
+    IO.println "      -- Send HTTP GET request"
+    IO.println "      let request = \"GET / HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n\""
+    IO.println "      _ <- Tls.sendBytes conn (stringToBytes request)"
+    IO.println "      -- Read response"
+    IO.println "      response <- Tls.recvBytes conn 4096"
+    IO.println "      -- Close"
+    IO.println "      Tls.close conn"
+    IO.println ""
+    IO.println "=== Use Case: PostgreSQL Protocol ==="
+    IO.println "The PostgreSQL wire protocol can be implemented using:"
+    IO.println "- Tls.connect for SSL connections"
+    IO.println "- Bytes.packInt32BE for message lengths"
+    IO.println "- Bytes.packInt16BE for field counts"
+    IO.println "- Pure Lune functions for protocol encoding/decoding"
+    IO.println ""
+    IO.println "Done!"

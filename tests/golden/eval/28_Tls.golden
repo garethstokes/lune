@@ -1,0 +1,45 @@
+=== TLS Connection Example ===
+
+TLS provides encrypted network connections.
+
+1. Connect to a TLS server:
+   result <- Tls.connect hostname port
+
+2. Send bytes:
+   _ <- Tls.sendBytes conn (Bytes.fromList [...])
+
+3. Receive bytes (up to N):
+   response <- Tls.recvBytes conn 1024
+
+4. Close connection:
+   Tls.close conn
+
+=== Type Signatures ===
+connect : String -> Int -> IO (Result Error TlsConn)
+sendBytes : TlsConn -> Bytes -> IO (Result Error Unit)
+recvBytes : TlsConn -> Int -> IO (Result Error Bytes)
+close : TlsConn -> IO (Result Error Unit)
+
+=== Example: Simple HTTPS Request ===
+-- Connect to example.com over TLS
+result <- Tls.connect "example.com" 443
+case result of
+  Err e -> IO.println "Connection failed"
+  Ok conn ->
+    do
+      -- Send HTTP GET request
+      let request = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+      _ <- Tls.sendBytes conn (stringToBytes request)
+      -- Read response
+      response <- Tls.recvBytes conn 4096
+      -- Close
+      Tls.close conn
+
+=== Use Case: PostgreSQL Protocol ===
+The PostgreSQL wire protocol can be implemented using:
+- Tls.connect for SSL connections
+- Bytes.packInt32BE for message lengths
+- Bytes.packInt16BE for field counts
+- Pure Lune functions for protocol encoding/decoding
+
+Done!

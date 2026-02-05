@@ -1,0 +1,55 @@
+module Lune.Net.Tls exposing (
+  TlsConn,
+  connect,
+  sendBytes,
+  recvBytes,
+  close
+)
+
+{-| TLS (encrypted) network connections.
+
+This module provides secure TLS connections over TCP.
+Use these primitives to implement encrypted wire protocols
+(PostgreSQL with SSL, HTTPS, etc.) in pure Lune.
+
+Example:
+```
+-- Connect to a server over TLS
+result <- Tls.connect "example.com" 443
+case result of
+  Err e -> IO.println "Connection failed"
+  Ok conn ->
+    do
+      -- Send some bytes
+      _ <- Tls.sendBytes conn (Bytes.fromList [72, 101, 108, 108, 111])
+      -- Receive up to 1024 bytes
+      response <- Tls.recvBytes conn 1024
+      -- Close when done
+      Tls.close conn
+```
+-}
+
+import Lune.Prelude exposing (IO, Result, Int, String, Unit)
+import Lune.IO exposing (Error)
+import Lune.Bytes exposing (Bytes)
+
+-- | Opaque TLS connection handle
+type TlsConn = TlsConn#
+
+-- | Connect to a host over TLS
+-- Parameters: hostname, port
+connect : String -> Int -> IO (Result Error TlsConn)
+connect = prim_tlsConnect
+
+-- | Send bytes over a TLS connection
+sendBytes : TlsConn -> Bytes -> IO (Result Error Unit)
+sendBytes = prim_tlsSendBytes
+
+-- | Receive up to N bytes from a TLS connection
+-- Returns as soon as data is available (may be less than N)
+recvBytes : TlsConn -> Int -> IO (Result Error Bytes)
+recvBytes = prim_tlsRecvBytes
+
+-- | Close a TLS connection
+close : TlsConn -> IO (Result Error Unit)
+close = prim_tlsClose
