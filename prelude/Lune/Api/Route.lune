@@ -1,6 +1,4 @@
 module Lune.Api.Route exposing (
-  Route,
-  Routes,
   get,
   post,
   put,
@@ -11,18 +9,7 @@ module Lune.Api.Route exposing (
 
 import Lune.Prelude exposing (String, List(..), Maybe(..), Int)
 import Lune.Http exposing (Method(..), Request, Response)
-import Lune.Api exposing (Api)
-
-{-| A route combines a method, path pattern, and handler.
-    Path patterns use :param syntax for path parameters.
--}
-type alias Route e ctx =
-  { method : Method
-  , pattern : String
-  , handler : Request -> ctx -> Api e Response
-  }
-
-type alias Routes e ctx = List (Route e ctx)
+import Lune.Api exposing (Api, Route, Routes)
 
 get : String -> (Request -> ctx -> Api e Response) -> Route e ctx
 get pattern handler =

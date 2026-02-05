@@ -2,7 +2,7 @@ module ApiServer exposing (main)
 
 import Lune.IO as IO
 import Lune.Api as Api
-import Lune.Api exposing (ServerConfig)
+import Lune.Api exposing (ServerConfig, Routes)
 import Lune.Api.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.Json as Json
@@ -71,7 +71,7 @@ errorToResponse err =
       jsonResponse 400 (encodeError { error = msg })
 
 -- Routes
-routes : Route.Routes AppError Context
+routes : Routes AppError Context
 routes =
   Route.define
     [ Route.get "/health" healthHandler

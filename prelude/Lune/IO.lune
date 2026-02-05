@@ -5,12 +5,13 @@ module Lune.IO exposing (
   sleepMs,
   readFile,
   writeFile,
-  Error
+  Error,
+  pure
 )
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
-import Lune.Prelude exposing (IO, Int, Result(..), String, Unit)
+import Lune.Prelude exposing (IO, Int, Result(..), String, Unit, Pair(..))
 
 type Error = Error#
 
@@ -31,3 +32,10 @@ readFile = prim_readFile
 
 writeFile : String -> String -> IO (Result Error Unit)
 writeFile = prim_writeFile
+
+{-| Wrap a pure value in IO. Provides access to typeclass pure for IO. -}
+pure : a -> IO a
+pure x = pureHelper x
+
+pureHelper : a -> IO a
+pureHelper x = do pure x
