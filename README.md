@@ -57,7 +57,7 @@ cabal run lune -- --eval examples/00_Hello.lune
 | File I/O (read/write) | Working |
 | TCP Sockets | Working |
 | Web Framework (Api monad) | Basic (JSON APIs) |
-| FFI | Not implemented |
+| FFI (C interop via `foreign import ccall`) | Working |
 | Native compilation | Partial |
 
 ## Documentation
@@ -66,6 +66,7 @@ cabal run lune -- --eval examples/00_Hello.lune
 - `spec/lune_standard_library_v0_1.md` - Standard library API
 - `spec/lune_json_v0_1.md` - JSON module specification
 - `core/lune_core_ir_v0_1.md` - Core IR specification
+- `docs/FFI.md` - Foreign Function Interface guide
 
 ## Tests
 
@@ -208,3 +209,21 @@ main =
     let config = { port = 8080, errorHandler = errorHandler, context = {} }
     Api.serve config routes
 ```
+
+## FFI Example
+
+```haskell
+module FFI_Puts exposing (main)
+
+import Lune.IO as IO
+
+foreign import ccall "puts" puts : String -> IO Int
+
+main : IO Unit
+main =
+  do
+    _ <- puts "Hello from C!"
+    IO.println "Hello from Lune!"
+```
+
+See `docs/FFI.md` for supported C functions, type mappings, and how to add new FFI bindings.
