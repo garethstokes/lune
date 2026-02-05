@@ -6,31 +6,62 @@ module Lune.Http.Request exposing (
 
 import Lune.Prelude exposing (String, Maybe(..), List(..), Bool(..))
 import Lune.Http exposing (Request)
+import Lune.String as Str
 
-{-| Look up a query parameter by key from the request URL.
-    Returns Nothing if the parameter is not present.
--}
 query : String -> Request -> Maybe String
 query key req =
-  findParam key (prim_parseQueryString req.path)
+  findParam key (parseQueryString req.path)
 
-{-| Look up a header value by name (case-insensitive).
--}
 header : String -> Request -> Maybe String
 header name req =
-  prim_getHeader name req.headers
+  findHeader (Str.toLower name) req.headers
 
-{-| Get all query parameters from the request URL.
--}
 queryParams : Request -> List { key : String, value : String }
 queryParams req =
-  prim_parseQueryString req.path
+  parseQueryString req.path
+
+-- ===== Internal =====
+
+parseQueryString : String -> List { key : String, value : String }
+parseQueryString path =
+  case Str.indexOf "?" path of
+    Nothing -> Nil
+    Just idx ->
+      case Str.drop (prim_addInt idx 1) path of
+        qs ->
+          case Str.isEmpty qs of
+            True -> Nil
+            False -> listMap parsePair (Str.split "&" qs)
+
+parsePair : String -> { key : String, value : String }
+parsePair p =
+  case Str.indexOf "=" p of
+    Nothing -> { key = p, value = "" }
+    Just idx ->
+      { key = Str.take idx p
+      , value = Str.drop (prim_addInt idx 1) p
+      }
 
 findParam : String -> List { key : String, value : String } -> Maybe String
 findParam key params =
   case params of
-    [] -> Nothing
+    Nil -> Nothing
     Cons p rest ->
-      case prim_eqString key p.key of
+      case Str.eq key p.key of
         True -> Just p.value
         False -> findParam key rest
+
+findHeader : String -> List { key : String, value : String } -> Maybe String
+findHeader lowerName headers =
+  case headers of
+    Nil -> Nothing
+    Cons h rest ->
+      case Str.eq lowerName (Str.toLower h.key) of
+        True -> Just h.value
+        False -> findHeader lowerName rest
+
+listMap : (a -> b) -> List a -> List b
+listMap f xs =
+  case xs of
+    Nil -> Nil
+    Cons x rest -> Cons (f x) (listMap f rest)
