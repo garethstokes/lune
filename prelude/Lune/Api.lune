@@ -7,6 +7,7 @@ module Lune.Api exposing (
   mapError,
   pure,
   andThen,
+  jsonBody,
   serve,
   ServerConfig
 )
@@ -16,6 +17,8 @@ import Lune.Http exposing (Request, Response, Method(..))
 import Lune.Http.Server as Server
 import Lune.Api.Route exposing (Route, Routes)
 import Lune.String as Str
+import Lune.Json as Json
+import Lune.Json.Decode as D
 
 {-| Api e a represents an API computation that:
     - Has read access to context of type ctx (implicit via run)
@@ -54,6 +57,19 @@ pure = prim_apiPure
 
 andThen : (a -> Api e b) -> Api e a -> Api e b
 andThen = prim_apiAndThen
+
+{-| Parse the request body as JSON using the given decoder.
+    On decode failure, calls toErr to convert the error message
+    to the application's error type.
+-}
+jsonBody : (String -> e) -> D.Decoder a -> Request -> Api e a
+jsonBody toErr decoder request =
+  case Json.parse request.body of
+    Err msg -> fail (toErr msg)
+    Ok json ->
+      case D.decodeValue decoder json of
+        Err decodeErr -> fail (toErr decodeErr.message)
+        Ok value -> pure value
 
 -- Server
 serve : ServerConfig e ctx -> Routes e ctx -> IO Unit
