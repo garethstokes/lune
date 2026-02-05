@@ -1,0 +1,74 @@
+module SqlitePoolExample exposing (main)
+
+{-| Example showing how to use the generic pool for SQLite.
+
+This is a HYPOTHETICAL example - SQLite connection types don't exist yet,
+but this shows how easy it would be to add them using the generic pool.
+
+To implement SQLite support, you would need:
+1. Create Lune.Database.Sqlite.Connection module with SqliteConn type
+2. Create Lune.Database.Sqlite.Pool module (wrapper like PostgreSQL)
+3. The pool logic is already generic - just plug in your connection ops!
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, String)
+
+-- Hypothetical SQLite types (not implemented yet)
+-- These would live in Lune.Database.Sqlite modules
+
+type alias SqliteConn = { filepath : String }  -- placeholder
+
+type alias SqliteError = { message : String }  -- placeholder
+
+-- Hypothetical connection operations
+sqliteOpen : String -> IO (Result SqliteError SqliteConn)
+sqliteOpen path = prim_sqliteOpen path
+
+sqliteClose : SqliteConn -> IO (Result SqliteError Unit)
+sqliteClose conn = prim_sqliteClose conn
+
+-- How you would create a SQLite pool using the generic pool:
+--
+-- import Lune.Database.Pool as GenericPool
+--
+-- type alias SqlitePoolConfig =
+--   { filepath : String
+--   , maxConnections : Int
+--   }
+--
+-- createSqlitePool : SqlitePoolConfig -> IO (GenericPool.Pool SqliteConn SqliteError)
+-- createSqlitePool config =
+--   let ops =
+--     { open = \_ -> sqliteOpen config.filepath
+--     , close = sqliteClose
+--     }
+--   in GenericPool.createPool config.maxConnections ops
+--
+-- Then use it exactly like the PostgreSQL pool:
+--
+-- pool <- createSqlitePool { filepath = "db.sqlite", maxConnections = 10 }
+-- result <- GenericPool.withConnection pool (\conn -> runQuery conn "SELECT 1")
+-- GenericPool.destroyPool pool
+
+main : IO Unit
+main =
+  do
+    IO.println "=== Hypothetical SQLite Pool Example ==="
+    IO.println ""
+    IO.println "This example shows how the generic pool enables easy"
+    IO.println "database backend support without code duplication."
+    IO.println ""
+    IO.println "The SAME pool logic works for:"
+    IO.println "  - PostgreSQL (already implemented)"
+    IO.println "  - SQLite (just add connection ops)"
+    IO.println "  - MySQL (just add connection ops)"
+    IO.println "  - Redis (just add connection ops)"
+    IO.println "  - Any other database!"
+    IO.println ""
+    IO.println "Each database keeps its own error types:"
+    IO.println "  - PostgreSQL: Result PgError a"
+    IO.println "  - SQLite:     Result SqliteError a"
+    IO.println "  - MySQL:      Result MySqlError a"
+    IO.println ""
+    IO.println "No type class complexity needed - just records of functions!"

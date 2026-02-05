@@ -1,0 +1,183 @@
+module Lune.Database.Pool exposing (
+  Pool,
+  ConnectionOps,
+  createPool,
+  destroyPool,
+  withConnection
+)
+
+{-| Generic STM-based connection pool.
+
+Works with any database connection type by taking connection operations
+as parameters. Each database backend can have its own error type.
+
+Manages a pool of reusable connections with configurable maximum size.
+Uses STM (Atomic) for thread-safe acquire/release without locks.
+
+When all connections are in use, `withConnection` blocks (via STM retry)
+until one is released by another fiber.
+
+Example:
+```
+let ops =
+  { open = \() -> PgConn.connect "localhost" 5432 "mydb" "user"
+  , close = PgConn.close
+  }
+pool <- Pool.createPool 10 ops
+result <- Pool.withConnection pool (\conn ->
+  Query.execute conn "SELECT 1"
+)
+Pool.destroyPool pool
+```
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, Bool(..), Monad(..))
+import Lune.Atomic as Atomic exposing (Atomic, Shared)
+import Lune.Int as Int
+
+-- | Operations required for managing connections
+-- `open` creates a new connection
+-- `close` closes a connection
+type alias ConnectionOps conn err =
+  { open : Unit -> IO (Result err conn)
+  , close : conn -> IO (Result err Unit)
+  }
+
+-- | Generic connection pool
+-- Holds idle connections, tracks in-use count, and stores connection operations
+type alias Pool conn err =
+  { maxConnections : Int
+  , idle : Shared (List conn)
+  , inUse : Shared Int
+  , closed : Shared Bool
+  , ops : ConnectionOps conn err
+  }
+
+-- | Create a new connection pool
+-- No connections are opened eagerly; they are created on demand up to maxConnections.
+createPool : Int -> ConnectionOps conn err -> IO (Pool conn err)
+createPool maxConns ops =
+  do
+    idleVar <- Atomic.commit (Atomic.new Nil)
+    inUseVar <- Atomic.commit (Atomic.new 0)
+    closedVar <- Atomic.commit (Atomic.new False)
+    pure
+      { maxConnections = maxConns
+      , idle = idleVar
+      , inUse = inUseVar
+      , closed = closedVar
+      , ops = ops
+      }
+
+-- | Destroy the pool, closing all idle connections
+destroyPool : Pool conn err -> IO Unit
+destroyPool pool =
+  do
+    conns <- Atomic.commit
+      (do
+        Atomic.write pool.closed True
+        idleConns <- Atomic.read pool.idle
+        Atomic.write pool.idle Nil
+        pure idleConns
+      )
+    closeAll pool.ops.close conns
+
+closeAll : (conn -> IO (Result err Unit)) -> List conn -> IO Unit
+closeAll closeFn conns =
+  case conns of
+    Nil -> pure Unit
+    Cons c rest ->
+      do
+        _ <- closeFn c
+        closeAll closeFn rest
+
+-- | Use a connection from the pool, automatically releasing it when done
+-- If an error occurs during the action, the connection is still returned to the pool.
+withConnection : Pool conn err -> (conn -> IO (Result err a)) -> IO (Result err a)
+withConnection pool action =
+  do
+    acquireResult <- acquire pool
+    case acquireResult of
+      Err e -> pure (Err e)
+      Ok conn ->
+        do
+          result <- action conn
+          release pool conn
+          pure result
+
+-- Internal: acquire a connection from the pool
+acquire : Pool conn err -> IO (Result err conn)
+acquire pool =
+  do
+    outcome <- Atomic.commit (tryAcquire pool)
+    handleAcquireOutcome pool outcome
+
+-- STM transaction: try to take an idle connection or reserve a slot for a new one
+-- Returns: Ok (Just conn) if we got an idle connection
+--          Ok Nothing if we reserved a slot and should open a new connection
+--          Retries (waits) if at max capacity with no idle connections
+tryAcquire : Pool conn err -> Atomic (Maybe conn)
+tryAcquire pool =
+  do
+    isClosed <- Atomic.read pool.closed
+    case isClosed of
+      True -> Atomic.wait  -- Pool is closed, wait indefinitely (will never succeed)
+      False ->
+        do
+          idleConns <- Atomic.read pool.idle
+          case idleConns of
+            Cons conn rest ->
+              do
+                Atomic.write pool.idle rest
+                used <- Atomic.read pool.inUse
+                Atomic.write pool.inUse (Int.add used 1)
+                pure (Just conn)
+            Nil ->
+              do
+                used <- Atomic.read pool.inUse
+                case Int.lt used pool.maxConnections of
+                  True ->
+                    do
+                      Atomic.write pool.inUse (Int.add used 1)
+                      pure Nothing
+                  False ->
+                    Atomic.wait
+
+handleAcquireOutcome : Pool conn err -> Maybe conn -> IO (Result err conn)
+handleAcquireOutcome pool outcome =
+  case outcome of
+    Just conn -> pure (Ok conn)
+    Nothing -> openNewConnection pool
+
+-- Internal: open a new connection using the pool's ops
+openNewConnection : Pool conn err -> IO (Result err conn)
+openNewConnection pool =
+  do
+    connResult <- pool.ops.open Unit
+    case connResult of
+      Err e ->
+        do
+          Atomic.commit
+            (do
+              used <- Atomic.read pool.inUse
+              Atomic.write pool.inUse (Int.sub used 1)
+            )
+          pure (Err e)
+      Ok conn -> pure (Ok conn)
+
+-- Internal: release a connection back to the pool
+release : Pool conn err -> conn -> IO Unit
+release pool conn =
+  Atomic.commit
+    (do
+      isClosed <- Atomic.read pool.closed
+      case isClosed of
+        True -> pure Unit
+        False ->
+          do
+            idleConns <- Atomic.read pool.idle
+            Atomic.write pool.idle (Cons conn idleConns)
+            used <- Atomic.read pool.inUse
+            Atomic.write pool.inUse (Int.sub used 1)
+            pure Unit
+    )
