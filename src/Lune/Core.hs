@@ -7,7 +7,8 @@ module Lune.Core
 
 import Data.Text (Text)
 import qualified Lune.Syntax as S
-import Lune.Type (Constraint)
+import Lune.Syntax (ForeignConvention)
+import Lune.Type (Constraint, Type)
 
 data CoreModule = CoreModule
   { coreName :: Text
@@ -31,6 +32,7 @@ data CoreExpr
   | CRecord [(Text, CoreExpr)]
   | CSelect CoreExpr Text
   | CDictWanted Constraint
+  | CForeignImport ForeignConvention Text Type
   deriving (Show)
 
 data CoreAlt = CoreAlt S.Pattern CoreExpr

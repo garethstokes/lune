@@ -35,6 +35,11 @@ data Decl
   | DeclNewtype Text [Text] Text Type
   | DeclClass Text [ClassParam] [Constraint] [ClassMethodSig]
   | DeclInstance Text Type [InstanceMethodDef]
+  | DeclForeignImport ForeignConvention Text Text QualType
+  deriving (Show)
+
+data ForeignConvention
+  = CCall
   deriving (Show)
 
 data TypeCtor = TypeCtor Text [Type]

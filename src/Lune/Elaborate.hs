@@ -21,6 +21,7 @@ import qualified Lune.InstanceEnv as IE
 import qualified Lune.Syntax as S
 import Lune.Type
 import Lune.TypeConvert (AliasEnv, buildAliasEnv, convertType, expandAliases)
+import qualified Lune.TypeConvert as TypeConvert
 
 data ElaborateError
   = ElaborateTypecheckError Check.TypecheckError
@@ -114,12 +115,12 @@ elaborateModule tm = do
       dictCandidates = buildDictCandidates aliasEnv (tmInstanceEnv tm)
 
   dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm)) (Map.elems (tmInstanceEnv tm))
-  valueDecls <- mapM (elabValueDecl methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm)) (valueDeclsOf decls)
+  otherDecls <- mapM (elabDecl methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm) aliasEnv) decls
 
   pure
     CoreModule
       { coreName = S.modName (tmModule tm)
-      , coreDecls = Builtins.builtinCoreDecls <> dictDecls <> valueDecls
+      , coreDecls = Builtins.builtinCoreDecls <> dictDecls <> otherDecls
       }
 
 -- Exposed for debugging/smaller tests.
@@ -171,14 +172,20 @@ elabValueDecl methodIndex instanceDicts dictCandidates env0 classEnv decl =
     _ ->
       Left (ElaborateMissingScheme "<non-value decl>")
 
-valueDeclsOf :: [S.Decl] -> [S.Decl]
-valueDeclsOf =
-  filter isValue
-  where
-    isValue decl =
-      case decl of
-        S.DeclValue {} -> True
-        _ -> False
+elabDecl :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> AliasEnv -> S.Decl -> Either ElaborateError CoreDecl
+elabDecl methodIndex instanceDicts dictCandidates env0 classEnv aliasEnv decl =
+  case decl of
+    S.DeclValue {} ->
+      elabValueDecl methodIndex instanceDicts dictCandidates env0 classEnv decl
+    S.DeclForeignImport convention symbol name qualTy -> do
+      let scheme = TypeConvert.schemeFromQualType aliasEnv qualTy
+      case I.runInferM (instantiate scheme) of
+        Left err -> Left (ElaborateInferError name err)
+        Right (_, ty) -> pure (CoreDecl name (CForeignImport convention symbol ty))
+    _ ->
+      -- This is a temporary hack to get things compiling.
+      -- We'll need to handle other decl types properly later.
+      pure (CoreDecl "" (CInt 0))
 
 inferTopLevel :: CE.ClassEnv -> MethodIndex -> TypeEnv -> Scheme -> [S.Pattern] -> S.Expr -> I.InferM (Subst, CoreExpr)
 inferTopLevel classEnv methodIndex env0 scheme args body = do

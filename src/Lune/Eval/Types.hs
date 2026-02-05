@@ -124,6 +124,7 @@ data EvalError
   | NotARecord Value
   | MissingField Text
   | UnexpectedDictWanted Constraint
+  | ForeignError Text
   deriving (Show)
 
 instance Show Value where
