@@ -3,7 +3,20 @@ module Lune.Http exposing (
   Request,
   Response,
   response,
-  jsonResponse
+  jsonResponse,
+  ok,
+  created,
+  noContent,
+  badRequest,
+  unauthorized,
+  forbidden,
+  notFound,
+  conflict,
+  serverError,
+  redirect,
+  jsonOk,
+  jsonCreated,
+  withHeader
 )
 
 import Lune.Prelude exposing (String, Int, List(..), Maybe)
@@ -41,4 +54,51 @@ jsonResponse status json =
   { status = status
   , headers = [{ key = "Content-Type", value = "application/json" }]
   , body = prim_jsonStringify json
+  }
+
+ok : String -> Response
+ok body = response 200 body
+
+created : String -> Response
+created body = response 201 body
+
+noContent : Response
+noContent = { status = 204, headers = [], body = "" }
+
+badRequest : String -> Response
+badRequest body = response 400 body
+
+unauthorized : String -> Response
+unauthorized body = response 401 body
+
+forbidden : String -> Response
+forbidden body = response 403 body
+
+notFound : String -> Response
+notFound body = response 404 body
+
+conflict : String -> Response
+conflict body = response 409 body
+
+serverError : String -> Response
+serverError body = response 500 body
+
+redirect : String -> Response
+redirect url =
+  { status = 302
+  , headers = [{ key = "Location", value = url }]
+  , body = ""
+  }
+
+jsonOk : Json -> Response
+jsonOk json = jsonResponse 200 json
+
+jsonCreated : Json -> Response
+jsonCreated json = jsonResponse 201 json
+
+withHeader : String -> String -> Response -> Response
+withHeader key value resp =
+  { status = resp.status
+  , headers = Cons { key = key, value = value } resp.headers
+  , body = resp.body
   }

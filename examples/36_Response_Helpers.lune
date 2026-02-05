@@ -1,0 +1,30 @@
+module ResponseHelpers exposing (main)
+
+import Lune.IO as IO
+import Lune.Http as Http
+import Lune.Json.Encode as E
+import Lune.Json as Json
+import Lune.String as Str
+import Lune.Prelude exposing (IO, Unit)
+
+main : IO Unit
+main =
+  do
+    let r1 = Http.ok "hello"
+    IO.println (Str.fromInt r1.status)
+    let r2 = Http.created "new resource"
+    IO.println (Str.fromInt r2.status)
+    let r3 = Http.noContent
+    IO.println (Str.fromInt r3.status)
+    let r4 = Http.notFound "gone"
+    IO.println (Str.fromInt r4.status)
+    let r5 = Http.badRequest "nope"
+    IO.println (Str.fromInt r5.status)
+    let r6 = Http.unauthorized "denied"
+    IO.println (Str.fromInt r6.status)
+    let r7 = Http.redirect "/new-place"
+    IO.println (Str.fromInt r7.status)
+    let json = E.object [{ key = "id", value = E.int 1 }]
+    let r8 = Http.jsonOk json
+    IO.println (Str.fromInt r8.status)
+    IO.println r8.body
