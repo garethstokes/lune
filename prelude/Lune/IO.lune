@@ -33,9 +33,6 @@ readFile = prim_readFile
 writeFile : String -> String -> IO (Result Error Unit)
 writeFile = prim_writeFile
 
-{-| Wrap a pure value in IO. Provides access to typeclass pure for IO. -}
+{-| Wrap a pure value in IO. -}
 pure : a -> IO a
-pure x = pureHelper x
-
-pureHelper : a -> IO a
-pureHelper x = do pure x
+pure x = prim_ioPure x

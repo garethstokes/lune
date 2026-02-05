@@ -49,7 +49,7 @@ httpRequestType =
   TRecord
     [ ("body", TCon "String")
     , ("headers", TApp (TCon "List") httpHeaderType)
-    , ("method", TCon "Lune.Http.Method")
+    , ("method", TCon "Method")
     , ("path", TCon "String")
     ]
 
@@ -125,6 +125,7 @@ builtinSchemes =
     , ("prim_await", Forall ["a"] [] (TArrow (TApp (TCon "Fiber") (TVar "a")) (TApp (TCon "IO") (TVar "a"))))
     , ("prim_yield", Forall [] [] (TApp (TCon "IO") (TCon "Unit")))
     , ("$primIOPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
+    , ("prim_ioPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
     , ("$primIOBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
     , ("$primIOThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
     , ("$primSTMPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "STM") (TVar "a"))))
@@ -568,6 +569,7 @@ builtinEvalPrims =
     , ("prim_appendString", BuiltinPrim 2 primAppendString)
     , ("prim_eqString", BuiltinPrim 2 primEqString)
     , ("$primIOPure", BuiltinPrim 1 primIOPure)
+    , ("prim_ioPure", BuiltinPrim 1 primIOPure)
     , ("$primIOBind", BuiltinPrim 2 primIOBind)
     , ("$primIOThen", BuiltinPrim 2 primIOThen)
     -- JSON primitives

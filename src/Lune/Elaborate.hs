@@ -340,6 +340,13 @@ inferCoreExpr methodIndex env expr =
               I.inferFail (I.MissingRecordField field)
             Just fieldTy ->
               pure (s1, applySubstConstraints s1 c1, fieldTy, CSelect cBase field)
+        TVar _ -> do
+          -- The base type is not yet resolved (e.g. lambda parameter in a
+          -- do-block bind). Create a fresh type variable for the field result;
+          -- it will be unified later when the enclosing application constrains
+          -- the lambda parameter.
+          tv <- freshTypeVar
+          pure (s1, applySubstConstraints s1 c1, tv, CSelect cBase field)
         other ->
           I.inferFail (I.NotARecord other)
 

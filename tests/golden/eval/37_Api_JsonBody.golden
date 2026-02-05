@@ -1,1 +1,2 @@
-ImportCycle ["ApiJsonBody","Lune.Api","Lune.Api.Route","Lune.Api"]
+Alice age 30
+parse failed as expected

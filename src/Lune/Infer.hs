@@ -286,6 +286,12 @@ inferFieldAccess env base field = do
       case lookup field fields of
         Nothing -> throwInfer (MissingRecordField field)
         Just fieldTy -> pure (s1, applySubstConstraints s1 c1, fieldTy)
+    TVar _ -> do
+      -- Base type is not yet resolved (e.g. lambda parameter whose type
+      -- will be constrained by the enclosing application). Return a fresh
+      -- type variable; field validity is checked at runtime.
+      tv <- freshTypeVar
+      pure (s1, applySubstConstraints s1 c1, tv)
     other ->
       throwInfer (NotARecord other)
 

@@ -95,8 +95,17 @@ expandAliases aliasEnv =
                       if length params /= length args
                         then rebuildApps (TCon name) (map (go seen) args)
                         else
-                          let subst = Map.fromList (zip params (map (go seen) args))
-                           in go (Set.insert name seen) (applySubstType subst body)
+                          -- Don't expand opaque aliases (e.g. type Api e a = Api#)
+                          -- where the RHS discards type parameters, as this would
+                          -- sever the type variable chain needed for unification.
+                          let usedParams = ftvType body
+                              allUsed = all (\p -> p `Set.member` usedParams) params
+                           in if allUsed
+                                then
+                                  let subst = Map.fromList (zip params (map (go seen) args))
+                                   in go (Set.insert name seen) (applySubstType subst body)
+                                else
+                                  rebuildApps (TCon name) (map (go seen) args)
             (headTy, args) ->
               rebuildApps (go seen headTy) (map (go seen) args)
 

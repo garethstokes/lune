@@ -1,1 +1,2 @@
-ElaborateTypecheckError EchoServer.main: CannotUnify (TCon "Connection") (TCon "Socket.Connection")
+Starting echo server on port 8080...
+Failed to listen

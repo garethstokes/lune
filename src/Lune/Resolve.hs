@@ -426,8 +426,9 @@ localValueMap modName decls =
 resolveDecl :: Scope -> S.Decl -> Either ResolveError S.Decl
 resolveDecl scope decl =
   case decl of
-    S.DeclTypeSig name qualTy ->
-      Right (S.DeclTypeSig (qualifyName (scopeModule scope) name) qualTy)
+    S.DeclTypeSig name qualTy -> do
+      qualTy' <- resolveQualType scope qualTy
+      Right (S.DeclTypeSig (qualifyName (scopeModule scope) name) qualTy')
     S.DeclValue name args expr -> do
       args' <- mapM (resolvePatternHead scope) args
       let bound' = scopeBound scope <> Set.fromList (patVars args)
@@ -450,11 +451,61 @@ resolveDecl scope decl =
           )
           methods
       Right (S.DeclInstance cls headTy methods')
-    S.DeclForeignImport convention symbol name qualTy ->
-      Right (S.DeclForeignImport convention symbol (qualifyName (scopeModule scope) name) qualTy)
+    S.DeclForeignImport convention symbol name qualTy -> do
+      qualTy' <- resolveQualType scope qualTy
+      Right (S.DeclForeignImport convention symbol (qualifyName (scopeModule scope) name) qualTy')
   where
     qualCtor (S.TypeCtor name tys) =
       S.TypeCtor (qualifyName (scopeModule scope) name) tys
+
+-- | Resolve qualified type names in a QualType.
+resolveQualType :: Scope -> S.QualType -> Either ResolveError S.QualType
+resolveQualType scope (S.QualType constraints ty) = do
+  ty' <- resolveTypeName scope ty
+  constraints' <- mapM (resolveConstraint scope) constraints
+  Right (S.QualType constraints' ty')
+
+resolveConstraint :: Scope -> S.Constraint -> Either ResolveError S.Constraint
+resolveConstraint scope (S.Constraint cls args) = do
+  args' <- mapM (resolveTypeName scope) args
+  Right (S.Constraint cls args')
+
+-- | Walk a type and resolve qualified type constructor names (e.g. "Api.Api" -> "Api").
+resolveTypeName :: Scope -> S.Type -> Either ResolveError S.Type
+resolveTypeName scope ty =
+  case ty of
+    S.TypeCon name ->
+      case T.breakOnEnd "." name of
+        ("", _) ->
+          -- No dot, leave as-is
+          Right ty
+        (prefix, typeName) ->
+          let alias = T.dropEnd 1 prefix  -- remove trailing dot
+           in case Map.lookup alias (scopeImportAliases scope) of
+                Just targetModule ->
+                  case Map.lookup targetModule (scopeExports scope) of
+                    Just exports
+                      | typeName `Map.member` exportTypes exports ->
+                          Right (S.TypeCon typeName)
+                    _ ->
+                      -- Not an exported type, leave as-is (could be a qualified builtin)
+                      Right (S.TypeCon typeName)
+                Nothing ->
+                  -- Not a known import alias, leave as-is
+                  Right ty
+    S.TypeVar _ ->
+      Right ty
+    S.TypeApp f x -> do
+      f' <- resolveTypeName scope f
+      x' <- resolveTypeName scope x
+      Right (S.TypeApp f' x')
+    S.TypeArrow a b -> do
+      a' <- resolveTypeName scope a
+      b' <- resolveTypeName scope b
+      Right (S.TypeArrow a' b')
+    S.TypeRecord fields -> do
+      fields' <- mapM (\(n, t) -> do t' <- resolveTypeName scope t; Right (n, t')) fields
+      Right (S.TypeRecord fields')
 
 resolveExpr :: Scope -> S.Expr -> Either ResolveError S.Expr
 resolveExpr scope expr =
