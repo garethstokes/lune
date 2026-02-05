@@ -1,0 +1,36 @@
+module Lune.Http.Request exposing (
+  query,
+  header,
+  queryParams
+)
+
+import Lune.Prelude exposing (String, Maybe(..), List(..), Bool(..))
+import Lune.Http exposing (Request)
+
+{-| Look up a query parameter by key from the request URL.
+    Returns Nothing if the parameter is not present.
+-}
+query : String -> Request -> Maybe String
+query key req =
+  findParam key (prim_parseQueryString req.path)
+
+{-| Look up a header value by name (case-insensitive).
+-}
+header : String -> Request -> Maybe String
+header name req =
+  prim_getHeader name req.headers
+
+{-| Get all query parameters from the request URL.
+-}
+queryParams : Request -> List { key : String, value : String }
+queryParams req =
+  prim_parseQueryString req.path
+
+findParam : String -> List { key : String, value : String } -> Maybe String
+findParam key params =
+  case params of
+    [] -> Nothing
+    Cons p rest ->
+      case prim_eqString key p.key of
+        True -> Just p.value
+        False -> findParam key rest

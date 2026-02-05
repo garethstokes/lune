@@ -1,0 +1,35 @@
+module RequestHelpers exposing (main)
+
+import Lune.IO as IO
+import Lune.Http exposing (Method(..))
+import Lune.Http.Request as Req
+import Lune.String as Str
+import Lune.Prelude exposing (IO, Unit, Maybe(..))
+
+main : IO Unit
+main =
+  do
+    let req =
+          { method = GET
+          , path = "/users/42?format=json&verbose=true"
+          , headers =
+              [ { key = "Content-Type", value = "application/json" }
+              , { key = "Authorization", value = "Bearer token123" }
+              ]
+          , body = "{\"name\":\"Alice\"}"
+          }
+    case Req.query "format" req of
+      Nothing -> IO.println "format: not found"
+      Just v -> IO.println (Str.append "format: " v)
+    case Req.query "verbose" req of
+      Nothing -> IO.println "verbose: not found"
+      Just v -> IO.println (Str.append "verbose: " v)
+    case Req.query "missing" req of
+      Nothing -> IO.println "missing: not found"
+      Just v -> IO.println (Str.append "missing: " v)
+    case Req.header "content-type" req of
+      Nothing -> IO.println "ct: not found"
+      Just v -> IO.println (Str.append "ct: " v)
+    case Req.header "authorization" req of
+      Nothing -> IO.println "auth: not found"
+      Just v -> IO.println (Str.append "auth: " v)

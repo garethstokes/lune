@@ -1,0 +1,5 @@
+format: json
+verbose: true
+missing: not found
+ct: application/json
+auth: Bearer token123
