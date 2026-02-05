@@ -40,6 +40,7 @@ import qualified Database.PostgreSQL.Simple.Transaction as PGT
 import Data.Pool (Pool)
 import qualified Data.Pool as Pool
 import Data.Time.Clock (NominalDiffTime)
+import qualified Network.Connection as NC
 import System.IO.Error (userError)
 
 instanceDictName :: Text -> Text -> Text
@@ -155,6 +156,26 @@ builtinSchemes =
     , ("prim_bytesUnpackInt32BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
     , ("prim_bytesPackInt16BE", Forall [] [] (TArrow (TCon "Int") (TCon "Bytes")))
     , ("prim_bytesUnpackInt16BE", Forall [] [] (TArrow (TCon "Bytes") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Int"))))
+    -- TLS primitives
+    , ("prim_tlsConnect", Forall [] []
+        (TArrow (TCon "String")
+          (TArrow (TCon "Int")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "TlsConn"))))))
+    , ("prim_tlsSendBytes", Forall [] []
+        (TArrow (TCon "TlsConn")
+          (TArrow (TCon "Bytes")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
+    , ("prim_tlsRecvBytes", Forall [] []
+        (TArrow (TCon "TlsConn")
+          (TArrow (TCon "Int")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Bytes"))))))
+    , ("prim_tlsClose", Forall [] []
+        (TArrow (TCon "TlsConn")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     -- Database primitives
     , ("prim_pgConnect", Forall [] []
         (TArrow (TCon "String")
@@ -637,6 +658,11 @@ builtinEvalPrims =
     , ("prim_bytesUnpackInt32BE", BuiltinPrim 1 primBytesUnpackInt32BE)
     , ("prim_bytesPackInt16BE", BuiltinPrim 1 primBytesPackInt16BE)
     , ("prim_bytesUnpackInt16BE", BuiltinPrim 1 primBytesUnpackInt16BE)
+    -- TLS primitives
+    , ("prim_tlsConnect", BuiltinPrim 2 primTlsConnect)
+    , ("prim_tlsSendBytes", BuiltinPrim 2 primTlsSendBytes)
+    , ("prim_tlsRecvBytes", BuiltinPrim 2 primTlsRecvBytes)
+    , ("prim_tlsClose", BuiltinPrim 1 primTlsClose)
     -- HTTP primitives
     , ("prim_parseHttpRequest", BuiltinPrim 1 primParseHttpRequest)
     , ("prim_formatHttpResponse", BuiltinPrim 1 primFormatHttpResponse)
@@ -1999,6 +2025,104 @@ valueToIntList _ = Nothing
 intListToValue :: [Value] -> Value
 intListToValue [] = VCon (preludeCon "Nil") []
 intListToValue (x:xs) = VCon (preludeCon "Cons") [x, intListToValue xs]
+
+-- =============================================================================
+-- TLS Primitives
+-- =============================================================================
+
+-- | prim_tlsConnect : String -> Int -> IO (Result Error TlsConn)
+primTlsConnect :: [Value] -> Either EvalError Value
+primTlsConnect args =
+  case args of
+    [VString host, VInt port] ->
+      Right $ VIO $ \world -> do
+        -- Initialize TLS context if needed
+        ctx <- case worldTlsContext world of
+          Just c -> pure c
+          Nothing -> NC.initConnectionContext
+        let params = NC.ConnectionParams
+              { NC.connectionHostname = T.unpack host
+              , NC.connectionPort = fromIntegral port
+              , NC.connectionUseSecure = Just NC.TLSSettingsSimple
+                  { NC.settingDisableCertificateValidation = False
+                  , NC.settingDisableSession = False
+                  , NC.settingUseServerName = True
+                  }
+              , NC.connectionUseSocks = Nothing
+              }
+        result <- try (NC.connectTo ctx params)
+        case result of
+          Left (e :: SomeException) ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+          Right conn ->
+            let connId = worldNextTlsConnId world
+                world' = world
+                  { worldTlsConns = IntMap.insert connId conn (worldTlsConns world)
+                  , worldNextTlsConnId = connId + 1
+                  , worldTlsContext = Just ctx
+                  }
+            in pure $ Right (world', VCon (preludeCon "Ok") [VTlsConn connId])
+    _ ->
+      Left (NotAFunction (VPrim 2 primTlsConnect args))
+
+-- | prim_tlsSendBytes : TlsConn -> Bytes -> IO (Result Error Unit)
+primTlsSendBytes :: [Value] -> Either EvalError Value
+primTlsSendBytes args =
+  case args of
+    [VTlsConn connId, VBytes bs] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup connId (worldTlsConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+          Just conn -> do
+            result <- try (NC.connectionPut conn bs)
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 2 primTlsSendBytes args))
+
+-- | prim_tlsRecvBytes : TlsConn -> Int -> IO (Result Error Bytes)
+-- Receive up to N bytes from the connection
+primTlsRecvBytes :: [Value] -> Either EvalError Value
+primTlsRecvBytes args =
+  case args of
+    [VTlsConn connId, VInt maxLen] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup connId (worldTlsConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+          Just conn -> do
+            result <- try (NC.connectionGet conn (fromIntegral maxLen))
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right bs ->
+                pure $ Right (world, VCon (preludeCon "Ok") [VBytes bs])
+    _ ->
+      Left (NotAFunction (VPrim 2 primTlsRecvBytes args))
+
+-- | prim_tlsClose : TlsConn -> IO (Result Error Unit)
+primTlsClose :: [Value] -> Either EvalError Value
+primTlsClose args =
+  case args of
+    [VTlsConn connId] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup connId (worldTlsConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+          Just conn -> do
+            result <- try (NC.connectionClose conn)
+            case result of
+              Left (e :: SomeException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                let world' = world { worldTlsConns = IntMap.delete connId (worldTlsConns world) }
+                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 1 primTlsClose args))
 
 -- =============================================================================
 -- Database Primitives

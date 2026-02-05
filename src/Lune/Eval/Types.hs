@@ -6,6 +6,7 @@ module Lune.Eval.Types
   , ConnId
   , DbConnId
   , DbPoolId
+  , TlsConnId
   , DbConnection (..)
   , DbPool (..)
   , DbValue (..)
@@ -31,6 +32,7 @@ import qualified Network.Socket as NS
 import qualified Data.ByteString as BS
 import qualified Database.PostgreSQL.Simple as PG
 import Data.Pool (Pool)
+import qualified Network.Connection as NC
 
 type Env = Map Text Value
 
@@ -40,6 +42,7 @@ type SocketId = Int
 type ConnId = Int
 type DbConnId = Int
 type DbPoolId = Int
+type TlsConnId = Int
 
 -- | Generic database connection - supports multiple backends
 data DbConnection
@@ -100,6 +103,9 @@ data World = World
   , worldNextDbConnId :: DbConnId        -- Next DB connection ID
   , worldDbPools :: IntMap DbPool        -- Database connection pools
   , worldNextDbPoolId :: DbPoolId        -- Next DB pool ID
+  , worldTlsConns :: IntMap NC.Connection  -- TLS connections
+  , worldNextTlsConnId :: TlsConnId        -- Next TLS connection ID
+  , worldTlsContext :: Maybe NC.ConnectionContext  -- Shared TLS context
   }
 
 instance Show World where
@@ -110,6 +116,7 @@ instance Show World where
          <> ", conns = " <> show (IntMap.size (worldConns w)) <> " entries"
          <> ", dbconns = " <> show (IntMap.size (worldDbConns w)) <> " entries"
          <> ", dbpools = " <> show (IntMap.size (worldDbPools w)) <> " entries"
+         <> ", tlsconns = " <> show (IntMap.size (worldTlsConns w)) <> " entries"
          <> " }"
 
 data JsonValue
@@ -136,6 +143,7 @@ data Value
   | VDbPool DbPoolId
   | VDbValue DbValue
   | VBytes BS.ByteString
+  | VTlsConn TlsConnId
   | VDbRow DbRow
   | VCon Text [Value]
   | VJson JsonValue
@@ -214,6 +222,8 @@ instance Show Value where
         "<dbrow>"
       VBytes bs ->
         "<bytes:" <> show (BS.length bs) <> ">"
+      VTlsConn tid ->
+        "<tlsconn:" <> show tid <> ">"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
