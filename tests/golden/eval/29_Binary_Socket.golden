@@ -1,0 +1,52 @@
+=== Binary TCP Socket Example ===
+
+Binary sockets enable wire protocol implementations.
+
+=== API Overview ===
+
+sendBytes : Connection -> Bytes -> IO (Result Error Unit)
+  Send raw bytes over TCP connection
+
+recvBytes : Connection -> Int -> IO (Result Error Bytes)
+  Receive up to N bytes (returns when data available)
+
+=== Example: Simple Protocol Client ===
+
+-- Connect to a server
+result <- Socket.connect "localhost" 5000
+case result of
+  Err e -> IO.println "Connection failed"
+  Ok conn ->
+    do
+      -- Build a message with length prefix
+      let payload = Bytes.fromList [72, 101, 108, 108, 111]  -- "Hello"
+      let lenPrefix = Bytes.packInt32BE (Bytes.length payload)
+      let message = Bytes.concat lenPrefix payload
+
+      -- Send the message
+      _ <- Socket.sendBytes conn message
+
+      -- Read response length (4 bytes)
+      lenResult <- Socket.recvBytes conn 4
+      case lenResult of
+        Err e -> IO.println "Read failed"
+        Ok lenBytes ->
+          case Bytes.unpackInt32BE lenBytes of
+            Err e -> IO.println "Invalid length"
+            Ok len ->
+              do
+                -- Read response payload
+                payloadResult <- Socket.recvBytes conn len
+                -- Process response...
+                Socket.closeConn conn
+
+=== Use Case: Wire Protocol Implementation ===
+
+Binary sockets + Bytes enable implementing protocols like:
+- PostgreSQL wire protocol (message framing)
+- Redis RESP protocol
+- Custom binary protocols
+
+For TLS-encrypted protocols, use Lune.Net.Tls instead.
+
+Done!

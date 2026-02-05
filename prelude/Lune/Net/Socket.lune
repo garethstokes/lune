@@ -6,12 +6,25 @@ module Lune.Net.Socket exposing (
   connect,
   recv,
   send,
+  recvBytes,
+  sendBytes,
   closeConn,
   closeSocket
 )
 
+{-| TCP socket operations for networking.
+
+This module provides both text-based and binary socket operations:
+- `send`/`recv` for text (String) data
+- `sendBytes`/`recvBytes` for binary (Bytes) data
+
+Binary operations are useful for implementing wire protocols
+(PostgreSQL, Redis, custom protocols, etc.) in pure Lune.
+-}
+
 import Lune.Prelude exposing (IO, Int, Result, String, Unit)
 import Lune.IO exposing (Error)
+import Lune.Bytes exposing (Bytes)
 
 type Socket = Socket#
 type Connection = Connection#
@@ -25,11 +38,22 @@ accept = prim_tcpAccept
 connect : String -> Int -> IO (Result Error Connection)
 connect = prim_tcpConnect
 
+-- | Receive text data from a connection
 recv : Connection -> IO (Result Error String)
 recv = prim_connRecv
 
+-- | Send text data over a connection
 send : Connection -> String -> IO (Result Error Unit)
 send = prim_connSend
+
+-- | Receive up to N bytes of binary data from a connection
+-- Returns as soon as data is available (may be less than N bytes)
+recvBytes : Connection -> Int -> IO (Result Error Bytes)
+recvBytes = prim_connRecvBytes
+
+-- | Send binary data over a connection
+sendBytes : Connection -> Bytes -> IO (Result Error Unit)
+sendBytes = prim_connSendBytes
 
 closeConn : Connection -> IO (Result Error Unit)
 closeConn = prim_connClose

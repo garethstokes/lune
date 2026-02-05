@@ -1,0 +1,76 @@
+module BinarySocketExample exposing (main)
+
+{-| Binary TCP socket example.
+
+This demonstrates binary socket operations for implementing
+wire protocols (PostgreSQL, Redis, etc.) in pure Lune.
+
+The key functions are:
+- Socket.sendBytes : Connection -> Bytes -> IO (Result Error Unit)
+- Socket.recvBytes : Connection -> Int -> IO (Result Error Bytes)
+
+Unlike Socket.send/recv which work with String (text),
+sendBytes/recvBytes work with raw Bytes for binary protocols.
+-}
+
+import Lune.IO as IO
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String)
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.Net.Socket as Socket exposing (Connection)
+import Lune.String as Str
+
+main : IO Unit
+main =
+  do
+    IO.println "=== Binary TCP Socket Example ==="
+    IO.println ""
+    IO.println "Binary sockets enable wire protocol implementations."
+    IO.println ""
+    IO.println "=== API Overview ==="
+    IO.println ""
+    IO.println "sendBytes : Connection -> Bytes -> IO (Result Error Unit)"
+    IO.println "  Send raw bytes over TCP connection"
+    IO.println ""
+    IO.println "recvBytes : Connection -> Int -> IO (Result Error Bytes)"
+    IO.println "  Receive up to N bytes (returns when data available)"
+    IO.println ""
+    IO.println "=== Example: Simple Protocol Client ==="
+    IO.println ""
+    IO.println "-- Connect to a server"
+    IO.println "result <- Socket.connect \"localhost\" 5000"
+    IO.println "case result of"
+    IO.println "  Err e -> IO.println \"Connection failed\""
+    IO.println "  Ok conn ->"
+    IO.println "    do"
+    IO.println "      -- Build a message with length prefix"
+    IO.println "      let payload = Bytes.fromList [72, 101, 108, 108, 111]  -- \"Hello\""
+    IO.println "      let lenPrefix = Bytes.packInt32BE (Bytes.length payload)"
+    IO.println "      let message = Bytes.concat lenPrefix payload"
+    IO.println ""
+    IO.println "      -- Send the message"
+    IO.println "      _ <- Socket.sendBytes conn message"
+    IO.println ""
+    IO.println "      -- Read response length (4 bytes)"
+    IO.println "      lenResult <- Socket.recvBytes conn 4"
+    IO.println "      case lenResult of"
+    IO.println "        Err e -> IO.println \"Read failed\""
+    IO.println "        Ok lenBytes ->"
+    IO.println "          case Bytes.unpackInt32BE lenBytes of"
+    IO.println "            Err e -> IO.println \"Invalid length\""
+    IO.println "            Ok len ->"
+    IO.println "              do"
+    IO.println "                -- Read response payload"
+    IO.println "                payloadResult <- Socket.recvBytes conn len"
+    IO.println "                -- Process response..."
+    IO.println "                Socket.closeConn conn"
+    IO.println ""
+    IO.println "=== Use Case: Wire Protocol Implementation ==="
+    IO.println ""
+    IO.println "Binary sockets + Bytes enable implementing protocols like:"
+    IO.println "- PostgreSQL wire protocol (message framing)"
+    IO.println "- Redis RESP protocol"
+    IO.println "- Custom binary protocols"
+    IO.println ""
+    IO.println "For TLS-encrypted protocols, use Lune.Net.Tls instead."
+    IO.println ""
+    IO.println "Done!"

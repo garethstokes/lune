@@ -145,6 +145,17 @@ builtinSchemes =
     , ("prim_connSend", Forall [] [] (TArrow (TCon "Connection") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
     , ("prim_connClose", Forall [] [] (TArrow (TCon "Connection") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
     , ("prim_socketClose", Forall [] [] (TArrow (TCon "Socket") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit")))))
+    -- Binary TCP primitives (for wire protocols)
+    , ("prim_connSendBytes", Forall [] []
+        (TArrow (TCon "Connection")
+          (TArrow (TCon "Bytes")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
+    , ("prim_connRecvBytes", Forall [] []
+        (TArrow (TCon "Connection")
+          (TArrow (TCon "Int")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Bytes"))))))
     -- Bytes primitives
     , ("prim_bytesEmpty", Forall [] [] (TCon "Bytes"))
     , ("prim_bytesFromList", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Int")) (TCon "Bytes")))
@@ -647,6 +658,9 @@ builtinEvalPrims =
     , ("prim_connSend", BuiltinPrim 2 primConnSend)
     , ("prim_connClose", BuiltinPrim 1 primConnClose)
     , ("prim_socketClose", BuiltinPrim 1 primSocketClose)
+    -- Binary TCP primitives (for wire protocols)
+    , ("prim_connSendBytes", BuiltinPrim 2 primConnSendBytes)
+    , ("prim_connRecvBytes", BuiltinPrim 2 primConnRecvBytes)
     -- Bytes primitives
     , ("prim_bytesEmpty", BuiltinPrim 0 primBytesEmpty)
     , ("prim_bytesFromList", BuiltinPrim 1 primBytesFromList)
@@ -1881,6 +1895,44 @@ primConnClose args =
                 in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primConnClose args))
+
+-- | prim_connSendBytes : Connection -> Bytes -> IO (Result Error Unit)
+primConnSendBytes :: [Value] -> Either EvalError Value
+primConnSendBytes args =
+  case args of
+    [VConn cid, VBytes bytes] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup cid (worldConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+          Just conn -> do
+            result <- try (NSB.sendAll conn bytes)
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right () ->
+                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+    _ ->
+      Left (NotAFunction (VPrim 2 primConnSendBytes args))
+
+-- | prim_connRecvBytes : Connection -> Int -> IO (Result Error Bytes)
+primConnRecvBytes :: [Value] -> Either EvalError Value
+primConnRecvBytes args =
+  case args of
+    [VConn cid, VInt maxBytes] ->
+      Right $ VIO $ \world ->
+        case IntMap.lookup cid (worldConns world) of
+          Nothing ->
+            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+          Just conn -> do
+            result <- try (NSB.recv conn (fromIntegral maxBytes))
+            case result of
+              Left (e :: IOException) ->
+                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+              Right bytes ->
+                pure $ Right (world, VCon (preludeCon "Ok") [VBytes bytes])
+    _ ->
+      Left (NotAFunction (VPrim 2 primConnRecvBytes args))
 
 -- | prim_socketClose : Socket -> IO (Result Error Unit)
 primSocketClose :: [Value] -> Either EvalError Value
