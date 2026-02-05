@@ -436,14 +436,34 @@ newtype UserId =
 
 ## 13. FFI
 
-Lune uses explicit C ABI interop:
+Lune uses explicit C ABI interop for calling C functions.
+
+### 13.1 Foreign Import Declaration
+
+```
+ForeignImport ::= 'foreign' 'import' Convention StringLiteral Identifier ':' QualType
+
+Convention ::= 'ccall'
+```
+
+Foreign import declarations bind a Lune name to a C function:
+
+```haskell
+foreign import ccall "puts" puts : String -> IO Int
+```
+
+The string literal is the C symbol name. The identifier is the Lune binding name. The type must have `IO` in the return position since all FFI calls perform side effects.
+
+### 13.2 Example
 
 ```haskell
 foreign import ccall "puts"
-  puts : String -> IO (Result IOError Int)
+  puts : String -> IO Int
 ```
 
-All errors must be explicit.
+### 13.3 Safety
+
+FFI calls bypass Lune's type safety at the boundary. Only whitelisted functions can be called; unknown symbols produce a runtime error. See `docs/FFI.md` for the full list of supported C functions and type mappings.
 
 ---
 
