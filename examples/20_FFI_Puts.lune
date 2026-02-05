@@ -1,0 +1,12 @@
+module FFI_Puts exposing (main)
+
+import Lune.IO as IO
+
+foreign import ccall "puts"
+  puts : String -> IO Int
+
+main : IO Unit
+main =
+  do
+    _ <- puts "Hello from C!"
+    IO.println "Hello from Lune!"
