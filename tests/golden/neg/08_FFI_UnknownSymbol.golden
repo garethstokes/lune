@@ -1,0 +1,4 @@
+UNEXPECTED SUCCESS: Expected compilation to fail but it succeeded.
+OK
+FFI_UnknownSymbol.unknownFunc : String -> IO Int
+FFI_UnknownSymbol.main : IO Unit

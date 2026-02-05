@@ -1,0 +1,11 @@
+module FFI_UnknownSymbol exposing (main)
+
+import Lune.IO as IO
+
+foreign import ccall "unknown_function" unknownFunc : String -> IO Int
+
+main : IO Unit
+main =
+  do
+    _ <- unknownFunc "test"
+    IO.println "Should not reach here"
