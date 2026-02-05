@@ -1,0 +1,145 @@
+module Lune.Database.Postgres.Connection exposing (
+  PgConn,
+  connect,
+  connectWithPassword,
+  close,
+  sendQuery,
+  readBackendMessage
+)
+
+{-| PostgreSQL connection management.
+
+Handles TLS connection establishment, the startup/authentication handshake,
+and provides a thin wrapper for sending queries and reading responses.
+
+Example:
+```
+result <- Connection.connect "localhost" 5432 "mydb" "myuser"
+case result of
+  Ok conn ->
+    do
+      -- use conn with Query module
+      Connection.close conn
+  Err e -> IO.println e.message
+```
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String, Maybe(..), Bool(..), Monad(..))
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.Net.Tls as Tls exposing (TlsConn)
+import Lune.IO exposing (Error)
+import Lune.String as Str
+import Lune.Database.Postgres.Protocol as Protocol exposing (FrontendMessage(..), BackendMessage(..), TransactionStatus(..), PgError)
+
+type alias PgConn =
+  { tlsConn : TlsConn
+  , backendPid : Int
+  , backendSecret : Int
+  }
+
+-- | Connect to PostgreSQL over TLS without a password (trust/peer auth)
+connect : String -> Int -> String -> String -> IO (Result PgError PgConn)
+connect host port database user =
+  do
+    connResult <- Tls.connect host port
+    case connResult of
+      Err _ -> pure (Err { severity = "FATAL", code = "08001", message = "TLS connection failed" })
+      Ok tlsConn ->
+        do
+          sendResult <- Tls.sendBytes tlsConn (Protocol.encodeMessage (StartupMessage user database))
+          case sendResult of
+            Err _ -> pure (Err { severity = "FATAL", code = "08001", message = "Failed to send startup message" })
+            Ok _ -> handshake tlsConn Nothing
+
+-- | Connect to PostgreSQL over TLS with a password
+connectWithPassword : String -> Int -> String -> String -> String -> IO (Result PgError PgConn)
+connectWithPassword host port database user password =
+  do
+    connResult <- Tls.connect host port
+    case connResult of
+      Err _ -> pure (Err { severity = "FATAL", code = "08001", message = "TLS connection failed" })
+      Ok tlsConn ->
+        do
+          sendResult <- Tls.sendBytes tlsConn (Protocol.encodeMessage (StartupMessage user database))
+          case sendResult of
+            Err _ -> pure (Err { severity = "FATAL", code = "08001", message = "Failed to send startup message" })
+            Ok _ -> handshake tlsConn (Just password)
+
+-- Handshake: read messages until ReadyForQuery
+handshake : TlsConn -> Maybe String -> IO (Result PgError PgConn)
+handshake tlsConn maybePassword =
+  handshakeLoop tlsConn maybePassword 0 0
+
+handshakeLoop : TlsConn -> Maybe String -> Int -> Int -> IO (Result PgError PgConn)
+handshakeLoop tlsConn maybePassword pid secret =
+  do
+    msgResult <- Protocol.readMessage tlsConn
+    case msgResult of
+      Err e -> pure (Err { severity = "FATAL", code = "08001", message = e })
+      Ok msg ->
+        handleHandshakeMsg tlsConn maybePassword pid secret msg
+
+handleHandshakeMsg : TlsConn -> Maybe String -> Int -> Int -> BackendMessage -> IO (Result PgError PgConn)
+handleHandshakeMsg tlsConn maybePassword pid secret msg =
+  case msg of
+    AuthenticationOk ->
+      handshakeLoop tlsConn maybePassword pid secret
+    AuthenticationCleartextPassword ->
+      handleCleartextAuth tlsConn maybePassword pid secret
+    ErrorResponse pgErr ->
+      do
+        _ <- Tls.close tlsConn
+        pure (Err pgErr)
+    BackendKeyData newPid newSecret ->
+      handshakeLoop tlsConn maybePassword newPid newSecret
+    ParameterStatus _ _ ->
+      handshakeLoop tlsConn maybePassword pid secret
+    ReadyForQuery _ ->
+      pure (Ok { tlsConn = tlsConn, backendPid = pid, backendSecret = secret })
+    _ ->
+      handshakeLoop tlsConn maybePassword pid secret
+
+handleCleartextAuth : TlsConn -> Maybe String -> Int -> Int -> IO (Result PgError PgConn)
+handleCleartextAuth tlsConn maybePassword pid secret =
+  case maybePassword of
+    Nothing ->
+      do
+        _ <- Tls.close tlsConn
+        pure (Err { severity = "FATAL", code = "28P01", message = "Server requires password but none provided" })
+    Just pw ->
+      do
+        sendResult <- Tls.sendBytes tlsConn (Protocol.encodeMessage (PasswordMessage pw))
+        case sendResult of
+          Err _ ->
+            do
+              _ <- Tls.close tlsConn
+              pure (Err { severity = "FATAL", code = "08001", message = "Failed to send password" })
+          Ok _ -> handshakeLoop tlsConn maybePassword pid secret
+
+-- | Close a PostgreSQL connection gracefully
+close : PgConn -> IO (Result PgError Unit)
+close pg =
+  do
+    _ <- Tls.sendBytes pg.tlsConn (Protocol.encodeMessage Terminate)
+    closeResult <- Tls.close pg.tlsConn
+    case closeResult of
+      Err _ -> pure (Err { severity = "ERROR", code = "08003", message = "Failed to close connection" })
+      Ok _ -> pure (Ok Unit)
+
+-- | Send a query message over the connection
+sendQuery : PgConn -> String -> IO (Result PgError Unit)
+sendQuery pg sql =
+  do
+    sendResult <- Tls.sendBytes pg.tlsConn (Protocol.encodeMessage (Query sql))
+    case sendResult of
+      Err _ -> pure (Err { severity = "ERROR", code = "08003", message = "Failed to send query" })
+      Ok _ -> pure (Ok Unit)
+
+-- | Read one backend message from the connection
+readBackendMessage : PgConn -> IO (Result PgError BackendMessage)
+readBackendMessage pg =
+  do
+    msgResult <- Protocol.readMessage pg.tlsConn
+    case msgResult of
+      Err e -> pure (Err { severity = "ERROR", code = "XX000", message = e })
+      Ok msg -> pure (Ok msg)

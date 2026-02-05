@@ -1,4 +1,4 @@
-module Lune.List exposing (map, foldl, length)
+module Lune.List exposing (map, foldl, length, reverse)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
@@ -22,3 +22,13 @@ length xs =
   case xs of
     [] -> 0
     Cons _ xt -> Int.add 1 (length xt)
+
+reverse : List a -> List a
+reverse xs =
+  reverseHelper xs Nil
+
+reverseHelper : List a -> List a -> List a
+reverseHelper xs acc =
+  case xs of
+    [] -> acc
+    Cons x xt -> reverseHelper xt (Cons x acc)

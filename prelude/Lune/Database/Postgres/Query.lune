@@ -1,0 +1,204 @@
+module Lune.Database.Postgres.Query exposing (
+  query,
+  execute,
+  begin,
+  commit,
+  rollback,
+  transaction
+)
+
+{-| PostgreSQL query execution over the wire protocol.
+
+Provides query/execute for running SQL and transaction management,
+all implemented in pure Lune over the Protocol and Connection modules.
+
+Example:
+```
+result <- PgQuery.query conn "SELECT id, name FROM users"
+case result of
+  Ok rows ->
+    -- rows : List (List (Maybe Bytes))
+    -- each row is a list of nullable column values
+  Err e -> IO.println e.message
+```
+-}
+
+import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String, Maybe(..), Bool(..), Monad(..))
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.String as Str
+import Lune.Int as Int
+import Lune.List as List
+import Lune.Database.Postgres.Connection as Conn exposing (PgConn)
+import Lune.Database.Postgres.Protocol as Protocol exposing (BackendMessage(..), PgError)
+
+-- | Execute a SELECT query and return all rows
+-- Each row is a list of nullable byte values (Nothing for SQL NULL)
+query : PgConn -> String -> IO (Result PgError (List (List (Maybe Bytes))))
+query pg sql =
+  do
+    sendResult <- Conn.sendQuery pg sql
+    case sendResult of
+      Err e -> pure (Err e)
+      Ok _ -> collectQueryResults pg Nil
+
+-- | Execute a statement (INSERT/UPDATE/DELETE) and return affected row count
+execute : PgConn -> String -> IO (Result PgError Int)
+execute pg sql =
+  do
+    sendResult <- Conn.sendQuery pg sql
+    case sendResult of
+      Err e -> pure (Err e)
+      Ok _ -> readExecuteResult pg
+
+-- | Begin a transaction
+begin : PgConn -> IO (Result PgError Unit)
+begin pg =
+  do
+    result <- execute pg "BEGIN"
+    case result of
+      Err e -> pure (Err e)
+      Ok _ -> pure (Ok Unit)
+
+-- | Commit a transaction
+commit : PgConn -> IO (Result PgError Unit)
+commit pg =
+  do
+    result <- execute pg "COMMIT"
+    case result of
+      Err e -> pure (Err e)
+      Ok _ -> pure (Ok Unit)
+
+-- | Rollback a transaction
+rollback : PgConn -> IO (Result PgError Unit)
+rollback pg =
+  do
+    result <- execute pg "ROLLBACK"
+    case result of
+      Err e -> pure (Err e)
+      Ok _ -> pure (Ok Unit)
+
+-- | Execute an action inside a transaction
+-- Commits on Ok result, rolls back on Err
+transaction : PgConn -> (PgConn -> IO (Result PgError a)) -> IO (Result PgError a)
+transaction pg action =
+  do
+    beginResult <- begin pg
+    case beginResult of
+      Err e -> pure (Err e)
+      Ok _ ->
+        do
+          actionResult <- action pg
+          case actionResult of
+            Err e ->
+              do
+                _ <- rollback pg
+                pure (Err e)
+            Ok a ->
+              do
+                commitResult <- commit pg
+                case commitResult of
+                  Err e -> pure (Err e)
+                  Ok _ -> pure (Ok a)
+
+-- Internal: collect rows from a SELECT query response
+-- Reads messages until ReadyForQuery, accumulating DataRow values
+collectQueryResults : PgConn -> List (List (Maybe Bytes)) -> IO (Result PgError (List (List (Maybe Bytes))))
+collectQueryResults pg acc =
+  do
+    msgResult <- Conn.readBackendMessage pg
+    case msgResult of
+      Err e -> pure (Err e)
+      Ok msg -> handleQueryMsg pg acc msg
+
+handleQueryMsg : PgConn -> List (List (Maybe Bytes)) -> BackendMessage -> IO (Result PgError (List (List (Maybe Bytes))))
+handleQueryMsg pg acc msg =
+  case msg of
+    RowDescription _ ->
+      collectQueryResults pg acc
+    DataRow cols ->
+      collectQueryResults pg (Cons cols acc)
+    CommandComplete _ ->
+      collectQueryResults pg acc
+    ReadyForQuery _ ->
+      pure (Ok (List.reverse acc))
+    EmptyQueryResponse ->
+      collectQueryResults pg acc
+    ErrorResponse pgErr ->
+      drainUntilReady pg (Err pgErr)
+    NoticeResponse _ ->
+      collectQueryResults pg acc
+    _ ->
+      collectQueryResults pg acc
+
+-- Internal: read messages for an execute (non-SELECT) query
+readExecuteResult : PgConn -> IO (Result PgError Int)
+readExecuteResult pg =
+  readExecuteLoop pg 0
+
+readExecuteLoop : PgConn -> Int -> IO (Result PgError Int)
+readExecuteLoop pg rowCount =
+  do
+    msgResult <- Conn.readBackendMessage pg
+    case msgResult of
+      Err e -> pure (Err e)
+      Ok msg -> handleExecuteMsg pg rowCount msg
+
+handleExecuteMsg : PgConn -> Int -> BackendMessage -> IO (Result PgError Int)
+handleExecuteMsg pg rowCount msg =
+  case msg of
+    CommandComplete tag ->
+      readExecuteLoop pg (parseRowCount tag)
+    ReadyForQuery _ ->
+      pure (Ok rowCount)
+    ErrorResponse pgErr ->
+      drainUntilReady pg (Err pgErr)
+    EmptyQueryResponse ->
+      readExecuteLoop pg 0
+    NoticeResponse _ ->
+      readExecuteLoop pg rowCount
+    RowDescription _ ->
+      readExecuteLoop pg rowCount
+    DataRow _ ->
+      readExecuteLoop pg rowCount
+    _ ->
+      readExecuteLoop pg rowCount
+
+-- Internal: drain messages until ReadyForQuery after an error
+drainUntilReady : PgConn -> Result PgError a -> IO (Result PgError a)
+drainUntilReady pg errorResult =
+  do
+    msgResult <- Conn.readBackendMessage pg
+    case msgResult of
+      Err _ -> pure errorResult
+      Ok msg ->
+        case msg of
+          ReadyForQuery _ -> pure errorResult
+          _ -> drainUntilReady pg errorResult
+
+-- Parse row count from a CommandComplete tag
+-- Tags look like: "SELECT 5", "INSERT 0 3", "UPDATE 10", "DELETE 2", "BEGIN", "COMMIT"
+parseRowCount : String -> Int
+parseRowCount tag =
+  parseRowCountFromBytes (Bytes.toList (Bytes.fromString tag))
+
+parseRowCountFromBytes : List Int -> Int
+parseRowCountFromBytes bytes =
+  extractLastNumber (List.reverse bytes) 0 1
+
+-- Extract the trailing number from a reversed byte list
+-- Walks backwards: digits contribute to the number, stops at first non-digit
+extractLastNumber : List Int -> Int -> Int -> Int
+extractLastNumber revBytes acc multiplier =
+  case revBytes of
+    Nil -> acc
+    Cons b rest ->
+      case isDigit b of
+        True ->
+          extractLastNumber rest (Int.add acc (Int.mul (Int.sub b 48) multiplier)) (Int.mul multiplier 10)
+        False -> acc
+
+isDigit : Int -> Bool
+isDigit b =
+  case Int.gte b 48 of
+    True -> Int.lte b 57
+    False -> False
