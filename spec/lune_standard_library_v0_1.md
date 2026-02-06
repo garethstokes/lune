@@ -127,17 +127,40 @@ Note: These functions are strict and do not short-circuit.
 
 ---
 
-## 5. String module
+## 5. String and Char modules
 
 ### 5.1 Lune.String
 
 Exports:
 
-- `append    : String -> String -> String`
-- `eq        : String -> String -> Bool`
-- `fromInt   : Int -> String`
-- `fromFloat : Float -> String`
-- `toInt     : String -> Result String Int`
+- `append     : String -> String -> String`
+- `eq         : String -> String -> Bool`
+- `fromInt    : Int -> String`
+- `fromFloat  : Float -> String`
+- `toInt      : String -> Result String Int`
+- `toChars    : String -> List Char`
+- `fromChars  : List Char -> String`
+- `split      : String -> String -> List String`
+- `join       : String -> List String -> String`
+- `toLower    : String -> String`
+- `indexOf    : String -> String -> Maybe Int`
+- `startsWith : String -> String -> Bool`
+- `isEmpty    : String -> Bool`
+- `take       : Int -> String -> String`
+- `drop       : Int -> String -> String`
+- `trim       : String -> String`
+- `length     : String -> Int`
+
+### 5.2 Lune.Char
+
+Exports:
+
+- `toInt   : Char -> Int`
+- `fromInt : Int -> Char`
+- `toLower : Char -> Char`
+- `toUpper : Char -> Char`
+- `isSpace : Char -> Bool`
+- `eq      : Char -> Char -> Bool`
 
 ---
 

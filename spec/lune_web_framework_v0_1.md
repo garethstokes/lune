@@ -10,16 +10,20 @@ The Lune web framework provides a type-safe, JSON-focused foundation for buildin
 2. **Explicit context** - No hidden global state; dependencies flow through a user-defined context
 3. **Composable errors** - User defines error types and maps them to HTTP responses
 4. **Focused scope** - JSON APIs only; HTML rendering is future work
+5. **Pure Lune implementation** - HTTP parsing, routing, and response formatting are implemented in pure Lune
 
 ---
 
 ## 1. Module Structure
 
 ```
-Lune.Http           -- HTTP types (Method, Request, Response)
-Lune.Http.Server    -- Low-level HTTP server
-Lune.Api            -- Api monad and server entry point
-Lune.Api.Route      -- Route definition helpers
+Lune.Http              -- HTTP types (Method, Request, Response)
+Lune.Http.Server       -- Low-level HTTP server
+Lune.Http.Api          -- Server entry point and helpers
+Lune.Http.Route        -- Route definition helpers
+Lune.Http.Request      -- Request helpers (query, header, queryParams)
+Lune.Http.Response     -- Response helpers (ok, created, notFound, etc.)
+Lune.Http.Internal     -- HTTP parsing/formatting (internal)
 ```
 
 ---
@@ -50,74 +54,71 @@ type alias Response =
   }
 ```
 
-### Response Helpers
+### Lune.Http.Response Helpers
 
 ```
-response : Int -> String -> Response
-jsonResponse : Int -> Json -> Response
+ok : String -> Response
+created : String -> Response
+noContent : Response
+badRequest : String -> Response
+unauthorized : String -> Response
+forbidden : String -> Response
+notFound : String -> Response
+serverError : String -> Response
+redirect : String -> Response
+```
+
+### Lune.Http.Request Helpers
+
+```
+query : String -> Request -> Maybe String
+header : String -> Request -> Maybe String
+queryParams : Request -> List { key : String, value : String }
 ```
 
 ---
 
-## 3. The Api Monad
+## 3. Handler Pattern
+
+Handlers return `IO (Result e Response)` directly:
 
 ```
-Api e a
+handler : Request -> ctx -> IO (Result e Response)
 ```
 
-A computation that:
-- Has read access to user-defined context
-- Can fail early with error type `e`
-- Runs in IO
-- Returns a value of type `a`
+This pattern:
+- Uses IO for effectful operations
+- Uses Result for typed error handling
+- Receives both the request and user-defined context
+- Returns a Response on success or error type `e` on failure
 
-### Core Operations
+### Helper Functions (Lune.Http.Api)
 
 ```
--- Run an Api computation with context
-run : ctx -> Api e a -> IO (Result e a)
+-- Wrap a successful response
+pure : a -> IO (Result e a)
 
--- Access the context
-context : Api e ctx
-
--- Fail with an error
-fail : e -> Api e a
+-- Create a failure
+fail : e -> IO (Result e a)
 
 -- Fail if Maybe is Nothing
-orFail : e -> Maybe a -> Api e a
+orFail : e -> Maybe a -> IO (Result e a)
 
--- Transform error type
-mapError : (e1 -> e2) -> Api e1 a -> Api e2 a
-
--- Monadic operations
-pure : a -> Api e a
-andThen : (a -> Api e b) -> Api e a -> Api e b
-```
-
-### Typeclass Instances
-
-`Api e` has `Functor`, `Applicative`, and `Monad` instances, enabling do-notation:
-
-```
-getUser : { id : Int } -> Api AppError User
-getUser params =
-  do
-    ctx <- Api.context
-    -- use ctx.db, etc.
-    ...
+-- Parse JSON request body
+jsonBody : (String -> e) -> Decoder a -> Request -> Result e a
 ```
 
 ---
 
 ## 4. Route Definition
 
-### Lune.Api.Route
+### Lune.Http.Route
 
 ```
 type alias Route e ctx =
   { method : Method
   , pattern : String
-  , handler : Request -> ctx -> Api e Response
+  , handler : Request -> ctx -> IO (Result e Response)
   }
 
 type alias Routes e ctx = List (Route e ctx)
@@ -126,11 +127,11 @@ type alias Routes e ctx = List (Route e ctx)
 ### Route Constructors
 
 ```
-get : String -> (Request -> ctx -> Api e Response) -> Route e ctx
-post : String -> (Request -> ctx -> Api e Response) -> Route e ctx
-put : String -> (Request -> ctx -> Api e Response) -> Route e ctx
-patch : String -> (Request -> ctx -> Api e Response) -> Route e ctx
-delete : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+get : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
+post : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
+put : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
+patch : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
+delete : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 
 define : List (Route e ctx) -> Routes e ctx
 ```
@@ -174,12 +175,12 @@ errorToResponse err =
   case err of
     NotFound msg ->
       { status = 404
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = "{\"error\":\"" ++ msg ++ "\"}"
       }
     BadRequest msg ->
       { status = 400
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = "{\"error\":\"" ++ msg ++ "\"}"
       }
 ```
@@ -192,8 +193,8 @@ errorToResponse err =
 module ApiServer exposing (main)
 
 import Lune.IO as IO
-import Lune.Api as Api
-import Lune.Api.Route as Route
+import Lune.Http.Api as Api
+import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.String as Str
 import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Maybe(..))
@@ -214,67 +215,91 @@ errorToResponse err =
   case err of
     NotFound msg ->
       { status = 404
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
       }
     BadRequest msg ->
       { status = 400
-      , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+      , headers = [{ key = "Content-Type", value = "application/json" }]
       , body = Str.append "{\"error\":\"" (Str.append msg "\"}")
       }
 
 -- Routes
-routes : Route.Routes AppError Context
+routes : Api.Routes AppError Context
 routes =
   Route.define
-    (Cons (Route.get "/health" healthHandler)
-      (Cons (Route.get "/users/:id" getUserHandler)
-        (Cons (Route.post "/users" createUserHandler) Nil)))
+    [ Route.get "/health" healthHandler
+    , Route.get "/users/:id" getUserHandler
+    , Route.post "/users" createUserHandler
+    ]
 
--- Handlers
-healthHandler : Request -> Context -> Api.Api AppError Response
+-- Handlers return IO (Result e Response) directly
+healthHandler : Request -> Context -> IO (Result AppError Response)
 healthHandler request ctx =
   Api.pure
     { status = 200
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"status\":\"ok\"}"
     }
 
-getUserHandler : Request -> Context -> Api.Api AppError Response
+getUserHandler : Request -> Context -> IO (Result AppError Response)
 getUserHandler request ctx =
   Api.pure
     { status = 200
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"id\":123,\"name\":\"Alice\"}"
     }
 
-createUserHandler : Request -> Context -> Api.Api AppError Response
+createUserHandler : Request -> Context -> IO (Result AppError Response)
 createUserHandler request ctx =
   Api.pure
     { status = 201
-    , headers = Cons { key = "Content-Type", value = "application/json" } Nil
+    , headers = [{ key = "Content-Type", value = "application/json" }]
     , body = "{\"id\":456,\"name\":\"Created\"}"
     }
 
 main : IO Unit
 main =
-  let config =
-        { port = 8080
-        , errorHandler = errorToResponse
-        , context = { appName = "MyApp" }
-        }
-  in Api.serve config routes
+  Api.serve
+    { port = 8080
+    , errorHandler = errorToResponse
+    , context = { appName = "MyApp" }
+    }
+    routes
 ```
 
 ---
 
-## 7. Future Work (Not in v0.1)
+## 7. JSON Body Parsing
+
+Parse JSON request bodies with type-safe decoders:
+
+```
+import Lune.Http.Api as Api
+import Lune.Json.Decode as D
+
+type AppError = ParseError String
+
+userDecoder : D.Decoder { name : String, age : Int }
+userDecoder =
+  D.map2 (\n a -> { name = n, age = a })
+    (D.field "name" D.string)
+    (D.field "age" D.int)
+
+createUserHandler : Request -> Context -> IO (Result AppError Response)
+createUserHandler request ctx =
+  case Api.jsonBody ParseError userDecoder request of
+    Err e -> Api.fail e
+    Ok user ->
+      Api.pure { status = 201, headers = [], body = user.name }
+```
+
+---
+
+## 8. Future Work (Not in v0.1)
 
 - **Typed path parameters** - Automatic extraction of `:param` into typed records
-- **Query parameters** - `Api.query` for typed query string access
-- **Request body parsing** - Automatic JSON decoding into typed records
 - **Middleware** - Composable request/response transformers
 - **Route groups** - Shared prefixes and authentication requirements
-- **Database layer** - Type-safe query builder
 - **WebSockets** - Real-time communication
 - **OpenAPI generation** - Auto-generate docs from route types
