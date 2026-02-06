@@ -185,10 +185,10 @@ main =
 module ApiDemo exposing (main)
 
 import Lune.IO as IO
-import Lune.Api as Api
-import Lune.Api.Route as Route
+import Lune.Http.Api as Api
+import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
-import Lune.Json as Json
+import Lune.Prelude exposing (IO, Result(..), Unit)
 
 type AppError = NotFound String | BadRequest String
 
@@ -198,7 +198,8 @@ errorHandler err =
     NotFound msg -> { status = 404, headers = [], body = msg }
     BadRequest msg -> { status = 400, headers = [], body = msg }
 
-healthHandler : Request -> {} -> Api.Api AppError Response
+-- Handlers return IO (Result e Response) directly
+healthHandler : Request -> {} -> IO (Result AppError Response)
 healthHandler req ctx =
   Api.pure { status = 200, headers = [], body = "{\"status\":\"ok\"}" }
 

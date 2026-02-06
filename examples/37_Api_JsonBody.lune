@@ -1,7 +1,7 @@
 module ApiJsonBody exposing (main)
 
 import Lune.IO as IO
-import Lune.Api as Api
+import Lune.Http.Api as Api
 import Lune.Http exposing (Method(..))
 import Lune.Json as Json
 import Lune.Json.Decode as D
@@ -16,16 +16,26 @@ userDecoder =
     (D.field "name" D.string)
     (D.field "age" D.int)
 
+goodReq : { method : Method, path : String, headers : List { key : String, value : String }, body : String }
+goodReq = { method = GET, path = "/", headers = [], body = "{\"name\":\"Alice\",\"age\":30}" }
+
+badReq : { method : Method, path : String, headers : List { key : String, value : String }, body : String }
+badReq = { method = GET, path = "/", headers = [], body = "{\"name\":\"Bob\"}" }
+
+testGoodRequest : IO Unit
+testGoodRequest =
+  case Api.jsonBody ParseError userDecoder goodReq of
+    Ok user -> IO.println (Str.append user.name (Str.append " age " (Str.fromInt user.age)))
+    Err (ParseError msg) -> IO.println (Str.append "ERROR: " msg)
+
+testBadRequest : IO Unit
+testBadRequest =
+  case Api.jsonBody ParseError userDecoder badReq of
+    Ok user -> IO.println "unexpected success"
+    Err (ParseError msg) -> IO.println "parse failed as expected"
+
 main : IO Unit
 main =
   do
-    let goodReq = { method = GET, path = "/", headers = [], body = "{\"name\":\"Alice\",\"age\":30}" }
-    result1 <- Api.run {} (Api.jsonBody ParseError userDecoder goodReq)
-    case result1 of
-      Ok user -> IO.println (Str.append user.name (Str.append " age " (Str.fromInt user.age)))
-      Err (ParseError msg) -> IO.println (Str.append "ERROR: " msg)
-    let badReq = { method = GET, path = "/", headers = [], body = "{\"name\":\"Bob\"}" }
-    result2 <- Api.run {} (Api.jsonBody ParseError userDecoder badReq)
-    case result2 of
-      Ok user -> IO.println "unexpected success"
-      Err (ParseError msg) -> IO.println "parse failed as expected"
+    testGoodRequest
+    testBadRequest

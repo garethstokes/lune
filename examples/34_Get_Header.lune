@@ -1,21 +1,28 @@
 module GetHeader exposing (main)
 
 import Lune.IO as IO
+import Lune.Http.Request as Req
+import Lune.Http exposing (Method(..))
 import Lune.Prelude exposing (IO, Unit, Maybe(..))
 
 main : IO Unit
 main =
   do
-    let headers =
-          [ { key = "Content-Type", value = "application/json" }
-          , { key = "Authorization", value = "Bearer abc123" }
-          ]
-    case prim_getHeader "content-type" headers of
+    let req =
+          { method = GET
+          , path = "/"
+          , headers =
+              [ { key = "Content-Type", value = "application/json" }
+              , { key = "Authorization", value = "Bearer abc123" }
+              ]
+          , body = ""
+          }
+    case Req.header "content-type" req of
       Nothing -> IO.println "not found"
       Just v -> IO.println v
-    case prim_getHeader "authorization" headers of
+    case Req.header "authorization" req of
       Nothing -> IO.println "not found"
       Just v -> IO.println v
-    case prim_getHeader "x-missing" headers of
+    case Req.header "x-missing" req of
       Nothing -> IO.println "not found"
       Just v -> IO.println v

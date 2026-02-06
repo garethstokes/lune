@@ -8,6 +8,7 @@ import Lune.IO as IO
 import Lune.Net.Socket as Socket
 import Lune.Net.Socket exposing (Socket, Connection)
 import Lune.Http exposing (Request, Response)
+import Lune.Http.Internal as Internal
 import Lune.String as Str
 
 type alias Handler = Request -> IO Response
@@ -45,7 +46,7 @@ handleConnection conn handler =
           _ <- Socket.closeConn conn
           IO.pure unit
       Ok rawRequest ->
-        case prim_parseHttpRequest rawRequest of
+        case Internal.parseHttpRequest rawRequest of
           Err _ ->
             do
               _ <- Socket.send conn "HTTP/1.1 400 Bad Request\r\n\r\n"
@@ -54,7 +55,7 @@ handleConnection conn handler =
           Ok request ->
             do
               response <- handler request
-              let rawResponse = prim_formatHttpResponse response
+              let rawResponse = Internal.formatHttpResponse response
               _ <- Socket.send conn rawResponse
               _ <- Socket.closeConn conn
               IO.pure unit

@@ -2,6 +2,7 @@ module HttpParseTest exposing (main)
 
 import Lune.IO as IO
 import Lune.Http as Http
+import Lune.Http.Internal as Internal
 import Lune.String as Str
 import Lune.Prelude exposing (Result(..), IO, Unit)
 
@@ -14,7 +15,7 @@ main =
 
 testParseGet : IO Unit
 testParseGet =
-  case prim_parseHttpRequest "GET /users/123 HTTP/1.1\r\nHost: localhost\r\n\r\n" of
+  case Internal.parseHttpRequest "GET /users/123 HTTP/1.1\r\nHost: localhost\r\n\r\n" of
     Err e -> IO.println (Str.append "Parse error: " e)
     Ok req ->
       do
@@ -23,7 +24,7 @@ testParseGet =
 
 testParsePost : IO Unit
 testParsePost =
-  case prim_parseHttpRequest "POST /users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\":\"Alice\"}" of
+  case Internal.parseHttpRequest "POST /users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\":\"Alice\"}" of
     Err e -> IO.println (Str.append "Parse error: " e)
     Ok req ->
       do

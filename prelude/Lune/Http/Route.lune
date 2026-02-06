@@ -1,4 +1,4 @@
-module Lune.Api.Route exposing (
+module Lune.Http.Route exposing (
   get,
   post,
   put,
@@ -7,27 +7,27 @@ module Lune.Api.Route exposing (
   define
 )
 
-import Lune.Prelude exposing (String, List(..), Maybe(..), Int)
+import Lune.Prelude exposing (String, IO, Result, List)
 import Lune.Http exposing (Method(..), Request, Response)
-import Lune.Api exposing (Api, Route, Routes)
+import Lune.Http.Api exposing (Route, Routes)
 
-get : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+get : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 get pattern handler =
   { method = GET, pattern = pattern, handler = handler }
 
-post : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+post : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 post pattern handler =
   { method = POST, pattern = pattern, handler = handler }
 
-put : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+put : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 put pattern handler =
   { method = PUT, pattern = pattern, handler = handler }
 
-patch : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+patch : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 patch pattern handler =
   { method = PATCH, pattern = pattern, handler = handler }
 
-delete : String -> (Request -> ctx -> Api e Response) -> Route e ctx
+delete : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
 delete pattern handler =
   { method = DELETE, pattern = pattern, handler = handler }
 

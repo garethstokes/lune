@@ -1,9 +1,9 @@
 module ApiServer exposing (main)
 
 import Lune.IO as IO
-import Lune.Api as Api
-import Lune.Api exposing (ServerConfig, Routes)
-import Lune.Api.Route as Route
+import Lune.Http.Api as Api
+import Lune.Http.Api exposing (ServerConfig, Routes)
+import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.Json as Json
 import Lune.Json.Encode as E
@@ -79,16 +79,16 @@ routes =
     , Route.post "/users" createUserHandler
     ]
 
--- Handlers
-healthHandler : Request -> Context -> Api.Api AppError Response
+-- Handlers now return IO (Result e Response) directly
+healthHandler : Request -> Context -> IO (Result AppError Response)
 healthHandler request ctx =
   Api.pure (jsonResponse 200 (encodeHealth { status = "ok" }))
 
-getUserHandler : Request -> Context -> Api.Api AppError Response
+getUserHandler : Request -> Context -> IO (Result AppError Response)
 getUserHandler request ctx =
   Api.pure (jsonResponse 200 (encodeUser { id = 123, name = "Alice" }))
 
-createUserHandler : Request -> Context -> Api.Api AppError Response
+createUserHandler : Request -> Context -> IO (Result AppError Response)
 createUserHandler request ctx =
   Api.pure (jsonResponse 201 (encodeUser { id = 456, name = "Created" }))
 

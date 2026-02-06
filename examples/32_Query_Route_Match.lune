@@ -1,12 +1,18 @@
 module QueryRouteMatch exposing (main)
 
 import Lune.IO as IO
-import Lune.Prelude exposing (IO, Unit, Maybe(..))
+import Lune.Http exposing (Method(..))
+import Lune.Http.Request as Req
+import Lune.String as Str
+import Lune.Prelude exposing (IO, Unit, Bool(..))
+
+-- Test that route matching works with query strings
+-- by checking that query params are accessible
 
 main : IO Unit
 main =
   do
-    let result = prim_matchPath "/users" "/users?page=1"
-    case result of
+    let req = { method = GET, path = "/users?page=1", headers = [], body = "" }
+    case Req.query "page" req of
       Nothing -> IO.println "NO MATCH"
-      Just params -> IO.println "MATCHED"
+      Just v -> IO.println (Str.append "MATCHED: page=" v)

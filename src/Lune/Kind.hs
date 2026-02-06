@@ -82,7 +82,6 @@ builtinKindEnv =
     , ("Result", KArr KType (KArr KType KType))
     , ("Pair", KArr KType (KArr KType KType))
     , ("Validation", KArr KType (KArr KType KType))
-    , ("Api", KArr KType (KArr KType KType))
     , ("Triple", kindFromArity 3)
     , ("Quad", kindFromArity 4)
     , ("Quint", kindFromArity 5)

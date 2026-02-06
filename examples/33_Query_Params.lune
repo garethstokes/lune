@@ -1,19 +1,22 @@
 module QueryParams exposing (main)
 
 import Lune.IO as IO
+import Lune.Http exposing (Method(..))
+import Lune.Http.Request as Req
+import Lune.String as Str
 import Lune.Prelude exposing (IO, Unit, Maybe(..), List(..))
 
 main : IO Unit
 main =
   do
-    let params = prim_parseQueryString "/search?q=hello&page=2&sort=asc"
-    printParams params
+    let req = { method = GET, path = "/search?q=hello&page=2&sort=asc", headers = [], body = "" }
+    printParams (Req.queryParams req)
 
 printParams : List { key : String, value : String } -> IO Unit
 printParams ps =
   case ps of
-    [] -> IO.println "done"
+    Nil -> IO.println "done"
     Cons p rest ->
       do
-        IO.println (prim_appendString p.key (prim_appendString "=" p.value))
+        IO.println (Str.append p.key (Str.append "=" p.value))
         printParams rest
