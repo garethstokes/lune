@@ -41,11 +41,11 @@ codegenHelloMain :: C.CoreExpr -> Either CodegenError Text
 codegenHelloMain expr =
   case expr of
     C.CApp (C.CVar "putStrLn") (C.CString s) ->
-      Right ("fmt.Println(" <> renderGoString s <> ")")
+      Right ("prim_putStrLn(" <> renderGoString s <> ")")
     C.CApp (C.CVar "Lune.IO.println") (C.CString s) ->
-      Right ("fmt.Println(" <> renderGoString s <> ")")
+      Right ("prim_putStrLn(" <> renderGoString s <> ")")
     C.CApp (C.CVar "prim_putStrLn") (C.CString s) ->
-      Right ("fmt.Println(" <> renderGoString s <> ")")
+      Right ("prim_putStrLn(" <> renderGoString s <> ")")
     _ ->
       Left (CodegenUnsupportedMain expr)
 
@@ -53,8 +53,6 @@ renderProgram :: Text -> Text
 renderProgram stmt =
   T.unlines
     [ "package main"
-    , ""
-    , "import \"fmt\""
     , ""
     , "func main() {"
     , "  " <> stmt

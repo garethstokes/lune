@@ -353,13 +353,15 @@ buildGo opts coreMod = do
         pure goSrc
 
   let goPath = buildOutput opts <> ".go"
+      goRtPath = buildOutput opts <> ".rt.go"
   writeFile goPath (T.unpack goSource)
+  writeFile goRtPath (T.unpack goRuntimeSource)
 
   goResult <-
     ( try
         ( readProcessWithExitCode
             "go"
-            ["build", "-o", buildOutput opts, goPath]
+            ["build", "-o", buildOutput opts, goPath, goRtPath]
             ""
         )
     ) ::
@@ -377,3 +379,15 @@ buildGo opts coreMod = do
           putStrLn goOut
           putStrLn goErr
           exitFailure
+
+goRuntimeSource :: T.Text
+goRuntimeSource =
+  T.unlines
+    [ "package main"
+    , ""
+    , "import \"fmt\""
+    , ""
+    , "func prim_putStrLn(s string) {"
+    , "  fmt.Println(s)"
+    , "}"
+    ]
