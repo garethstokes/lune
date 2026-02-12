@@ -396,7 +396,275 @@ main =
 
 ---
 
-## 8. Error Handling
+## 8. Schema Derive (`@derive(Table)`)
+
+The `@derive(Table)` annotation provides ORM-like automatic code generation for database tables. Instead of manually writing table references, field references, decoders, and CRUD helpers, you declare a type alias with annotations and the compiler generates everything.
+
+### 8.1 Basic Usage
+
+```lune
+@derive(Table "users")
+type alias User =
+  { id : Int @primaryKey @serial
+  , name : String
+  , email : Maybe String
+  , isActive : Bool
+  }
+```
+
+This single declaration generates:
+
+| Generated Name | Type | Description |
+|----------------|------|-------------|
+| `users` | `Table` | Table reference |
+| `users_id` | `Field Int` | Field reference for id |
+| `users_name` | `Field String` | Field reference for name |
+| `users_email` | `Field (Maybe String)` | Field reference for email |
+| `users_isActive` | `Field Bool` | Field reference for isActive |
+| `userDecoder` | `Decoder User` | Row decoder |
+| `findUserById` | `Int -> Query User` | Find by primary key |
+| `findAllUsers` | `Query User` | Select all rows |
+| `insertUser` | `{ name : String, email : Maybe String, isActive : Bool } -> Query User` | Insert (serial fields omitted) |
+| `updateUser` | `Int -> List Assignment -> Query User` | Update by primary key |
+| `deleteUser` | `Int -> Query Unit` | Delete by primary key |
+
+### 8.2 Field Annotations
+
+#### `@primaryKey`
+
+Marks the primary key field. Required for derive to work.
+
+```lune
+{ id : Int @primaryKey }
+```
+
+- Exactly one field must have `@primaryKey`
+- The primary key type determines the type of `findById` and `deleteById` parameters
+- Primary key is used in WHERE clauses for update/delete operations
+
+#### `@serial`
+
+Marks auto-generated fields (e.g., PostgreSQL `SERIAL` or `IDENTITY` columns).
+
+```lune
+{ id : Int @primaryKey @serial }
+```
+
+- Serial fields are **excluded** from the insert input type
+- The database generates the value, so users don't provide it
+- Multiple fields can be serial (e.g., `id` and `createdAt`)
+
+### 8.3 Supported Field Types
+
+| Lune Type | DbValue | Decoder | Notes |
+|-----------|---------|---------|-------|
+| `Int` | `DbInt` | `int` | 32/64-bit integers |
+| `Float` | `DbFloat` | `float` | Floating point |
+| `String` | `DbString` | `string` | Text/varchar |
+| `Bool` | `DbBool` | `bool` | Boolean |
+| `Maybe a` | `DbNull` or inner | `nullable` | NULL handling |
+
+### 8.4 Generated SQL Examples
+
+Given the User type above:
+
+```lune
+-- findAllUsers generates:
+getSql findAllUsers
+-- "SELECT * FROM users"
+
+-- findUserById 42 generates:
+getSql (findUserById 42)
+-- "SELECT * FROM users WHERE id = $1 LIMIT 1"
+
+-- insertUser with serial id omitted:
+getSql (insertUser { name = "Alice", email = Just "alice@example.com", isActive = True })
+-- "INSERT INTO users (name, email, isActive) VALUES ($1, $2, $3) RETURNING *"
+
+-- updateUser 42 [set users_name (DbString "Bob")]:
+getSql (updateUser 42 (Cons (set users_name (DbString "Bob")) Nil))
+-- "UPDATE users SET name = $1 WHERE id = $2 RETURNING *"
+
+-- deleteUser 42:
+getSql (deleteUser 42)
+-- "DELETE FROM users WHERE id = $1"
+```
+
+### 8.5 Using Field References
+
+The generated field references enable type-safe query building:
+
+```lune
+-- Filter active users
+activeUsers : Query User
+activeUsers =
+  where_ (eq users_isActive (DbBool True)) findAllUsers
+
+-- Filter by email
+findByEmail : String -> Query User
+findByEmail email =
+  where_ (eq users_email (DbString email)) findAllUsers
+
+-- Order by name
+sortedUsers : Query User
+sortedUsers =
+  orderBy users_name Asc findAllUsers
+
+-- Combine conditions
+activeUsersByName : String -> Query User
+activeUsersByName name =
+  findAllUsers
+    |> where_ (eq users_isActive (DbBool True))
+    |> where_ (eq users_name (DbString name))
+```
+
+### 8.6 Foreign Keys and Relationships
+
+Derive generates field references for foreign key columns, enabling type-safe joins:
+
+```lune
+@derive(Table "posts")
+type alias Post =
+  { id : Int @primaryKey @serial
+  , title : String
+  , body : String
+  , authorId : Int
+  , published : Bool
+  }
+
+-- Find posts by author
+findPostsByAuthor : Int -> Query Post
+findPostsByAuthor userId =
+  where_ (eq posts_authorId (DbInt userId)) findAllPosts
+
+-- Find published posts
+publishedPosts : Query Post
+publishedPosts =
+  where_ (eq posts_published (DbBool True)) findAllPosts
+```
+
+### 8.7 Self-Referential Tables
+
+Tables with nullable foreign keys to themselves work naturally:
+
+```lune
+@derive(Table "categories")
+type alias Category =
+  { id : Int @primaryKey @serial
+  , name : String
+  , parentId : Maybe Int  -- NULL for root categories
+  }
+
+-- Find root categories
+rootCategories : Query Category
+rootCategories =
+  where_ (isNull categories_parentId) findAllCategories
+
+-- Find children of a category
+childCategories : Int -> Query Category
+childCategories parentId =
+  where_ (eq categories_parentId (DbInt parentId)) findAllCategories
+```
+
+### 8.8 Import Handling
+
+When `@derive(Table)` is used, the compiler automatically injects required imports:
+
+```lune
+import Lune.Database.Query exposing (Table, Field, Query, Condition, Assignment, table, field, select, insert, update, delete, where_, eq, set, values, returning, limit)
+import Lune.Database.Decode exposing (Decoder, int, string, bool, float, nullable, index, map2, map3, map4, map5)
+import Lune.Database exposing (DbValue(..))
+```
+
+If you already import these modules, the derive system merges the exposing lists to avoid conflicts.
+
+### 8.9 Naming Conventions
+
+| Source | Generated Name Pattern |
+|--------|------------------------|
+| Type `User` | `userDecoder`, `findUserById`, `findAllUsers`, `insertUser`, `updateUser`, `deleteUser` |
+| Table `"users"` | `users` (table ref), `users_id`, `users_name`, etc. (field refs) |
+| Field `name` | `users_name : Field String` |
+| Field `isActive` | `users_isActive : Field Bool` |
+
+The type name is used for decoder and CRUD helper names (with first letter lowercased for decoder).
+The table name is used for table and field reference names.
+
+### 8.10 Limitations
+
+1. **Maximum 5 fields** - The decoder uses `mapN` combinators, currently up to `map5`. Tables with more than 5 fields require adding `map6`, `map7`, etc. to `Lune.Database.Decode`.
+
+2. **Simple types only** - Nested records and custom types are not supported as field types.
+
+3. **Single primary key** - Composite primary keys are not supported.
+
+4. **No default values** - Fields cannot have default values in the type definition.
+
+5. **No computed fields** - All fields map directly to database columns.
+
+### 8.11 Complete Example
+
+```lune
+module Blog exposing (main)
+
+import Lune.Prelude exposing (Int, String, Bool, Maybe(..), List(..), IO, Unit)
+import Lune.Database.Query exposing (getSql, where_, eq, orderBy, Order(..))
+import Lune.Database exposing (DbValue(..))
+
+-- User table with authentication fields
+@derive(Table "users")
+type alias User =
+  { id : Int @primaryKey @serial
+  , username : String
+  , email : String
+  , isAdmin : Bool
+  }
+
+-- Blog post with foreign key to user
+@derive(Table "posts")
+type alias Post =
+  { id : Int @primaryKey @serial
+  , title : String
+  , body : String
+  , authorId : Int
+  , published : Bool
+  }
+
+-- Comment with nullable parent for threading
+@derive(Table "comments")
+type alias Comment =
+  { id : Int @primaryKey @serial
+  , postId : Int
+  , authorId : Int
+  , body : String
+  , parentId : Maybe Int
+  }
+
+-- Example queries using generated helpers
+adminUsers : Query User
+adminUsers = where_ (eq users_isAdmin (DbBool True)) findAllUsers
+
+publishedPostsByAuthor : Int -> Query Post
+publishedPostsByAuthor userId =
+  findAllPosts
+    |> where_ (eq posts_authorId (DbInt userId))
+    |> where_ (eq posts_published (DbBool True))
+    |> orderBy posts_id Desc
+
+topLevelComments : Int -> Query Comment
+topLevelComments postId =
+  findAllComments
+    |> where_ (eq comments_postId (DbInt postId))
+    |> where_ (isNull comments_parentId)
+
+-- Demo
+demo : String
+demo = getSql adminUsers  -- "SELECT * FROM users WHERE isAdmin = $1"
+```
+
+---
+
+## 9. Error Handling
 
 ### PostgreSQL Errors
 
