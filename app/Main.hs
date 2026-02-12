@@ -5,7 +5,7 @@ import System.Exit (ExitCode (..), exitFailure)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
-import qualified Lune.Codegen.C as Codegen
+import qualified Lune.Codegen.C as CodegenC
 import Lune.Desugar (desugarModule)
 import qualified Lune.Elaborate as Elab
 import qualified Lune.Eval as Eval
@@ -29,9 +29,15 @@ data Command
   = CmdRun Options
   | CmdBuild BuildOptions
 
+data BuildTarget
+  = BuildTargetC
+  | BuildTargetGo
+  deriving (Eq, Show)
+
 data BuildOptions = BuildOptions
   { buildInput :: FilePath
   , buildOutput :: FilePath
+  , buildTarget :: BuildTarget
   }
 
 parseCommand :: [String] -> Either String Command
@@ -46,13 +52,24 @@ parseBuildArgs :: [String] -> Either String BuildOptions
 parseBuildArgs args =
   case args of
     [path, "-o", out] ->
-      Right (BuildOptions path out)
+      Right (BuildOptions path out BuildTargetC)
     [path, "--output", out] ->
-      Right (BuildOptions path out)
+      Right (BuildOptions path out BuildTargetC)
+    [path, "-o", out, "--target", target] ->
+      BuildOptions path out <$> parseBuildTarget target
+    [path, "--output", out, "--target", target] ->
+      BuildOptions path out <$> parseBuildTarget target
     _ ->
       Left buildUsage
   where
-    buildUsage = "Usage: lune build <file.lune> -o <exe>"
+    buildUsage = "Usage: lune build <file.lune> -o <exe> [--target c|go]"
+
+parseBuildTarget :: String -> Either String BuildTarget
+parseBuildTarget target =
+  case target of
+    "c" -> Right BuildTargetC
+    "go" -> Right BuildTargetGo
+    other -> Left ("Unknown build target: " <> other)
 
 runCommand :: Command -> IO ()
 runCommand cmd =
@@ -274,8 +291,16 @@ build opts = do
       Right coreMod ->
         pure coreMod
 
+  case buildTarget opts of
+    BuildTargetC ->
+      buildC opts coreMod
+    BuildTargetGo ->
+      putStrLn "Go target not implemented yet."
+
+buildC :: BuildOptions -> Core.CoreModule -> IO ()
+buildC opts coreMod = do
   cSource <-
-    case Codegen.codegenHelloModule coreMod of
+    case CodegenC.codegenHelloModule coreMod of
       Left err -> do
         putStrLn (show err)
         exitFailure
