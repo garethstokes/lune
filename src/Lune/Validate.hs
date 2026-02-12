@@ -62,7 +62,7 @@ declaredArities =
       case decl of
         DeclType name vars _ ->
           (name, length vars) : acc
-        DeclTypeAlias name vars _ ->
+        DeclTypeAlias _ name vars _ ->
           (name, length vars) : acc
         DeclNewtype name vars _ _ ->
           (name, length vars) : acc
@@ -77,7 +77,7 @@ validateDecl env decl =
       validateType env ty
     DeclType _ _ ctors ->
       mapM_ (validateTypeCtor env) ctors
-    DeclTypeAlias _ _ body ->
+    DeclTypeAlias _ _ _ body ->
       validateType env body
     DeclNewtype _ _ _ ctorTy ->
       validateType env ctorTy
@@ -148,13 +148,13 @@ validateTypeConstructorArity env name got =
         then Right ()
         else Left (TypeConstructorArityMismatch name expected got)
 
-validateRecordFields :: ArityEnv -> [(Text, Type)] -> Either ValidateError ()
+validateRecordFields :: ArityEnv -> [(Text, Type, [Annotation])] -> Either ValidateError ()
 validateRecordFields env fields = do
-  let names = map fst fields
+  let names = map (\(name, _, _) -> name) fields
   case duplicates names of
     [] -> Right ()
     dups -> Left (DuplicateRecordTypeFields dups)
-  mapM_ (validateType env . snd) fields
+  mapM_ (\(_, ty, _) -> validateType env ty) fields
 
 duplicates :: Eq a => [a] -> [a]
 duplicates =

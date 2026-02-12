@@ -96,7 +96,7 @@ checkProgramCoherence prog =
         , typeName <-
             case decl of
               S.DeclType n _ _ -> [n]
-              S.DeclTypeAlias n _ _ -> [n]
+              S.DeclTypeAlias _ n _ _ -> [n]
               S.DeclNewtype n _ _ _ -> [n]
               _ -> []
         ]
@@ -163,7 +163,7 @@ exportsForModule m = do
           , name <-
               case decl of
                 S.DeclType n _ _ -> [n]
-                S.DeclTypeAlias n _ _ -> [n]
+                S.DeclTypeAlias _ n _ _ -> [n]
                 S.DeclNewtype n _ _ _ -> [n]
                 _ -> []
           ]
@@ -504,7 +504,7 @@ resolveTypeName scope ty =
       b' <- resolveTypeName scope b
       Right (S.TypeArrow a' b')
     S.TypeRecord fields -> do
-      fields' <- mapM (\(n, t) -> do t' <- resolveTypeName scope t; Right (n, t')) fields
+      fields' <- mapM (\(n, t, anns) -> do t' <- resolveTypeName scope t; Right (n, t', anns)) fields
       Right (S.TypeRecord fields')
 
 resolveExpr :: Scope -> S.Expr -> Either ResolveError S.Expr

@@ -12,6 +12,8 @@ library
   exposed-modules:
       Lune.Syntax
       Lune.Parser
+      Lune.Derive
+      Lune.Derive.Table
       Lune.Desugar
       Lune.Validate
       Lune.Type

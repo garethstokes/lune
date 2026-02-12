@@ -12,6 +12,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
+import qualified Lune.Derive as Derive
 import System.Directory (doesFileExist)
 import System.FilePath (splitDirectories, takeDirectory, (</>))
 
@@ -21,7 +22,8 @@ data ModuleError
   | ModuleNameMismatch Text Text FilePath
   | DuplicateModuleName Text FilePath FilePath
   | ImportCycle [Text]
-  deriving (Eq, Show)
+  | DeriveExpansionError Derive.DeriveError
+  deriving (Show)
 
 data LoadedModule = LoadedModule
   { lmName :: Text
@@ -45,26 +47,31 @@ loadProgram entryPath = do
     Left err ->
       pure (Left (ModuleParseError entryPath err))
     Right entryModule -> do
-      let entryName = S.modName entryModule
-      let entryLoaded =
-            LoadedModule
-              { lmName = entryName
-              , lmPath = entryPath
-              , lmModule = entryModule
-              }
-      loaded <- loadModule entryDir [] Map.empty entryLoaded
-      case loaded of
-        Left err ->
-          pure (Left err)
-        Right (mods, order) ->
-          pure
-            ( Right
-                Program
-                  { progEntryName = entryName
-                  , progModules = mods
-                  , progOrder = order
+      -- Expand @derive annotations before loading imports
+      case Derive.expandDerives entryModule of
+        Left deriveErr ->
+          pure (Left (DeriveExpansionError deriveErr))
+        Right expandedModule -> do
+          let entryName = S.modName expandedModule
+          let entryLoaded =
+                LoadedModule
+                  { lmName = entryName
+                  , lmPath = entryPath
+                  , lmModule = expandedModule
                   }
-            )
+          loaded <- loadModule entryDir [] Map.empty entryLoaded
+          case loaded of
+            Left err ->
+              pure (Left err)
+            Right (mods, order) ->
+              pure
+                ( Right
+                    Program
+                      { progEntryName = entryName
+                      , progModules = mods
+                      , progOrder = order
+                      }
+                )
 
 loadModule :: FilePath -> [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
 loadModule entryDir stack loaded m =

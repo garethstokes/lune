@@ -1,13 +1,13 @@
 module Lune.Database.Query exposing (
   Table,
-  Column,
+  Field,
   Query,
   Order(..),
   QueryType(..),
   Condition,
   Assignment,
   table,
-  column,
+  field,
   select,
   insert,
   update,
@@ -46,11 +46,11 @@ Example:
 users : Table
 users = table "users"
 
-users_id : Column Int
-users_id = column users "id"
+users_id : Field Int
+users_id = field users "id"
 
-users_name : Column String
-users_name = column users "name"
+users_name : Field String
+users_name = field users "name"
 ```
 -}
 
@@ -67,8 +67,9 @@ unitDecoder = \_ -> Ok unit
 -- | A database table reference
 type alias Table = { name : String }
 
--- | A column reference with phantom type for the column's Lune type
-type alias Column a = { tableName : String, columnName : String }
+-- | A field reference with phantom type for the field's Lune type
+-- Using a sum type with single constructor to preserve phantom type
+type Field a = Field { tableName : String, fieldName : String }
 
 -- | Sort order for ORDER BY
 type Order = Asc | Desc
@@ -99,9 +100,9 @@ type alias Query a =
 table : String -> Table
 table name = { name = name }
 
--- | Create a column reference
-column : Table -> String -> Column a
-column tbl colName = { tableName = tbl.name, columnName = colName }
+-- | Create a field reference
+field : Table -> String -> Field a
+field tbl fldName = Field { tableName = tbl.name, fieldName = fldName }
 
 -- | Start a SELECT query for a table
 select : Table -> Decoder a -> Query a
@@ -159,9 +160,11 @@ delete tbl =
   , returningFlag = False
   }
 
--- | Create a column assignment
-set : Column a -> DbValue -> Assignment
-set col val = { column = col.columnName, value = val }
+-- | Create a field assignment
+set : Field a -> DbValue -> Assignment
+set fld val =
+  case fld of
+    Field r -> { column = r.fieldName, value = val }
 
 -- | Add column assignments to an INSERT query
 values : List Assignment -> Query a -> Query a
@@ -191,76 +194,96 @@ returning query =
   , returningFlag = True
   }
 
--- | Create an equality condition: column = value
-eq : Column a -> DbValue -> Condition
-eq col val =
-  { sql = Str.append col.columnName " ="
-  , params = Cons val Nil
-  }
+-- | Create an equality condition: field = value
+eq : Field a -> DbValue -> Condition
+eq fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " ="
+      , params = Cons val Nil
+      }
 
--- | Create a greater-than condition: column > value
-gt : Column a -> DbValue -> Condition
-gt col val =
-  { sql = Str.append col.columnName " >"
-  , params = Cons val Nil
-  }
+-- | Create a greater-than condition: field > value
+gt : Field a -> DbValue -> Condition
+gt fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " >"
+      , params = Cons val Nil
+      }
 
--- | Create a less-than condition: column < value
-lt : Column a -> DbValue -> Condition
-lt col val =
-  { sql = Str.append col.columnName " <"
-  , params = Cons val Nil
-  }
+-- | Create a less-than condition: field < value
+lt : Field a -> DbValue -> Condition
+lt fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " <"
+      , params = Cons val Nil
+      }
 
--- | Create a greater-than-or-equal condition: column >= value
-gte : Column a -> DbValue -> Condition
-gte col val =
-  { sql = Str.append col.columnName " >="
-  , params = Cons val Nil
-  }
+-- | Create a greater-than-or-equal condition: field >= value
+gte : Field a -> DbValue -> Condition
+gte fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " >="
+      , params = Cons val Nil
+      }
 
--- | Create a less-than-or-equal condition: column <= value
-lte : Column a -> DbValue -> Condition
-lte col val =
-  { sql = Str.append col.columnName " <="
-  , params = Cons val Nil
-  }
+-- | Create a less-than-or-equal condition: field <= value
+lte : Field a -> DbValue -> Condition
+lte fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " <="
+      , params = Cons val Nil
+      }
 
--- | Create a not-equal condition: column <> value
-neq : Column a -> DbValue -> Condition
-neq col val =
-  { sql = Str.append col.columnName " <>"
-  , params = Cons val Nil
-  }
+-- | Create a not-equal condition: field <> value
+neq : Field a -> DbValue -> Condition
+neq fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " <>"
+      , params = Cons val Nil
+      }
 
--- | Create a LIKE condition: column LIKE pattern
+-- | Create a LIKE condition: field LIKE pattern
 -- Use % for wildcards in the pattern string
-like : Column String -> DbValue -> Condition
-like col val =
-  { sql = Str.append col.columnName " LIKE"
-  , params = Cons val Nil
-  }
+like : Field String -> DbValue -> Condition
+like fld val =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " LIKE"
+      , params = Cons val Nil
+      }
 
--- | Create an IS NULL condition: column IS NULL
-isNull : Column a -> Condition
-isNull col =
-  { sql = Str.append col.columnName " IS NULL"
-  , params = Nil
-  }
+-- | Create an IS NULL condition: field IS NULL
+isNull : Field a -> Condition
+isNull fld =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " IS NULL"
+      , params = Nil
+      }
 
--- | Create an IS NOT NULL condition: column IS NOT NULL
-isNotNull : Column a -> Condition
-isNotNull col =
-  { sql = Str.append col.columnName " IS NOT NULL"
-  , params = Nil
-  }
+-- | Create an IS NOT NULL condition: field IS NOT NULL
+isNotNull : Field a -> Condition
+isNotNull fld =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " IS NOT NULL"
+      , params = Nil
+      }
 
--- | Create an IN condition: column IN (values...)
-in_ : Column a -> List DbValue -> Condition
-in_ col vals =
-  { sql = Str.append col.columnName " IN"
-  , params = vals
-  }
+-- | Create an IN condition: field IN (values...)
+in_ : Field a -> List DbValue -> Condition
+in_ fld vals =
+  case fld of
+    Field r ->
+      { sql = Str.append r.fieldName " IN"
+      , params = vals
+      }
 
 -- | Add a WHERE condition to a query
 where_ : Condition -> Query a -> Query a
@@ -277,18 +300,20 @@ where_ cond query =
   }
 
 -- | Add ORDER BY clause to a query
-orderBy : Column a -> Order -> Query b -> Query b
-orderBy col ord query =
-  { tableName = query.tableName
-  , decoder = query.decoder
-  , queryType = query.queryType
-  , conditions = query.conditions
-  , assignments = query.assignments
-  , orderBy = Just { column = col.columnName, order = ord }
-  , limitCount = query.limitCount
-  , offsetCount = query.offsetCount
-  , returningFlag = query.returningFlag
-  }
+orderBy : Field a -> Order -> Query b -> Query b
+orderBy fld ord query =
+  case fld of
+    Field r ->
+      { tableName = query.tableName
+      , decoder = query.decoder
+      , queryType = query.queryType
+      , conditions = query.conditions
+      , assignments = query.assignments
+      , orderBy = Just { column = r.fieldName, order = ord }
+      , limitCount = query.limitCount
+      , offsetCount = query.offsetCount
+      , returningFlag = query.returningFlag
+      }
 
 -- | Add LIMIT clause to a query
 limit : Int -> Query a -> Query a

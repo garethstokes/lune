@@ -58,7 +58,7 @@ buildInstanceEnv m classEnv =
         , name <-
             case decl of
               S.DeclType n _ _ -> [n]
-              S.DeclTypeAlias n _ _ -> [n]
+              S.DeclTypeAlias _ n _ _ -> [n]
               S.DeclNewtype n _ _ _ -> [n]
               _ -> []
         ]
@@ -164,7 +164,7 @@ renderType ty =
     S.TypeArrow a b ->
       renderTypeAtom a <> " -> " <> renderType b
     S.TypeRecord fields ->
-      "{ " <> T.intercalate ", " [name <> " : " <> renderType t | (name, t) <- fields] <> " }"
+      "{ " <> T.intercalate ", " [name <> " : " <> renderType t | (name, t, _) <- fields] <> " }"
   where
     renderTypeAtom t =
       case t of

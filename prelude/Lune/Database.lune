@@ -51,20 +51,20 @@ errorToString err =
 
 -- | Create a null database value
 null : DbValue
-null = prim_dbNull
+null = DbNull
 
 -- | Create an integer database value
 int : Int -> DbValue
-int = prim_dbInt
+int n = DbInt n
 
 -- | Create a float database value
 float : Float -> DbValue
-float = prim_dbFloat
+float f = DbFloat f
 
 -- | Create a string database value
 string : String -> DbValue
-string = prim_dbString
+string s = DbString s
 
 -- | Create a boolean database value
 bool : Bool -> DbValue
-bool = prim_dbBool
+bool b = DbBool b

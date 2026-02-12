@@ -92,6 +92,7 @@ decl =
   choice
     [ P.label "class declaration" (try classDecl)
     , P.label "instance declaration" (try instanceDecl)
+    , P.label "annotated type alias" (try annotatedTypeAliasDecl)
     , P.label "type alias" (try typeAliasDecl)
     , P.label "type declaration" (try typeDecl)
     , P.label "newtype declaration" (try newtypeDecl)
@@ -137,6 +138,43 @@ valueDecl = do
   scn
   pure (DeclValue name args expr)
 
+-- | Parse an annotation like @derive(Table "users") or @primaryKey
+annotation :: Parser Annotation
+annotation = do
+  _ <- char '@'
+  name <- identifier
+  args <- optional (between (char '(') (char ')') annotationArgs)
+  pure Annotation { annName = name, annArgs = args }
+
+-- | Parse annotation arguments (a space-separated expression)
+annotationArgs :: Parser Expr
+annotationArgs = do
+  atoms <- some annotationAtom
+  pure (foldl1 App atoms)
+
+-- | Parse a single atom in annotation arguments
+annotationAtom :: Parser Expr
+annotationAtom = choice
+  [ Var <$> typeConstructor  -- Type names like Table
+  , StringLit . T.pack <$> stringLiteral  -- String literals like "users"
+  , IntLit <$> L.decimal  -- Integer literals
+  , Var <$> identifier  -- Regular identifiers
+  ]
+
+-- | Parse a type alias with annotations
+annotatedTypeAliasDecl :: Parser Decl
+annotatedTypeAliasDecl = do
+  anns <- some (annotation <* scn)
+  keyword "type"
+  keyword "alias"
+  name <- typeConstructor
+  vars <- many typeVar
+  symbol "="
+  scnOptional
+  body <- parseType
+  scn
+  pure (DeclTypeAlias anns name vars body)
+
 typeAliasDecl :: Parser Decl
 typeAliasDecl = do
   keyword "type"
@@ -147,7 +185,7 @@ typeAliasDecl = do
   scnOptional
   body <- parseType
   scn
-  pure (DeclTypeAlias name vars body)
+  pure (DeclTypeAlias [] name vars body)
 
 typeDecl :: Parser Decl
 typeDecl = do
@@ -354,7 +392,22 @@ typeAtomWith spaceConsumer = typeAtom
       name <- ident
       sym ":"
       ty <- parseTypeWith spaceConsumer
-      pure (name, ty)
+      anns <- many fieldAnnotation
+      pure (name, ty, anns)
+    fieldAnnotation = do
+      _ <- char '@'
+      annName <- ident
+      annArg <- optional (between (char '(') (char ')') fieldAnnotationArgs)
+      pure Annotation { annName = annName, annArgs = annArg }
+    fieldAnnotationArgs = do
+      atoms <- some fieldAnnotationAtom
+      pure (foldl1 App atoms)
+    fieldAnnotationAtom = choice
+      [ Var <$> try (lexeme tcon)  -- Type names
+      , StringLit . T.pack <$> lexeme stringLiteral  -- String literals
+      , IntLit <$> lexeme L.decimal  -- Integer literals
+      , Var <$> lexeme ident  -- Regular identifiers
+      ]
 
 parseExpr :: Parser Expr
 parseExpr =

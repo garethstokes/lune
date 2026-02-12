@@ -49,3 +49,51 @@ result <- Pool.withConnection pool (\conn -> Query.query conn "SELECT 1")
 3. **Generic Pool** - Same pool logic works for any database
 4. **Type Safety** - Database-specific error types (PgError, SqliteError, etc.)
 5. **Portable** - Wire protocol implementation in pure Lune
+
+## Schema Derive (@derive Table)
+
+Lune supports automatic generation of database CRUD helpers from type definitions
+using the `@derive(Table "tablename")` annotation.
+
+### Example
+
+```lune
+-- Define a type with derive annotation
+@derive(Table "users")
+type alias User =
+  { id : Int @primaryKey @serial
+  , name : String
+  , email : Maybe String
+  }
+```
+
+This generates:
+
+- **Table reference**: `users : Table`
+- **Field references**: `users_id : Field Int`, `users_name : Field String`, `users_email : Field (Maybe String)`
+- **Row decoder**: `userDecoder : Decoder User`
+- **CRUD helpers**:
+  - `findUserById : Int -> Query User`
+  - `findAllUsers : Query User`
+  - `insertUser : { name : String, email : Maybe String } -> Query User`
+  - `updateUser : Int -> List Assignment -> Query User`
+  - `deleteUser : Int -> Query Unit`
+
+### Field Annotations
+
+- `@primaryKey` - Marks the primary key field (required)
+- `@serial` - Marks auto-generated fields (excluded from insert input type)
+
+### Usage
+
+```lune
+import Lune.Database.Query exposing (getSql)
+
+-- Get the SQL for a query
+sql = getSql findAllUsers  -- "SELECT * FROM users"
+
+-- Build queries with conditions
+query = findUserById 42    -- SELECT * FROM users WHERE id = $1 LIMIT 1
+```
+
+See **39_Derive_Table.lune** for a complete example.

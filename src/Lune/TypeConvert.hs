@@ -23,7 +23,7 @@ buildAliasEnv :: [S.Decl] -> AliasEnv
 buildAliasEnv decls =
   Map.fromList
     [ (name, (vars, convertType Map.empty body))
-    | S.DeclTypeAlias name vars body <- decls
+    | S.DeclTypeAlias _ name vars body <- decls
     ]
 
 convertType :: AliasEnv -> S.Type -> Type
@@ -38,7 +38,7 @@ convertType aliasEnv ty =
     S.TypeArrow a b ->
       TArrow (convertType aliasEnv a) (convertType aliasEnv b)
     S.TypeRecord fields ->
-      TRecord (sortOn fst [(name, convertType aliasEnv t) | (name, t) <- fields])
+      TRecord (sortOn fst [(name, convertType aliasEnv t) | (name, t, _) <- fields])
 
 convertConstraint :: AliasEnv -> S.Constraint -> Constraint
 convertConstraint aliasEnv constraint =

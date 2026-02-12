@@ -2,6 +2,13 @@ module Lune.Syntax where
 
 import Data.Text (Text)
 
+-- | An annotation like @derive(Table "users") or @primaryKey
+data Annotation = Annotation
+  { annName :: Text           -- ^ Name without the @ symbol (e.g., "derive", "primaryKey")
+  , annArgs :: Maybe Expr     -- ^ Optional arguments (e.g., App (Var "Table") (StringLit "users"))
+  }
+  deriving (Show)
+
 data Module = Module
   { modName :: Text
   , modExports :: [Expose]
@@ -31,7 +38,7 @@ data Decl
   = DeclTypeSig Text QualType
   | DeclValue Text [Pattern] Expr
   | DeclType Text [Text] [TypeCtor]
-  | DeclTypeAlias Text [Text] Type
+  | DeclTypeAlias [Annotation] Text [Text] Type  -- ^ Annotations, name, type params, body
   | DeclNewtype Text [Text] Text Type
   | DeclClass Text [ClassParam] [Constraint] [ClassMethodSig]
   | DeclInstance Text Type [InstanceMethodDef]
@@ -50,7 +57,7 @@ data Type
   | TypeVar Text
   | TypeApp Type Type
   | TypeArrow Type Type
-  | TypeRecord [(Text, Type)]
+  | TypeRecord [(Text, Type, [Annotation])]  -- ^ Record fields with optional annotations
   deriving (Show)
 
 data Constraint = Constraint

@@ -1,0 +1,35 @@
+module DeriveTable exposing (demo)
+
+{-| Example demonstrating @derive(Table) for automatic CRUD generation.
+
+This example shows how to use the derive macro to automatically generate:
+- Table and field references
+- Row decoder
+- CRUD helper functions (findById, findAll, insert, update, delete)
+-}
+
+import Lune.Prelude exposing (Bool, Int, String, Maybe(..), List(..), IO, Unit)
+import Lune.Database.Query exposing (getSql)
+
+-- Define a User type with derive annotation
+-- The @primaryKey annotation marks the primary key field
+-- The @serial annotation indicates the field is auto-generated
+@derive(Table "users")
+type alias User =
+  { id : Int @primaryKey @serial
+  , name : String
+  , email : Maybe String
+  }
+
+-- Define a Post type with a foreign key
+@derive(Table "posts")
+type alias Post =
+  { id : Int @primaryKey @serial
+  , title : String
+  , body : String
+  , authorId : Int
+  }
+
+-- Demonstrate the generated helpers compile correctly
+demo : String
+demo = getSql findAllUsers

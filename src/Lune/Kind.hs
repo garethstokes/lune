@@ -109,7 +109,7 @@ kindEnvFromDecls decls =
         , (name, vars) <-
             case decl of
               S.DeclType name vars _ -> [(name, vars)]
-              S.DeclTypeAlias name vars _ -> [(name, vars)]
+              S.DeclTypeAlias _ name vars _ -> [(name, vars)]
               S.DeclNewtype name vars _ _ -> [(name, vars)]
               _ -> []
         ]
@@ -220,7 +220,7 @@ inferKind kindEnv ty =
       unifyKinds kb KType
       pure KType
     S.TypeRecord fields -> do
-      forM_ fields $ \(_, fieldTy) -> do
+      forM_ fields $ \(_, fieldTy, _) -> do
         k <- inferKind kindEnv fieldTy
         unifyKinds k KType
       pure KType
@@ -284,7 +284,7 @@ renderType ty =
     S.TypeArrow a b ->
       renderTypeAtom a <> " -> " <> renderType b
     S.TypeRecord fields ->
-      "{ " <> T.intercalate ", " [name <> " : " <> renderType t | (name, t) <- fields] <> " }"
+      "{ " <> T.intercalate ", " [name <> " : " <> renderType t | (name, t, _) <- fields] <> " }"
   where
     renderTypeAtom t =
       case t of
