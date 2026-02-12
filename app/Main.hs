@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Exception (IOException, try)
+import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.Process (readProcessWithExitCode)
@@ -17,6 +18,7 @@ import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Resolve as Resolve
+import System.FilePath (takeDirectory)
 
 main :: IO ()
 main = do
@@ -308,6 +310,8 @@ build opts = do
         exitFailure
       Right coreMod ->
         pure coreMod
+
+  createDirectoryIfMissing True (takeDirectory (buildOutput opts))
 
   case buildTarget opts of
     BuildTargetC ->
