@@ -370,6 +370,8 @@ buildGo opts coreMod = do
   case goResult of
     Left e -> do
       putStrLn ("Failed to run go: " <> show e)
+      putStrLn ("Go sources emitted to: " <> goPath <> ", " <> goRtPath)
+      putStrLn ("To build manually: go build -o " <> buildOutput opts <> " " <> goPath <> " " <> goRtPath)
       exitFailure
     Right (ec, goOut, goErr) ->
       case ec of
@@ -378,6 +380,7 @@ buildGo opts coreMod = do
         ExitFailure _ -> do
           putStrLn goOut
           putStrLn goErr
+          putStrLn ("Go sources emitted to: " <> goPath <> ", " <> goRtPath)
           exitFailure
 
 goRuntimeSource :: T.Text
