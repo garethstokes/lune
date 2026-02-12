@@ -1,4 +1,4 @@
-module Lune.Int exposing (add, sub, mul, eq, gte, lte)
+module Lune.Int exposing (add, sub, mul, div, mod, eq, gte, lte)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
@@ -12,6 +12,12 @@ sub = prim_subInt
 
 mul : Int -> Int -> Int
 mul = prim_mulInt
+
+div : Int -> Int -> Int
+div = prim_divInt
+
+mod : Int -> Int -> Int
+mod = prim_modInt
 
 eq : Int -> Int -> Bool
 eq = prim_eqInt

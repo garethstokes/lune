@@ -121,7 +121,7 @@ typeToDecoder ty =
     TypeCon "Float" -> Var "float"
     TypeCon "String" -> Var "string"
     TypeCon "Bool" -> Var "bool"
-    TypeCon "Time" -> Var "time"
+    TypeCon "Timestamp" -> Var "timestamp"
     TypeApp (TypeCon "Maybe") inner ->
       App (Var "nullable") (typeToDecoder inner)
     _ ->
@@ -243,6 +243,12 @@ typeToDbValue ty =
     TypeCon "Float" -> Var "DbFloat"
     TypeCon "String" -> Var "DbString"
     TypeCon "Bool" -> Var "DbBool"
+    TypeCon "Timestamp" ->
+      -- Timestamp wraps Int, need to extract micros: \ts -> case ts of Timestamp m -> DbTimestamp m
+      Lam [PVar "ts"]
+        (Case (Var "ts")
+          [ Alt (PCon "Timestamp" [PVar "m"]) (App (Var "DbTimestamp") (Var "m"))
+          ])
     TypeApp (TypeCon "Maybe") inner ->
       -- For Maybe, we need to handle it specially in the caller
       -- Return a lambda that converts Maybe a to DbValue

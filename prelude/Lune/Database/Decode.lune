@@ -9,6 +9,7 @@ module Lune.Database.Decode exposing (
   float,
   string,
   bool,
+  timestamp,
   nullable,
   map,
   map2,
@@ -40,6 +41,7 @@ import Lune.Prelude exposing (
   Result(..), String, Int, Float, Bool(..), List(..), Maybe(..)
 )
 import Lune.Database exposing (DbValue(..))
+import Lune.Time exposing (Timestamp(..))
 import Lune.String as Str
 import Lune.Int as Int
 import Lune.Float as Float
@@ -131,6 +133,16 @@ bool =
       Cons (DbString s) _ -> parseBoolString s
       Cons (DbNull) _ -> Err { message = "Expected boolean, got NULL", column = 0 }
       _ -> Err { message = "Expected boolean", column = 0 }
+
+-- | Decode a timestamp value
+timestamp : Decoder Timestamp
+timestamp =
+  \row ->
+    case row of
+      Cons (DbTimestamp micros) _ -> Ok (Timestamp micros)
+      Cons (DbInt n) _ -> Ok (Timestamp n)
+      Cons (DbNull) _ -> Err { message = "Expected timestamp, got NULL", column = 0 }
+      _ -> Err { message = "Expected timestamp", column = 0 }
 
 -- | Helper to parse boolean from string
 parseBoolString : String -> Result DecodeError Bool

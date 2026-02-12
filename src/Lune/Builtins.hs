@@ -10,6 +10,7 @@ module Lune.Builtins
   ) where
 
 import Control.Exception (try, IOException, SomeException)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Monad (replicateM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as BS
@@ -46,6 +47,8 @@ builtinSchemes =
     [ ("prim_addInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
     , ("prim_subInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
     , ("prim_mulInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_divInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
+    , ("prim_modInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Int"))))
     , ("prim_eqInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_geInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
     , ("prim_leInt", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Int") (TCon "Bool"))))
@@ -78,6 +81,8 @@ builtinSchemes =
     , ("prim_readLine", Forall [] [] (TApp (TCon "IO") (TCon "String")))
     , ("prim_readInt", Forall [] [] (TApp (TCon "IO") (TCon "Int")))
     , ("prim_sleepMs", Forall [] [] (TArrow (TCon "Int") (TApp (TCon "IO") (TCon "Unit"))))
+    -- Time primitives
+    , ("prim_timeNowMicros", Forall [] [] (TApp (TCon "IO") (TCon "Int")))
     , ("prim_readFile", Forall [] [] (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "String")))))
     , ("prim_writeFile", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "String") (TApp (TCon "IO") (TApp (TApp (TCon "Result") (TCon "Error")) (TCon "Unit"))))))
     -- JSON primitives
@@ -415,6 +420,8 @@ builtinEvalPrims =
     , ("prim_addInt", BuiltinPrim 2 primAddInt)
     , ("prim_subInt", BuiltinPrim 2 primSubInt)
     , ("prim_mulInt", BuiltinPrim 2 primMulInt)
+    , ("prim_divInt", BuiltinPrim 2 primDivInt)
+    , ("prim_modInt", BuiltinPrim 2 primModInt)
     , ("prim_showInt", BuiltinPrim 1 primShowInt)
     , ("prim_eqInt", BuiltinPrim 2 primEqInt)
     -- Float primitives
@@ -508,6 +515,8 @@ builtinEvalPrims =
     , ("prim_tlsSendBytes", BuiltinPrim 2 primTlsSendBytes)
     , ("prim_tlsRecvBytes", BuiltinPrim 2 primTlsRecvBytes)
     , ("prim_tlsClose", BuiltinPrim 1 primTlsClose)
+    -- Time primitives
+    , ("prim_timeNowMicros", BuiltinPrim 0 primTimeNowMicros)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -608,6 +617,22 @@ primMulInt args =
       Right (VInt (a * b))
     _ ->
       Left (NotAFunction (VPrim 2 primMulInt args))
+
+primDivInt :: [Value] -> Either EvalError Value
+primDivInt args =
+  case args of
+    [VInt a, VInt b] ->
+      Right (VInt (a `div` b))
+    _ ->
+      Left (NotAFunction (VPrim 2 primDivInt args))
+
+primModInt :: [Value] -> Either EvalError Value
+primModInt args =
+  case args of
+    [VInt a, VInt b] ->
+      Right (VInt (a `mod` b))
+    _ ->
+      Left (NotAFunction (VPrim 2 primModInt args))
 
 -- Float primitives
 primAddFloat :: [Value] -> Either EvalError Value
@@ -2046,3 +2071,17 @@ primTlsClose args =
     _ ->
       Left (NotAFunction (VPrim 1 primTlsClose args))
 
+-- =============================================================================
+-- Time Primitives
+-- =============================================================================
+
+-- | prim_timeNowMicros : IO Int
+-- Returns the current time as microseconds since Unix epoch (1970-01-01 00:00:00 UTC)
+primTimeNowMicros :: [Value] -> Either EvalError Value
+primTimeNowMicros [] =
+  Right $ VIO $ \world -> do
+    posixTime <- getPOSIXTime
+    let micros = truncate (posixTime * 1000000) :: Integer
+    pure $ Right (world, VInt micros)
+primTimeNowMicros args =
+  Left (NotAFunction (VPrim 0 primTimeNowMicros args))

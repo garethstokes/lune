@@ -40,6 +40,7 @@ type DbValue =
   | DbFloat Float
   | DbString String
   | DbBool Bool
+  | DbTimestamp Int  -- microseconds since Unix epoch
 
 -- | Convert a database error to a human-readable string
 errorToString : DbError -> String

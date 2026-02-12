@@ -1,0 +1,157 @@
+module Lune.Time exposing (
+  Timestamp(..),
+  -- Construction
+  now,
+  fromMicros,
+  toMicros,
+  -- Arithmetic
+  add,
+  sub,
+  diff,
+  -- Comparison
+  eq,
+  lt,
+  gt,
+  lte,
+  gte,
+  -- Duration constants (in microseconds)
+  microsecond,
+  millisecond,
+  second,
+  minute,
+  hour,
+  day
+)
+
+{-| Time and timestamp utilities for Lune.
+
+Timestamps represent microseconds since Unix epoch (1970-01-01 00:00:00 UTC).
+This matches PostgreSQL's TIMESTAMP precision.
+
+Note: Formatting and parsing are handled by the database decoder/encoder,
+which converts PostgreSQL timestamp strings to/from Timestamp values.
+-}
+
+import Lune.Prelude exposing (Int, Bool(..), IO, Applicative(..), Monad(..))
+import Lune.Int as Int
+
+-- =============================================================================
+-- Core Type
+-- =============================================================================
+
+-- | Timestamp as microseconds since Unix epoch (1970-01-01 00:00:00 UTC)
+type Timestamp = Timestamp Int
+
+-- =============================================================================
+-- Construction
+-- =============================================================================
+
+-- | Get the current time
+now : IO Timestamp
+now =
+  do
+    micros <- prim_timeNowMicros
+    pure (Timestamp micros)
+
+-- | Create a timestamp from microseconds since epoch
+fromMicros : Int -> Timestamp
+fromMicros micros = Timestamp micros
+
+-- | Extract microseconds since epoch from a timestamp
+toMicros : Timestamp -> Int
+toMicros ts =
+  case ts of
+    Timestamp micros -> micros
+
+-- =============================================================================
+-- Arithmetic
+-- =============================================================================
+
+-- | Add microseconds to a timestamp
+add : Timestamp -> Int -> Timestamp
+add ts micros =
+  case ts of
+    Timestamp t -> Timestamp (Int.add t micros)
+
+-- | Subtract microseconds from a timestamp
+sub : Timestamp -> Int -> Timestamp
+sub ts micros =
+  case ts of
+    Timestamp t -> Timestamp (Int.sub t micros)
+
+-- | Get the difference between two timestamps in microseconds
+-- diff a b = a - b (positive if a is later than b)
+diff : Timestamp -> Timestamp -> Int
+diff a b =
+  case a of
+    Timestamp ta ->
+      case b of
+        Timestamp tb -> Int.sub ta tb
+
+-- =============================================================================
+-- Comparison
+-- =============================================================================
+
+-- | Check if two timestamps are equal
+eq : Timestamp -> Timestamp -> Bool
+eq a b =
+  case a of
+    Timestamp ta ->
+      case b of
+        Timestamp tb -> Int.eq ta tb
+
+-- | Check if first timestamp is less than second
+lt : Timestamp -> Timestamp -> Bool
+lt a b = ltHelp (diff a b)
+
+ltHelp : Int -> Bool
+ltHelp d =
+  case Int.lte d 0 of
+    True ->
+      case Int.eq d 0 of
+        True -> False
+        False -> True
+    False -> False
+
+-- | Check if first timestamp is greater than second
+gt : Timestamp -> Timestamp -> Bool
+gt a b = lt b a
+
+-- | Check if first timestamp is less than or equal to second
+lte : Timestamp -> Timestamp -> Bool
+lte a b =
+  case lt a b of
+    True -> True
+    False -> eq a b
+
+-- | Check if first timestamp is greater than or equal to second
+gte : Timestamp -> Timestamp -> Bool
+gte a b = lte b a
+
+-- =============================================================================
+-- Duration Constants (microseconds)
+-- =============================================================================
+
+-- | One microsecond
+microsecond : Int
+microsecond = 1
+
+-- | One millisecond (1000 microseconds)
+millisecond : Int
+millisecond = 1000
+
+-- | One second (1,000,000 microseconds)
+second : Int
+second = 1000000
+
+-- | One minute (60,000,000 microseconds)
+minute : Int
+minute = 60000000
+
+-- | One hour (3,600,000,000 microseconds)
+hour : Int
+hour = 3600000000
+
+-- | One day (86,400,000,000 microseconds)
+day : Int
+day = 86400000000

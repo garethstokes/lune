@@ -11,19 +11,19 @@ This example shows how to use the derive macro to automatically generate:
 import Lune.Prelude exposing (Bool, Int, String, Maybe(..), List(..), IO, Unit)
 import Lune.Database.Query exposing (getSql, getParams, eq, where_)
 import Lune.Database exposing (DbValue(..))
+import Lune.Database.Decode exposing (timestamp)
+import Lune.Time exposing (Timestamp(..))
 
 -- =============================================================================
 -- User Table - Basic example with timestamps
 -- =============================================================================
--- Note: Timestamps are stored as Int (Unix epoch seconds).
--- In a real app, you might use a Timestamp type with proper formatting.
 
 @derive(Table "users")
 type alias User =
   { id : Int @primaryKey @serial
   , name : String
   , email : Maybe String
-  , createdAt : Int @serial
+  , createdAt : Timestamp @serial
   }
 
 -- =============================================================================
@@ -35,8 +35,8 @@ type alias Post =
   { id : Int @primaryKey @serial
   , title : String
   , authorId : Int
-  , createdAt : Int @serial
-  , updatedAt : Int
+  , createdAt : Timestamp @serial
+  , updatedAt : Timestamp
   }
 
 -- =============================================================================
@@ -48,8 +48,8 @@ type alias Product =
   { id : Int @primaryKey @serial
   , name : String
   , priceInCents : Int
-  , createdAt : Int @serial
-  , updatedAt : Int
+  , createdAt : Timestamp @serial
+  , updatedAt : Timestamp
   }
 
 -- =============================================================================
@@ -73,7 +73,7 @@ demo = getSql findAllUsers
 
 -- SELECT with WHERE clause using field reference
 demo2 : String
-demo2 = getSql (where_ (eq users_createdAt (DbInt 1700000000)) findAllUsers)
+demo2 = getSql (where_ (eq users_createdAt (DbTimestamp 1700000000000000)) findAllUsers)
 
 -- INSERT query (note: serial fields like id and createdAt are omitted)
 demo3 : String
