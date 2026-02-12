@@ -1,11 +1,13 @@
 module Main where
 
+import Control.Exception (IOException, try)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
 import System.Process (readProcessWithExitCode)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Lune.Codegen.C as CodegenC
+import qualified Lune.Codegen.Go as CodegenGo
 import Lune.Desugar (desugarModule)
 import qualified Lune.Elaborate as Elab
 import qualified Lune.Eval as Eval
@@ -266,8 +268,24 @@ evalAndPrint env name =
 
 build :: BuildOptions -> IO ()
 build opts = do
-  surface <- parseFile (buildInput opts)
-  let mod' = desugarModule surface
+  loaded <- MG.loadProgram (buildInput opts)
+  program <-
+    case loaded of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right p ->
+        pure p
+
+  resolved <-
+    case Resolve.resolveProgram program of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right m ->
+        pure m
+
+  let mod' = desugarModule resolved
 
   case validateModule mod' of
     Left err -> do
@@ -295,7 +313,7 @@ build opts = do
     BuildTargetC ->
       buildC opts coreMod
     BuildTargetGo ->
-      putStrLn "Go target not implemented yet."
+      buildGo opts coreMod
 
 buildC :: BuildOptions -> Core.CoreModule -> IO ()
 buildC opts coreMod = do
@@ -323,3 +341,39 @@ buildC opts coreMod = do
       putStrLn ccOut
       putStrLn ccErr
       exitFailure
+
+buildGo :: BuildOptions -> Core.CoreModule -> IO ()
+buildGo opts coreMod = do
+  goSource <-
+    case CodegenGo.codegenHelloModule coreMod of
+      Left err -> do
+        putStrLn (show err)
+        exitFailure
+      Right goSrc ->
+        pure goSrc
+
+  let goPath = buildOutput opts <> ".go"
+  writeFile goPath (T.unpack goSource)
+
+  goResult <-
+    ( try
+        ( readProcessWithExitCode
+            "go"
+            ["build", "-o", buildOutput opts, goPath]
+            ""
+        )
+    ) ::
+      IO (Either IOException (ExitCode, String, String))
+
+  case goResult of
+    Left e -> do
+      putStrLn ("Failed to run go: " <> show e)
+      exitFailure
+    Right (ec, goOut, goErr) ->
+      case ec of
+        ExitSuccess ->
+          pure ()
+        ExitFailure _ -> do
+          putStrLn goOut
+          putStrLn goErr
+          exitFailure

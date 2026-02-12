@@ -13,19 +13,38 @@ data CodegenError
   deriving (Show)
 
 codegenHelloModule :: C.CoreModule -> Either CodegenError Text
-codegenHelloModule (C.CoreModule _ decls) = do
+codegenHelloModule (C.CoreModule modName decls) = do
   mainExpr <-
-    case [expr | C.CoreDecl "main" expr <- decls] of
-      [] -> Left CodegenMissingMain
-      (e : _) -> Right e
+    case findMainDecl modName decls of
+      Nothing -> Left CodegenMissingMain
+      Just e -> Right e
 
   cStmt <- codegenHelloMain mainExpr
   Right (renderProgram cStmt)
+  where
+    findMainDecl :: Text -> [C.CoreDecl] -> Maybe C.CoreExpr
+    findMainDecl mName decls' =
+      let qualifiedMain = mName <> ".main"
+          matches target =
+            [ expr
+            | C.CoreDecl name expr <- decls'
+            , name == target
+            ]
+       in case matches qualifiedMain of
+            (e : _) -> Just e
+            [] ->
+              case matches "main" of
+                (e : _) -> Just e
+                [] -> Nothing
 
 codegenHelloMain :: C.CoreExpr -> Either CodegenError Text
 codegenHelloMain expr =
   case expr of
     C.CApp (C.CVar "putStrLn") (C.CString s) ->
+      Right ("puts(" <> renderCString s <> ");")
+    C.CApp (C.CVar "Lune.IO.println") (C.CString s) ->
+      Right ("puts(" <> renderCString s <> ");")
+    C.CApp (C.CVar "prim_putStrLn") (C.CString s) ->
       Right ("puts(" <> renderCString s <> ");")
     _ ->
       Left (CodegenUnsupportedMain expr)
@@ -57,4 +76,3 @@ escapeCString =
         '\r' -> "\\r"
         '\t' -> "\\t"
         _ -> T.singleton c
-
