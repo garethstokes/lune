@@ -1,2 +1,2 @@
 "SELECT * FROM users"
-"SELECT * FROM users WHERE isActive = $1"
+"SELECT * FROM users WHERE createdAt = $1"

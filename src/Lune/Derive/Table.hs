@@ -178,14 +178,12 @@ generateFindAll singularName typeName tableName =
   ]
 
 -- | Generate insertUser : { ... } -> Query User
--- Omits serial primary key fields
+-- Omits all serial fields (both primary key and timestamps like createdAt)
 generateInsert :: Text -> Text -> Text -> [(Text, Type, [Annotation])] -> Text -> Bool -> [Decl]
-generateInsert singularName typeName tableName fields pkName isSerial =
+generateInsert singularName typeName tableName fields _pkName _isSerial =
   let fnName = "insert" <> capitalize typeName
-      -- Filter out serial primary key from input type
-      inputFields = if isSerial
-        then filter (\(n, _, _) -> n /= pkName) fields
-        else fields
+      -- Filter out all serial fields from input type
+      inputFields = filter (not . hasAnnotation "serial") fields
       inputType = TypeRecord [(n, t, []) | (n, t, _) <- inputFields]
       returnType = TypeApp (TypeCon "Query") (TypeCon typeName)
       decoderName = singularName <> "Decoder"
