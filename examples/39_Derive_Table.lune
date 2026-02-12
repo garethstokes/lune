@@ -1,4 +1,4 @@
-module DeriveTable exposing (demo)
+module DeriveTable exposing (demo, demo2, demo3)
 
 {-| Example demonstrating @derive(Table) for automatic CRUD generation.
 
@@ -9,27 +9,69 @@ This example shows how to use the derive macro to automatically generate:
 -}
 
 import Lune.Prelude exposing (Bool, Int, String, Maybe(..), List(..), IO, Unit)
-import Lune.Database.Query exposing (getSql)
+import Lune.Database.Query exposing (getSql, getParams, eq, where_)
+import Lune.Database exposing (DbValue(..))
 
--- Define a User type with derive annotation
--- The @primaryKey annotation marks the primary key field
--- The @serial annotation indicates the field is auto-generated
+-- =============================================================================
+-- User Table - Basic example with nullable email
+-- =============================================================================
+
 @derive(Table "users")
 type alias User =
   { id : Int @primaryKey @serial
   , name : String
   , email : Maybe String
+  , isActive : Bool
   }
 
--- Define a Post type with a foreign key
+-- =============================================================================
+-- Post Table - Foreign key relationship
+-- =============================================================================
+
 @derive(Table "posts")
 type alias Post =
   { id : Int @primaryKey @serial
   , title : String
   , body : String
   , authorId : Int
+  , published : Bool
   }
 
--- Demonstrate the generated helpers compile correctly
+-- =============================================================================
+-- Product Table - E-commerce example with pricing
+-- =============================================================================
+
+@derive(Table "products")
+type alias Product =
+  { id : Int @primaryKey @serial
+  , name : String
+  , priceInCents : Int
+  , inStock : Bool
+  }
+
+-- =============================================================================
+-- Category Table - Simple lookup table
+-- =============================================================================
+
+@derive(Table "categories")
+type alias Category =
+  { id : Int @primaryKey @serial
+  , name : String
+  , parentId : Maybe Int
+  }
+
+-- =============================================================================
+-- Demo: Show generated SQL queries
+-- =============================================================================
+
+-- Basic SELECT query
 demo : String
 demo = getSql findAllUsers
+
+-- SELECT with WHERE clause using field reference
+demo2 : String
+demo2 = getSql (where_ (eq users_isActive (DbBool True)) findAllUsers)
+
+-- INSERT query (note: serial fields like id are omitted)
+demo3 : String
+demo3 = getSql (insertUser { name = "Alice", email = Just "alice@example.com", isActive = True })
