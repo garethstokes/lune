@@ -68,14 +68,14 @@ errorToString : DbError -> String
 
 The query builder constructs SQL from composable functions. Queries carry a phantom type for the result and a decoder for type-safe row extraction.
 
-#### Table and Column References
+#### Table and Field References
 
 ```
 type alias Table = { name : String }
-type alias Column a = { tableName : String, columnName : String }
+type alias Field a = { tableName : String, fieldName : String }
 
-table  : String -> Table
-column : Table -> String -> Column a
+table : String -> Table
+field : Table -> String -> Field a
 ```
 
 #### Query Types
@@ -109,16 +109,16 @@ delete : Table -> Query Unit
 #### WHERE Conditions
 
 ```
-eq        : Column a -> DbValue -> Condition
-neq       : Column a -> DbValue -> Condition
-gt        : Column a -> DbValue -> Condition
-lt        : Column a -> DbValue -> Condition
-gte       : Column a -> DbValue -> Condition
-lte       : Column a -> DbValue -> Condition
-like      : Column String -> DbValue -> Condition
-isNull    : Column a -> Condition
-isNotNull : Column a -> Condition
-in_       : Column a -> List DbValue -> Condition
+eq        : Field a -> DbValue -> Condition
+neq       : Field a -> DbValue -> Condition
+gt        : Field a -> DbValue -> Condition
+lt        : Field a -> DbValue -> Condition
+gte       : Field a -> DbValue -> Condition
+lte       : Field a -> DbValue -> Condition
+like      : Field String -> DbValue -> Condition
+isNull    : Field a -> Condition
+isNotNull : Field a -> Condition
+in_       : Field a -> List DbValue -> Condition
 
 where_    : Condition -> Query a -> Query a
 ```
@@ -126,10 +126,10 @@ where_    : Condition -> Query a -> Query a
 #### Modifiers
 
 ```
-set       : Column a -> DbValue -> Assignment
+set       : Field a -> DbValue -> Assignment
 values    : List Assignment -> Query a -> Query a
 returning : Query a -> Query a
-orderBy   : Column a -> Order -> Query b -> Query b
+orderBy   : Field a -> Order -> Query b -> Query b
 limit     : Int -> Query a -> Query a
 offset    : Int -> Query a -> Query a
 ```
@@ -149,14 +149,14 @@ getDecoder : Query a -> Decoder a
 users : Table
 users = table "users"
 
-users_id : Column Int
-users_id = column users "id"
+users_id : Field Int
+users_id = field users "id"
 
-users_name : Column String
-users_name = column users "name"
+users_name : Field String
+users_name = field users "name"
 
-users_active : Column Bool
-users_active = column users "active"
+users_active : Field Bool
+users_active = field users "active"
 
 -- SELECT * FROM users WHERE active = true ORDER BY name ASC LIMIT 10
 activeUsersQuery : Query User
@@ -342,11 +342,11 @@ import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..), List(..))
 users : Q.Table
 users = Q.table "users"
 
-users_id : Q.Column Int
-users_id = Q.column users "id"
+users_id : Q.Field Int
+users_id = Q.field users "id"
 
-users_name : Q.Column String
-users_name = Q.column users "name"
+users_name : Q.Field String
+users_name = Q.field users "name"
 
 -- Decoder
 type alias User = { id : Int, name : String }
