@@ -3,6 +3,8 @@ package rt
 import (
 	"fmt"
 	"runtime"
+	"strconv"
+	"strings"
 )
 
 type Value = any
@@ -89,8 +91,226 @@ func RunIO(io IO) Value {
 	return io()
 }
 
+func boolCon(b bool) Value {
+	if b {
+		return Con{Name: "Lune.Prelude.True", Args: nil}
+	}
+	return Con{Name: "Lune.Prelude.False", Args: nil}
+}
+
+func expectBool(v Value) bool {
+	con, ok := v.(Con)
+	if !ok {
+		panic(fmt.Sprintf("expected Bool, got %T", v))
+	}
+	switch con.Name {
+	case "Lune.Prelude.True":
+		if len(con.Args) != 0 {
+			panic("expected Bool True (arity 0)")
+		}
+		return true
+	case "Lune.Prelude.False":
+		if len(con.Args) != 0 {
+			panic("expected Bool False (arity 0)")
+		}
+		return false
+	default:
+		panic("expected Bool, got constructor: " + con.Name)
+	}
+}
+
+func expectInt64(v Value, ctx string) int64 {
+	n, ok := v.(int64)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Int, got %T", ctx, v))
+	}
+	return n
+}
+
+func expectRune(v Value, ctx string) rune {
+	r, ok := v.(rune)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Char, got %T", ctx, v))
+	}
+	return r
+}
+
+func haskellDivMod(a, b int64) (int64, int64) {
+	if b == 0 {
+		panic("division by zero")
+	}
+	q := a / b
+	r := a % b
+	if r != 0 && ((r < 0) != (b < 0)) {
+		q -= 1
+		r += b
+	}
+	return q, r
+}
+
 func Builtin(name string) Value {
 	switch name {
+	case "prim_addInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_addInt")
+			b := expectInt64(args[1], "prim_addInt")
+			return a + b
+		})
+	case "prim_subInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_subInt")
+			b := expectInt64(args[1], "prim_subInt")
+			return a - b
+		})
+	case "prim_mulInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_mulInt")
+			b := expectInt64(args[1], "prim_mulInt")
+			return a * b
+		})
+	case "prim_divInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_divInt")
+			b := expectInt64(args[1], "prim_divInt")
+			q, _ := haskellDivMod(a, b)
+			return q
+		})
+	case "prim_modInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_modInt")
+			b := expectInt64(args[1], "prim_modInt")
+			_, r := haskellDivMod(a, b)
+			return r
+		})
+	case "prim_eqInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_eqInt")
+			b := expectInt64(args[1], "prim_eqInt")
+			return boolCon(a == b)
+		})
+	case "prim_leInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_leInt")
+			b := expectInt64(args[1], "prim_leInt")
+			return boolCon(a <= b)
+		})
+	case "prim_geInt":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectInt64(args[0], "prim_geInt")
+			b := expectInt64(args[1], "prim_geInt")
+			return boolCon(a >= b)
+		})
+	case "prim_and":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectBool(args[0])
+			if !a {
+				return boolCon(false)
+			}
+			b := expectBool(args[1])
+			return boolCon(a && b)
+		})
+	case "prim_or":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectBool(args[0])
+			b := expectBool(args[1])
+			return boolCon(a || b)
+		})
+	case "prim_not":
+		return NewPrim(1, func(args []Value) Value {
+			a := expectBool(args[0])
+			return boolCon(!a)
+		})
+	case "prim_eqString":
+		return NewPrim(2, func(args []Value) Value {
+			a, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_eqString: expected String, got %T", args[0]))
+			}
+			b, ok := args[1].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_eqString: expected String, got %T", args[1]))
+			}
+			return boolCon(a == b)
+		})
+	case "prim_showInt":
+		return NewPrim(1, func(args []Value) Value {
+			n := expectInt64(args[0], "prim_showInt")
+			return strconv.FormatInt(n, 10)
+		})
+	case "prim_parseInt":
+		return NewPrim(1, func(args []Value) Value {
+			s, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_parseInt: expected String, got %T", args[0]))
+			}
+			const maxI64 = int64(9223372036854775807)
+			if s == "" {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
+			}
+			var n int64 = 0
+			for i := 0; i < len(s); i++ {
+				c := s[i]
+				if c < '0' || c > '9' {
+					return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
+				}
+				d := int64(c - '0')
+				if n > (maxI64-d)/10 {
+					return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
+				}
+				n = n*10 + d
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{n}}
+		})
+	case "prim_stringToChars":
+		return NewPrim(1, func(args []Value) Value {
+			s, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_stringToChars: expected String, got %T", args[0]))
+			}
+			runes := []rune(s)
+			var out Value = Con{Name: "Lune.Prelude.Nil", Args: nil}
+			for i := len(runes) - 1; i >= 0; i-- {
+				out = Con{Name: "Lune.Prelude.Cons", Args: []Value{runes[i], out}}
+			}
+			return out
+		})
+	case "prim_charsToString":
+		return NewPrim(1, func(args []Value) Value {
+			v := args[0]
+			var b strings.Builder
+			for {
+				con, ok := v.(Con)
+				if !ok {
+					panic(fmt.Sprintf("prim_charsToString: expected List Char, got %T", v))
+				}
+				switch con.Name {
+				case "Lune.Prelude.Nil":
+					if len(con.Args) != 0 {
+						panic("prim_charsToString: expected Nil arity 0")
+					}
+					return b.String()
+				case "Lune.Prelude.Cons":
+					if len(con.Args) != 2 {
+						panic("prim_charsToString: expected Cons arity 2")
+					}
+					r := expectRune(con.Args[0], "prim_charsToString")
+					b.WriteRune(r)
+					v = con.Args[1]
+				default:
+					panic("prim_charsToString: expected List Char constructor, got: " + con.Name)
+				}
+			}
+		})
+	case "prim_charToInt":
+		return NewPrim(1, func(args []Value) Value {
+			c := expectRune(args[0], "prim_charToInt")
+			return int64(c)
+		})
+	case "prim_intToChar":
+		return NewPrim(1, func(args []Value) Value {
+			n := expectInt64(args[0], "prim_intToChar")
+			return rune(n)
+		})
 	case "prim_appendString":
 		return NewPrim(2, func(args []Value) Value {
 			a, ok := args[0].(string)
