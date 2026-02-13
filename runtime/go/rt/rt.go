@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type Value = any
@@ -135,6 +136,14 @@ func expectRune(v Value, ctx string) rune {
 	return r
 }
 
+func expectBytes(v Value, ctx string) []byte {
+	bs, ok := v.([]byte)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Bytes, got %T", ctx, v))
+	}
+	return bs
+}
+
 func haskellDivMod(a, b int64) (int64, int64) {
 	if b == 0 {
 		panic("division by zero")
@@ -150,6 +159,149 @@ func haskellDivMod(a, b int64) (int64, int64) {
 
 func Builtin(name string) Value {
 	switch name {
+	case "prim_bytesEmpty":
+		return []byte{}
+	case "prim_bytesFromList":
+		return NewPrim(1, func(args []Value) Value {
+			var out []byte
+			v := args[0]
+			for {
+				con, ok := v.(Con)
+				if !ok {
+					panic(fmt.Sprintf("prim_bytesFromList: expected List Int, got %T", v))
+				}
+				switch con.Name {
+				case "Lune.Prelude.Nil":
+					if len(con.Args) != 0 {
+						panic("prim_bytesFromList: expected Nil arity 0")
+					}
+					return out
+				case "Lune.Prelude.Cons":
+					if len(con.Args) != 2 {
+						panic("prim_bytesFromList: expected Cons arity 2")
+					}
+					n := expectInt64(con.Args[0], "prim_bytesFromList")
+					out = append(out, byte(n))
+					v = con.Args[1]
+				default:
+					panic("prim_bytesFromList: expected List Int constructor, got: " + con.Name)
+				}
+			}
+		})
+	case "prim_bytesToList":
+		return NewPrim(1, func(args []Value) Value {
+			bs := expectBytes(args[0], "prim_bytesToList")
+			var out Value = Con{Name: "Lune.Prelude.Nil", Args: nil}
+			for i := len(bs) - 1; i >= 0; i-- {
+				out = Con{Name: "Lune.Prelude.Cons", Args: []Value{int64(bs[i]), out}}
+			}
+			return out
+		})
+	case "prim_bytesFromString":
+		return NewPrim(1, func(args []Value) Value {
+			s, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_bytesFromString: expected String, got %T", args[0]))
+			}
+			return []byte(s)
+		})
+	case "prim_bytesToString":
+		return NewPrim(1, func(args []Value) Value {
+			bs := expectBytes(args[0], "prim_bytesToString")
+			var b strings.Builder
+			b.Grow(len(bs))
+			for len(bs) > 0 {
+				r, size := utf8.DecodeRune(bs)
+				if r == utf8.RuneError && size == 1 {
+					b.WriteRune(utf8.RuneError)
+					bs = bs[1:]
+					continue
+				}
+				b.WriteRune(r)
+				bs = bs[size:]
+			}
+			return b.String()
+		})
+	case "prim_bytesLength":
+		return NewPrim(1, func(args []Value) Value {
+			bs := expectBytes(args[0], "prim_bytesLength")
+			return int64(len(bs))
+		})
+	case "prim_bytesConcat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectBytes(args[0], "prim_bytesConcat")
+			b := expectBytes(args[1], "prim_bytesConcat")
+			out := make([]byte, 0, len(a)+len(b))
+			out = append(out, a...)
+			out = append(out, b...)
+			return out
+		})
+	case "prim_bytesSlice":
+		return NewPrim(3, func(args []Value) Value {
+			start := expectInt64(args[0], "prim_bytesSlice")
+			length := expectInt64(args[1], "prim_bytesSlice")
+			bs := expectBytes(args[2], "prim_bytesSlice")
+
+			startI := int(start)
+			if startI < 0 {
+				startI = 0
+			}
+			if startI > len(bs) {
+				startI = len(bs)
+			}
+
+			lengthI := int(length)
+			if lengthI < 0 {
+				lengthI = 0
+			}
+
+			endI := startI + lengthI
+			if endI > len(bs) {
+				endI = len(bs)
+			}
+
+			out := make([]byte, endI-startI)
+			copy(out, bs[startI:endI])
+			return out
+		})
+	case "prim_bytesPackInt32BE":
+		return NewPrim(1, func(args []Value) Value {
+			n := expectInt64(args[0], "prim_bytesPackInt32BE")
+			u := uint32(n)
+			return []byte{
+				byte(u >> 24),
+				byte(u >> 16),
+				byte(u >> 8),
+				byte(u),
+			}
+		})
+	case "prim_bytesUnpackInt32BE":
+		return NewPrim(1, func(args []Value) Value {
+			bs := expectBytes(args[0], "prim_bytesUnpackInt32BE")
+			if len(bs) < 4 {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"bytes too short for Int32"}}
+			}
+			u := uint32(bs[0])<<24 | uint32(bs[1])<<16 | uint32(bs[2])<<8 | uint32(bs[3])
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{int64(u)}}
+		})
+	case "prim_bytesPackInt16BE":
+		return NewPrim(1, func(args []Value) Value {
+			n := expectInt64(args[0], "prim_bytesPackInt16BE")
+			u := uint16(n)
+			return []byte{
+				byte(u >> 8),
+				byte(u),
+			}
+		})
+	case "prim_bytesUnpackInt16BE":
+		return NewPrim(1, func(args []Value) Value {
+			bs := expectBytes(args[0], "prim_bytesUnpackInt16BE")
+			if len(bs) < 2 {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"bytes too short for Int16"}}
+			}
+			u := uint16(bs[0])<<8 | uint16(bs[1])
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{int64(u)}}
+		})
 	case "prim_addInt":
 		return NewPrim(2, func(args []Value) Value {
 			a := expectInt64(args[0], "prim_addInt")
