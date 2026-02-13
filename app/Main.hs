@@ -388,7 +388,7 @@ buildGo opts coreMod = do
     else pure ()
 
   goSource <-
-    case CodegenGo.codegenHelloModule (T.pack rtImportPath) coreMod of
+    case CodegenGo.codegenModule (T.pack rtImportPath) coreMod of
       Left err -> do
         putStrLn (show err)
         exitFailure
