@@ -12,15 +12,15 @@ data CodegenError
   | CodegenUnsupportedMain C.CoreExpr
   deriving (Show)
 
-codegenHelloModule :: C.CoreModule -> Either CodegenError Text
-codegenHelloModule (C.CoreModule modName decls) = do
+codegenHelloModule :: Text -> C.CoreModule -> Either CodegenError Text
+codegenHelloModule rtImportPath (C.CoreModule modName decls) = do
   mainExpr <-
     case findMainDecl modName decls of
       Nothing -> Left CodegenMissingMain
       Just e -> Right e
 
-  goStmt <- codegenHelloMain mainExpr
-  Right (renderProgram goStmt)
+  goIoExpr <- codegenHelloMain mainExpr
+  Right (renderProgram rtImportPath goIoExpr)
   where
     findMainDecl :: Text -> [C.CoreDecl] -> Maybe C.CoreExpr
     findMainDecl mName decls' =
@@ -41,21 +41,23 @@ codegenHelloMain :: C.CoreExpr -> Either CodegenError Text
 codegenHelloMain expr =
   case expr of
     C.CApp (C.CVar "putStrLn") (C.CString s) ->
-      Right ("prim_putStrLn(" <> renderGoString s <> ")")
+      Right ("rt.PrimPutStrLn(" <> renderGoString s <> ")")
     C.CApp (C.CVar "Lune.IO.println") (C.CString s) ->
-      Right ("prim_putStrLn(" <> renderGoString s <> ")")
+      Right ("rt.PrimPutStrLn(" <> renderGoString s <> ")")
     C.CApp (C.CVar "prim_putStrLn") (C.CString s) ->
-      Right ("prim_putStrLn(" <> renderGoString s <> ")")
+      Right ("rt.PrimPutStrLn(" <> renderGoString s <> ")")
     _ ->
       Left (CodegenUnsupportedMain expr)
 
-renderProgram :: Text -> Text
-renderProgram stmt =
+renderProgram :: Text -> Text -> Text
+renderProgram rtImportPath ioExpr =
   T.unlines
     [ "package main"
     , ""
+    , "import \"" <> rtImportPath <> "\""
+    , ""
     , "func main() {"
-    , "  " <> stmt
+    , "  rt.RunIO(" <> ioExpr <> ")"
     , "}"
     ]
 

@@ -1,10 +1,25 @@
 module Main where
 
 import Control.Exception (IOException, try)
-import System.Directory (createDirectoryIfMissing)
+import Control.Monad (forM_)
+import System.Directory
+  ( copyFile
+  , createDirectoryIfMissing
+  , doesDirectoryExist
+  , doesFileExist
+  , listDirectory
+  , makeAbsolute
+  , removeDirectoryRecursive
+  , removeFile
+  )
 import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
-import System.Process (readProcessWithExitCode)
+import System.Process
+  ( CreateProcess (cwd)
+  , proc
+  , readCreateProcessWithExitCode
+  , readProcessWithExitCode
+  )
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Lune.Codegen.C as CodegenC
@@ -18,7 +33,7 @@ import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Resolve as Resolve
-import System.FilePath (takeDirectory)
+import System.FilePath (takeDirectory, (</>))
 
 main :: IO ()
 main = do
@@ -348,24 +363,49 @@ buildC opts coreMod = do
 
 buildGo :: BuildOptions -> Core.CoreModule -> IO ()
 buildGo opts coreMod = do
+  let goModulePath = "lune.local/generated"
+      rtImportPath = goModulePath <> "/rt"
+      goDir = buildOutput opts <> ".go-build"
+      goModPath = goDir </> "go.mod"
+      mainPath = goDir </> "main.go"
+      runtimeTemplateRoot = "runtime/go"
+
+  runtimeExists <- doesDirectoryExist runtimeTemplateRoot
+  if runtimeExists
+    then pure ()
+    else do
+      putStrLn ("Missing Go runtime templates: " <> runtimeTemplateRoot)
+      exitFailure
+
+  goDirExists <- doesDirectoryExist goDir
+  if goDirExists
+    then removeDirectoryRecursive goDir
+    else pure ()
+
+  goDirIsFile <- doesFileExist goDir
+  if goDirIsFile
+    then removeFile goDir
+    else pure ()
+
   goSource <-
-    case CodegenGo.codegenHelloModule coreMod of
+    case CodegenGo.codegenHelloModule (T.pack rtImportPath) coreMod of
       Left err -> do
         putStrLn (show err)
         exitFailure
       Right goSrc ->
         pure goSrc
 
-  let goPath = buildOutput opts <> ".go"
-      goRtPath = buildOutput opts <> ".rt.go"
-  writeFile goPath (T.unpack goSource)
-  writeFile goRtPath (T.unpack goRuntimeSource)
+  createDirectoryIfMissing True goDir
+  copyDirectoryRecursive runtimeTemplateRoot goDir
+  writeFile mainPath (T.unpack goSource)
+  writeFile goModPath (T.unpack (goModSource goModulePath))
+
+  outAbs <- makeAbsolute (buildOutput opts)
 
   goResult <-
     ( try
-        ( readProcessWithExitCode
-            "go"
-            ["build", "-o", buildOutput opts, goPath, goRtPath]
+        ( readCreateProcessWithExitCode
+            (proc "go" ["build", "-o", outAbs, "."]) {cwd = Just goDir}
             ""
         )
     ) ::
@@ -374,8 +414,8 @@ buildGo opts coreMod = do
   case goResult of
     Left e -> do
       putStrLn ("Failed to run go: " <> show e)
-      putStrLn ("Go sources emitted to: " <> goPath <> ", " <> goRtPath)
-      putStrLn ("To build manually: go build -o " <> buildOutput opts <> " " <> goPath <> " " <> goRtPath)
+      putStrLn ("Go module emitted to: " <> goDir)
+      putStrLn ("To build manually: cd " <> goDir <> " && go build -o " <> outAbs <> " .")
       exitFailure
     Right (ec, goOut, goErr) ->
       case ec of
@@ -384,17 +424,25 @@ buildGo opts coreMod = do
         ExitFailure _ -> do
           putStrLn goOut
           putStrLn goErr
-          putStrLn ("Go sources emitted to: " <> goPath <> ", " <> goRtPath)
+          putStrLn ("Go module emitted to: " <> goDir)
           exitFailure
 
-goRuntimeSource :: T.Text
-goRuntimeSource =
+goModSource :: String -> T.Text
+goModSource modulePath =
   T.unlines
-    [ "package main"
+    [ "module " <> T.pack modulePath
     , ""
-    , "import \"fmt\""
-    , ""
-    , "func prim_putStrLn(s string) {"
-    , "  fmt.Println(s)"
-    , "}"
+    , "go 1.18"
     ]
+
+copyDirectoryRecursive :: FilePath -> FilePath -> IO ()
+copyDirectoryRecursive src dst = do
+  createDirectoryIfMissing True dst
+  entries <- listDirectory src
+  forM_ entries $ \entry -> do
+    let srcPath = src </> entry
+        dstPath = dst </> entry
+    isDir <- doesDirectoryExist srcPath
+    if isDir
+      then copyDirectoryRecursive srcPath dstPath
+      else copyFile srcPath dstPath
