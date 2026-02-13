@@ -12,10 +12,10 @@ import System.Directory
   , removeDirectoryRecursive
   , removeFile
   )
-import System.Environment (getArgs)
+import System.Environment (getArgs, getEnvironment)
 import System.Exit (ExitCode (..), exitFailure)
 import System.Process
-  ( CreateProcess (cwd)
+  ( CreateProcess (cwd, env)
   , proc
   , readCreateProcessWithExitCode
   , readProcessWithExitCode
@@ -28,6 +28,7 @@ import Lune.Desugar (desugarModule)
 import qualified Lune.Elaborate as Elab
 import qualified Lune.Eval as Eval
 import qualified Lune.Core as Core
+import qualified Lune.Pass.ANF as ANF
 import Lune.Parser (parseFile)
 import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
@@ -104,6 +105,7 @@ data Options = Options
   , optValidate :: Bool
   , optTypecheck :: Bool
   , optCore :: Bool
+  , optAnf :: Bool
   , optEval :: Bool
   , optRun :: Bool
   }
@@ -112,7 +114,7 @@ parseArgs :: [String] -> Either String Options
 parseArgs args =
   case args of
     [path] ->
-      Right Options {optPath = path, optDesugar = False, optValidate = False, optTypecheck = False, optCore = False, optEval = False, optRun = False}
+      Right Options {optPath = path, optDesugar = False, optValidate = False, optTypecheck = False, optCore = False, optAnf = False, optEval = False, optRun = False}
     _ ->
       case reverse args of
         path : flagsRev
@@ -124,17 +126,19 @@ parseArgs args =
                   validate = "--validate" `elem` flags
                   typecheck = "--typecheck" `elem` flags
                   core = "--core" `elem` flags
+                  anf = "--anf" `elem` flags
                   evalFlag = "--eval" `elem` flags
                   runFlag = "--run" `elem` flags
-                  unknown = filter (`notElem` ["--parse", "--desugar", "--validate", "--typecheck", "--core", "--eval", "--run"]) flags
+                  unknown = filter (`notElem` ["--parse", "--desugar", "--validate", "--typecheck", "--core", "--anf", "--eval", "--run"]) flags
                in if null unknown
                     then
-                      Right Options {optPath = path, optDesugar = desugar, optValidate = validate, optTypecheck = typecheck, optCore = core, optEval = evalFlag, optRun = runFlag}
+                      let coreOut = core || anf
+                       in Right Options {optPath = path, optDesugar = desugar, optValidate = validate, optTypecheck = typecheck, optCore = coreOut, optAnf = anf, optEval = evalFlag, optRun = runFlag}
                     else Left usage
         _ ->
           Left usage
   where
-    usage = "Usage: lune [--parse|--desugar] [--validate] [--typecheck] [--core] [--eval] [--run] <file.lune>"
+    usage = "Usage: lune [--parse|--desugar] [--validate] [--typecheck] [--core] [--anf] [--eval] [--run] <file.lune>"
     isPrefixOf prefix str = take (length prefix) str == prefix
 
 run :: Options -> IO ()
@@ -256,7 +260,9 @@ runProgramPipeline opts = do
                 putStrLn (show err)
                 exitFailure
               Right coreMod ->
-                print coreMod
+                if optAnf opts
+                  then print (ANF.anfModule coreMod)
+                  else print coreMod
             else
               if optTypecheck opts
                 then case typecheckModule mod' of
@@ -369,6 +375,7 @@ buildGo opts coreMod = do
       goModPath = goDir </> "go.mod"
       mainPath = goDir </> "main.go"
       runtimeTemplateRoot = "runtime/go"
+      coreMod' = ANF.anfModule coreMod
 
   runtimeExists <- doesDirectoryExist runtimeTemplateRoot
   if runtimeExists
@@ -388,7 +395,7 @@ buildGo opts coreMod = do
     else pure ()
 
   goSource <-
-    case CodegenGo.codegenModule (T.pack rtImportPath) coreMod of
+    case CodegenGo.codegenModule (T.pack rtImportPath) coreMod' of
       Left err -> do
         putStrLn (show err)
         exitFailure
@@ -401,11 +408,33 @@ buildGo opts coreMod = do
   writeFile goModPath (T.unpack (goModSource goModulePath))
 
   outAbs <- makeAbsolute (buildOutput opts)
+  goDirAbs <- makeAbsolute goDir
+
+  let goCacheDir = goDirAbs </> ".gocache"
+      goModCacheDir = goDirAbs </> ".gomodcache"
+      goPathDir = goDirAbs </> ".gopath"
+      goTmpDir = goDirAbs </> ".gotmp"
+
+  createDirectoryIfMissing True goCacheDir
+  createDirectoryIfMissing True goModCacheDir
+  createDirectoryIfMissing True goPathDir
+  createDirectoryIfMissing True goTmpDir
+
+  env0 <- getEnvironment
+  let overrides =
+        [ ("GOCACHE", goCacheDir)
+        , ("GOMODCACHE", goModCacheDir)
+        , ("GOPATH", goPathDir)
+        , ("GOTMPDIR", goTmpDir)
+        ]
+      dropKeys = ["GOCACHE", "GOMODCACHE", "GOPATH", "GOTMPDIR"]
+      env1 =
+        Just (overrides <> filter (\(k, _) -> k `notElem` dropKeys) env0)
 
   goResult <-
     ( try
         ( readCreateProcessWithExitCode
-            (proc "go" ["build", "-o", outAbs, "."]) {cwd = Just goDir}
+            (proc "go" ["build", "-o", outAbs, "."]) {cwd = Just goDirAbs, env = env1}
             ""
         )
     ) ::

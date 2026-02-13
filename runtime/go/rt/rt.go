@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -13,6 +14,8 @@ import (
 type Value = any
 
 type IO func() Value
+
+type Atomic func(*Tx) Value
 
 type Record map[string]Value
 
@@ -27,6 +30,105 @@ type Prim struct {
 	Arity int
 	Fn    func([]Value) Value
 	Args  []Value
+}
+
+type TVar struct {
+	val Value
+}
+
+type Tx struct {
+	writes map[*TVar]Value
+}
+
+type stmRetry struct{}
+
+func (tx *Tx) Retry() {
+	panic(stmRetry{})
+}
+
+func (tx *Tx) fork() *Tx {
+	writes := make(map[*TVar]Value, len(tx.writes))
+	for tv, v := range tx.writes {
+		writes[tv] = v
+	}
+	return &Tx{writes: writes}
+}
+
+func (tx *Tx) Read(tv *TVar) Value {
+	if v, ok := tx.writes[tv]; ok {
+		return v
+	}
+	return tv.val
+}
+
+func (tx *Tx) Write(tv *TVar, v Value) {
+	tx.writes[tv] = v
+}
+
+func (tx *Tx) NewTVar(v Value) *TVar {
+	tv := &TVar{val: v}
+	tx.writes[tv] = v
+	return tv
+}
+
+func (tx *Tx) commit() {
+	for tv, v := range tx.writes {
+		tv.val = v
+	}
+}
+
+var stmMu sync.Mutex
+var stmCond = sync.NewCond(&stmMu)
+
+func runAtomic(tx *Tx, ma Atomic) (val Value, retried bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(stmRetry); ok {
+				val = nil
+				retried = true
+				return
+			}
+			panic(r)
+		}
+	}()
+	val = ma(tx)
+	return val, false
+}
+
+func atomically(ma Atomic) Value {
+	for {
+		stmMu.Lock()
+		tx := &Tx{writes: make(map[*TVar]Value)}
+		val, retried := runAtomic(tx, ma)
+		if retried {
+			stmCond.Wait()
+			stmMu.Unlock()
+			continue
+		}
+		tx.commit()
+		stmCond.Broadcast()
+		stmMu.Unlock()
+		return val
+	}
+}
+
+func orElse(tx *Tx, a, b Atomic) Value {
+	leftTx := tx.fork()
+	v, retried := runAtomic(leftTx, a)
+	if !retried {
+		tx.writes = leftTx.writes
+		return v
+	}
+
+	rightTx := tx.fork()
+	v2, retried2 := runAtomic(rightTx, b)
+	if !retried2 {
+		tx.writes = rightTx.writes
+		return v2
+	}
+
+	tx.Retry()
+	return nil // unreachable
 }
 
 type Task struct {
@@ -88,6 +190,22 @@ func MustIO(v Value) IO {
 		panic(fmt.Sprintf("rt.MustIO: expected IO, got %T", v))
 	}
 	return io
+}
+
+func expectAtomic(v Value, ctx string) Atomic {
+	a, ok := v.(Atomic)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Atomic, got %T", ctx, v))
+	}
+	return a
+}
+
+func expectTVar(v Value, ctx string) *TVar {
+	tv, ok := v.(*TVar)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Shared/TVar, got %T", ctx, v))
+	}
+	return tv
 }
 
 func RunIO(io IO) Value {
@@ -532,6 +650,68 @@ func Builtin(name string) Value {
 			return IO(func() Value {
 				fmt.Println(s)
 				return Con{Name: "Lune.Prelude.Unit", Args: nil}
+			})
+		})
+	case "$primSTMPure":
+		return NewPrim(1, func(args []Value) Value {
+			x := args[0]
+			return Atomic(func(*Tx) Value { return x })
+		})
+	case "$primSTMBind":
+		return NewPrim(2, func(args []Value) Value {
+			ma := expectAtomic(args[0], "$primSTMBind")
+			k := args[1]
+			return Atomic(func(tx *Tx) Value {
+				a := ma(tx)
+				mbAny := Apply(k, a)
+				mb, ok := mbAny.(Atomic)
+				if !ok {
+					return mbAny
+				}
+				return mb(tx)
+			})
+		})
+	case "prim_newTVar":
+		return NewPrim(1, func(args []Value) Value {
+			initial := args[0]
+			return Atomic(func(tx *Tx) Value {
+				return tx.NewTVar(initial)
+			})
+		})
+	case "prim_readTVar":
+		return NewPrim(1, func(args []Value) Value {
+			tv := expectTVar(args[0], "prim_readTVar")
+			return Atomic(func(tx *Tx) Value {
+				return tx.Read(tv)
+			})
+		})
+	case "prim_writeTVar":
+		return NewPrim(2, func(args []Value) Value {
+			tv := expectTVar(args[0], "prim_writeTVar")
+			v := args[1]
+			return Atomic(func(tx *Tx) Value {
+				tx.Write(tv, v)
+				return Con{Name: "Lune.Prelude.Unit", Args: nil}
+			})
+		})
+	case "prim_retry":
+		return Atomic(func(tx *Tx) Value {
+			tx.Retry()
+			return nil
+		})
+	case "prim_orElse":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectAtomic(args[0], "prim_orElse")
+			b := expectAtomic(args[1], "prim_orElse")
+			return Atomic(func(tx *Tx) Value {
+				return orElse(tx, a, b)
+			})
+		})
+	case "prim_atomically":
+		return NewPrim(1, func(args []Value) Value {
+			ma := expectAtomic(args[0], "prim_atomically")
+			return IO(func() Value {
+				return atomically(ma)
 			})
 		})
 	case "$primIOPure", "prim_ioPure":

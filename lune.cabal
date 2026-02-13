@@ -30,6 +30,7 @@ library
       Lune.Eval
       Lune.ModuleGraph
       Lune.Resolve
+      Lune.Pass.ANF
 
   other-modules:
       Lune.Builtins

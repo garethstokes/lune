@@ -254,8 +254,14 @@ emitMatch scrutExpr pat env k =
       k env
     S.PCon conName ps -> do
       inner <- emitMatches ps 0 env k
+      let bindArgs =
+            if any patternNeedsArgs ps
+              then "_args"
+              else "_"
       let header =
-            "if _args, ok := rt.MatchCon("
+            "if "
+              <> bindArgs
+              <> ", ok := rt.MatchCon("
               <> scrutExpr
               <> ", "
               <> renderGoString conName
@@ -270,6 +276,11 @@ emitMatch scrutExpr pat env k =
     emitMatches (p : rest) ix env' k' =
       emitMatch ("_args[" <> T.pack (show ix) <> "]") p env' $ \env'' ->
         emitMatches rest (ix + 1) env'' k'
+
+    patternNeedsArgs p =
+      case p of
+        S.PWildcard -> False
+        _ -> True
 
 codegenCase :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> [C.CoreAlt] -> Either CodegenError Text
 codegenCase declMap env scrut alts = do
@@ -372,6 +383,14 @@ isSupportedPrimitive name =
       , "prim_ioPure"
       , "$primIOBind"
       , "$primIOThen"
+      , "$primSTMPure"
+      , "$primSTMBind"
+      , "prim_newTVar"
+      , "prim_readTVar"
+      , "prim_writeTVar"
+      , "prim_retry"
+      , "prim_orElse"
+      , "prim_atomically"
       , "prim_spawn"
       , "prim_await"
       , "prim_yield"
