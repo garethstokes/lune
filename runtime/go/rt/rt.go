@@ -2,9 +2,11 @@ package rt
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -159,6 +161,52 @@ func haskellDivMod(a, b int64) (int64, int64) {
 
 func Builtin(name string) Value {
 	switch name {
+	case "prim_readFile":
+		return NewPrim(1, func(args []Value) Value {
+			path, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_readFile: expected String, got %T", args[0]))
+			}
+			return IO(func() Value {
+				bs, err := os.ReadFile(path)
+				if err != nil {
+					return Con{Name: "Lune.Prelude.Err", Args: []Value{err.Error()}}
+				}
+				return Con{Name: "Lune.Prelude.Ok", Args: []Value{string(bs)}}
+			})
+		})
+	case "prim_writeFile":
+		return NewPrim(2, func(args []Value) Value {
+			path, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_writeFile: expected String, got %T", args[0]))
+			}
+			contents, ok := args[1].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_writeFile: expected String, got %T", args[1]))
+			}
+			return IO(func() Value {
+				err := os.WriteFile(path, []byte(contents), 0o644)
+				if err != nil {
+					return Con{Name: "Lune.Prelude.Err", Args: []Value{err.Error()}}
+				}
+				return Con{Name: "Lune.Prelude.Ok", Args: []Value{Con{Name: "Lune.Prelude.Unit", Args: nil}}}
+			})
+		})
+	case "prim_sleepMs":
+		return NewPrim(1, func(args []Value) Value {
+			ms := expectInt64(args[0], "prim_sleepMs")
+			return IO(func() Value {
+				if ms > 0 {
+					time.Sleep(time.Duration(ms) * time.Millisecond)
+				}
+				return Con{Name: "Lune.Prelude.Unit", Args: nil}
+			})
+		})
+	case "prim_timeNowMicros":
+		return IO(func() Value {
+			return time.Now().UnixMicro()
+		})
 	case "prim_bytesEmpty":
 		return []byte{}
 	case "prim_bytesFromList":
