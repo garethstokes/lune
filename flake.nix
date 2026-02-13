@@ -26,6 +26,7 @@
             # Native dependencies for Haskell libs
             zlib
             pkg-config
+            go
           ];
 
           additionalShellHook = ''
