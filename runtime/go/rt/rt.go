@@ -2,6 +2,7 @@ package rt
 
 import (
 	"fmt"
+	"runtime"
 )
 
 type Value = any
@@ -21,6 +22,11 @@ type Prim struct {
 	Arity int
 	Fn    func([]Value) Value
 	Args  []Value
+}
+
+type Task struct {
+	done chan struct{}
+	res  Value
 }
 
 func NewPrim(arity int, fn func([]Value) Value) Prim {
@@ -85,6 +91,18 @@ func RunIO(io IO) Value {
 
 func Builtin(name string) Value {
 	switch name {
+	case "prim_appendString":
+		return NewPrim(2, func(args []Value) Value {
+			a, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_appendString: expected String, got %T", args[0]))
+			}
+			b, ok := args[1].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_appendString: expected String, got %T", args[1]))
+			}
+			return a + b
+		})
 	case "prim_putStrLn":
 		return NewPrim(1, func(args []Value) Value {
 			s, ok := args[0].(string)
@@ -119,6 +137,34 @@ func Builtin(name string) Value {
 				_ = ma()
 				return mb()
 			})
+		})
+	case "prim_spawn":
+		return NewPrim(1, func(args []Value) Value {
+			ma := MustIO(args[0])
+			return IO(func() Value {
+				t := &Task{done: make(chan struct{})}
+				go func() {
+					t.res = ma()
+					close(t.done)
+				}()
+				return t
+			})
+		})
+	case "prim_await":
+		return NewPrim(1, func(args []Value) Value {
+			t, ok := args[0].(*Task)
+			if !ok {
+				panic(fmt.Sprintf("prim_await: expected Task, got %T", args[0]))
+			}
+			return IO(func() Value {
+				<-t.done
+				return t.res
+			})
+		})
+	case "prim_yield":
+		return IO(func() Value {
+			runtime.Gosched()
+			return Con{Name: "Lune.Prelude.Unit", Args: nil}
 		})
 	default:
 		panic("rt.Builtin: unknown primitive: " + name)

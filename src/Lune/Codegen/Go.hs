@@ -332,11 +332,15 @@ isSupportedPrimitive name =
   name `elem` supported
   where
     supported =
-      [ "prim_putStrLn"
+      [ "prim_appendString"
+      , "prim_putStrLn"
       , "$primIOPure"
       , "prim_ioPure"
       , "$primIOBind"
       , "$primIOThen"
+      , "prim_spawn"
+      , "prim_await"
+      , "prim_yield"
       ]
 
 isConstructorName :: Text -> Bool
