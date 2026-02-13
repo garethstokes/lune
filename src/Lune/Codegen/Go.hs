@@ -274,26 +274,26 @@ emitMatch scrutExpr pat env k =
 codegenCase :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> [C.CoreAlt] -> Either CodegenError Text
 codegenCase declMap env scrut alts = do
   scrutExpr <- codegenExpr declMap env scrut
-  altLines <- emitAlts alts
+  (altLines, hasDefault) <- emitAlts alts
   Right $
     renderIIFE $
       [ "_scrut := " <> scrutExpr
       ]
         <> altLines
-        <> ["panic(\"non-exhaustive case\")"]
+        <> if hasDefault then [] else ["panic(\"non-exhaustive case\")"]
   where
     emitAlts [] =
-      Right []
+      Right ([], False)
     emitAlts (C.CoreAlt pat body : rest) = do
       linesForAlt <-
         emitMatch "_scrut" pat env $ \env' -> do
           bodyExpr <- codegenExpr declMap env' body
           Right (renderReturn bodyExpr)
       if patternAlwaysMatches pat
-        then Right linesForAlt
+        then Right (linesForAlt, True)
         else do
-          restLines <- emitAlts rest
-          Right (linesForAlt <> restLines)
+          (restLines, hasDefault) <- emitAlts rest
+          Right (linesForAlt <> restLines, hasDefault)
 
 patternAlwaysMatches :: S.Pattern -> Bool
 patternAlwaysMatches pat =
@@ -450,4 +450,3 @@ escapeGoRune c =
     '\r' -> "\\r"
     '\t' -> "\\t"
     _ -> T.singleton c
-
