@@ -1,15 +1,19 @@
 package rt
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -33,6 +37,18 @@ type Prim struct {
 	Arity int
 	Fn    func([]Value) Value
 	Args  []Value
+}
+
+type Socket struct {
+	ln net.Listener
+}
+
+type Connection struct {
+	conn net.Conn
+}
+
+type TlsConn struct {
+	conn *tls.Conn
 }
 
 type jsonKind int
@@ -306,6 +322,54 @@ func expectBytes(v Value, ctx string) []byte {
 	return bs
 }
 
+func expectSocket(v Value, ctx string) *Socket {
+	sock, ok := v.(*Socket)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Socket, got %T", ctx, v))
+	}
+	return sock
+}
+
+func expectConn(v Value, ctx string) *Connection {
+	conn, ok := v.(*Connection)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Connection, got %T", ctx, v))
+	}
+	return conn
+}
+
+func expectTlsConn(v Value, ctx string) *TlsConn {
+	conn, ok := v.(*TlsConn)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected TlsConn, got %T", ctx, v))
+	}
+	return conn
+}
+
+func resultOk(v Value) Value {
+	return Con{Name: "Lune.Prelude.Ok", Args: []Value{v}}
+}
+
+func resultErr(msg string) Value {
+	return Con{Name: "Lune.Prelude.Err", Args: []Value{msg}}
+}
+
+func decodeUtf8Lenient(bs []byte) string {
+	var b strings.Builder
+	b.Grow(len(bs))
+	for len(bs) > 0 {
+		r, size := utf8.DecodeRune(bs)
+		if r == utf8.RuneError && size == 1 {
+			b.WriteRune(utf8.RuneError)
+			bs = bs[1:]
+			continue
+		}
+		b.WriteRune(r)
+		bs = bs[size:]
+	}
+	return b.String()
+}
+
 func showFloat(f float64) string {
 	if math.IsNaN(f) {
 		return "NaN"
@@ -320,6 +384,17 @@ func showFloat(f float64) string {
 		return strconv.FormatFloat(f, 'f', 1, 64)
 	}
 	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+func writeAll(w io.Writer, bs []byte) error {
+	for len(bs) > 0 {
+		n, err := w.Write(bs)
+		if err != nil {
+			return err
+		}
+		bs = bs[n:]
+	}
+	return nil
 }
 
 func haskellDivMod(a, b int64) (int64, int64) {
@@ -451,6 +526,198 @@ func Builtin(name string) Value {
 	case "prim_timeNowMicros":
 		return IO(func() Value {
 			return time.Now().UnixMicro()
+		})
+	case "prim_tcpListen":
+		return NewPrim(1, func(args []Value) Value {
+			port := expectInt64(args[0], "prim_tcpListen")
+			return IO(func() Value {
+				if port < 0 || port > 65535 {
+					return resultErr("invalid port: " + strconv.FormatInt(port, 10))
+				}
+
+				lc := net.ListenConfig{
+					Control: func(network, address string, c syscall.RawConn) error {
+						var sockErr error
+						if err := c.Control(func(fd uintptr) {
+							sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+						}); err != nil {
+							return err
+						}
+						return sockErr
+					},
+				}
+
+				ln, err := lc.Listen(context.Background(), "tcp", ":"+strconv.FormatInt(port, 10))
+				if err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(&Socket{ln: ln})
+			})
+		})
+	case "prim_tcpAccept":
+		return NewPrim(1, func(args []Value) Value {
+			sock := expectSocket(args[0], "prim_tcpAccept")
+			return IO(func() Value {
+				conn, err := sock.ln.Accept()
+				if err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(&Connection{conn: conn})
+			})
+		})
+	case "prim_tcpConnect":
+		return NewPrim(2, func(args []Value) Value {
+			host, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_tcpConnect: expected String, got %T", args[0]))
+			}
+			port := expectInt64(args[1], "prim_tcpConnect")
+			return IO(func() Value {
+				if port < 0 || port > 65535 {
+					return resultErr("invalid port: " + strconv.FormatInt(port, 10))
+				}
+				conn, err := net.Dial("tcp", net.JoinHostPort(host, strconv.FormatInt(port, 10)))
+				if err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(&Connection{conn: conn})
+			})
+		})
+	case "prim_connRecv":
+		return NewPrim(1, func(args []Value) Value {
+			conn := expectConn(args[0], "prim_connRecv")
+			return IO(func() Value {
+				buf := make([]byte, 4096)
+				n, err := conn.conn.Read(buf)
+				if err != nil && err != io.EOF {
+					return resultErr(err.Error())
+				}
+				return resultOk(decodeUtf8Lenient(buf[:n]))
+			})
+		})
+	case "prim_connSend":
+		return NewPrim(2, func(args []Value) Value {
+			conn := expectConn(args[0], "prim_connSend")
+			msg, ok := args[1].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_connSend: expected String, got %T", args[1]))
+			}
+			return IO(func() Value {
+				if err := writeAll(conn.conn, []byte(msg)); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_connSendBytes":
+		return NewPrim(2, func(args []Value) Value {
+			conn := expectConn(args[0], "prim_connSendBytes")
+			bs := expectBytes(args[1], "prim_connSendBytes")
+			return IO(func() Value {
+				if err := writeAll(conn.conn, bs); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_connRecvBytes":
+		return NewPrim(2, func(args []Value) Value {
+			conn := expectConn(args[0], "prim_connRecvBytes")
+			maxLen := expectInt64(args[1], "prim_connRecvBytes")
+			return IO(func() Value {
+				if maxLen < 0 {
+					return resultErr("negative length: " + strconv.FormatInt(maxLen, 10))
+				}
+				maxInt := int64(int(^uint(0) >> 1))
+				if maxLen > maxInt {
+					return resultErr("length too large: " + strconv.FormatInt(maxLen, 10))
+				}
+				buf := make([]byte, int(maxLen))
+				n, err := conn.conn.Read(buf)
+				if err != nil && err != io.EOF {
+					return resultErr(err.Error())
+				}
+				return resultOk(buf[:n])
+			})
+		})
+	case "prim_connClose":
+		return NewPrim(1, func(args []Value) Value {
+			conn := expectConn(args[0], "prim_connClose")
+			return IO(func() Value {
+				if err := conn.conn.Close(); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_socketClose":
+		return NewPrim(1, func(args []Value) Value {
+			sock := expectSocket(args[0], "prim_socketClose")
+			return IO(func() Value {
+				if err := sock.ln.Close(); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_tlsConnect":
+		return NewPrim(2, func(args []Value) Value {
+			host, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_tlsConnect: expected String, got %T", args[0]))
+			}
+			port := expectInt64(args[1], "prim_tlsConnect")
+			return IO(func() Value {
+				if port < 0 || port > 65535 {
+					return resultErr("invalid port: " + strconv.FormatInt(port, 10))
+				}
+				conn, err := tls.Dial("tcp", net.JoinHostPort(host, strconv.FormatInt(port, 10)), &tls.Config{ServerName: host})
+				if err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(&TlsConn{conn: conn})
+			})
+		})
+	case "prim_tlsSendBytes":
+		return NewPrim(2, func(args []Value) Value {
+			conn := expectTlsConn(args[0], "prim_tlsSendBytes")
+			bs := expectBytes(args[1], "prim_tlsSendBytes")
+			return IO(func() Value {
+				if err := writeAll(conn.conn, bs); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_tlsRecvBytes":
+		return NewPrim(2, func(args []Value) Value {
+			conn := expectTlsConn(args[0], "prim_tlsRecvBytes")
+			maxLen := expectInt64(args[1], "prim_tlsRecvBytes")
+			return IO(func() Value {
+				if maxLen < 0 {
+					return resultErr("negative length: " + strconv.FormatInt(maxLen, 10))
+				}
+				maxInt := int64(int(^uint(0) >> 1))
+				if maxLen > maxInt {
+					return resultErr("length too large: " + strconv.FormatInt(maxLen, 10))
+				}
+				buf := make([]byte, int(maxLen))
+				n, err := conn.conn.Read(buf)
+				if err != nil && err != io.EOF {
+					return resultErr(err.Error())
+				}
+				return resultOk(buf[:n])
+			})
+		})
+	case "prim_tlsClose":
+		return NewPrim(1, func(args []Value) Value {
+			conn := expectTlsConn(args[0], "prim_tlsClose")
+			return IO(func() Value {
+				if err := conn.conn.Close(); err != nil {
+					return resultErr(err.Error())
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
 		})
 	case "prim_jsonParse":
 		return NewPrim(1, func(args []Value) Value {
@@ -680,19 +947,7 @@ func Builtin(name string) Value {
 	case "prim_bytesToString":
 		return NewPrim(1, func(args []Value) Value {
 			bs := expectBytes(args[0], "prim_bytesToString")
-			var b strings.Builder
-			b.Grow(len(bs))
-			for len(bs) > 0 {
-				r, size := utf8.DecodeRune(bs)
-				if r == utf8.RuneError && size == 1 {
-					b.WriteRune(utf8.RuneError)
-					bs = bs[1:]
-					continue
-				}
-				b.WriteRune(r)
-				bs = bs[size:]
-			}
-			return b.String()
+			return decodeUtf8Lenient(bs)
 		})
 	case "prim_bytesLength":
 		return NewPrim(1, func(args []Value) Value {
