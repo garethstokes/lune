@@ -16,6 +16,7 @@ import qualified Data.Text as T
 import Numeric (showHex)
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
+import Lune.Type (Type (..))
 
 data CodegenError
   = CodegenMissingMain
@@ -32,6 +33,13 @@ type CG a = StateT Int (Either CodegenError) a
 throwCG :: CodegenError -> CG a
 throwCG err =
   lift (Left err)
+
+supportedForeignImports :: Set Text
+supportedForeignImports =
+  Set.fromList
+    [ "puts"
+    , "strlen"
+    ]
 
 freshTemp :: Text -> CG Text
 freshTemp prefix = do
@@ -55,17 +63,42 @@ codegenModule rtImportPath (C.CoreModule modName decls) = do
 
   let reachable = reachableDecls declMap mainDeclName
       ordered = sort (Set.toList reachable)
+      needsCgo =
+        any
+          (\name ->
+             case Map.lookup name declMap of
+               Just expr -> exprNeedsCgo expr
+               Nothing -> False
+          )
+          ordered
 
   declDocs <- mapM (codegenDecl declMap) ordered
   let mainGoName = goTopIdent mainDeclName
 
   Right $
     T.unlines $
-      [ "package main"
-      , ""
-      , "import \"" <> rtImportPath <> "\""
-      , ""
-      , "func main() {"
+      (if needsCgo
+        then
+          [ "package main"
+          , ""
+          , "/*"
+          , "#include <stdlib.h>"
+          , "#include <string.h>"
+          , "#include <stdio.h>"
+          , "*/"
+          , "import \"C\""
+          , "import \"unsafe\""
+          , "import " <> renderGoString rtImportPath
+          , ""
+          ]
+        else
+          [ "package main"
+          , ""
+          , "import " <> renderGoString rtImportPath
+          , ""
+          ])
+        <>
+      [ "func main() {"
       , "  rt.RunIO(rt.MustIO(" <> mainGoName <> "()))"
       , "}"
       , ""
@@ -209,8 +242,8 @@ codegenExpr declMap env expr =
       pure ("rt.Select(" <> baseExpr <> ", " <> renderGoString field <> ")")
     C.CDictWanted _ ->
       throwCG CodegenDictWantedNotElaborated
-    C.CForeignImport _ symbol _ ->
-      throwCG (CodegenForeignImportNotSupported symbol)
+    C.CForeignImport convention symbol ty ->
+      codegenForeignImport convention symbol ty
 
 codegenVar :: Map Text C.CoreExpr -> Map Text Text -> Text -> CG Text
 codegenVar declMap env name =
@@ -557,6 +590,99 @@ escapeGoString =
         '\r' -> "\\r"
         '\t' -> "\\t"
         _ -> T.singleton c
+
+exprNeedsCgo :: C.CoreExpr -> Bool
+exprNeedsCgo expr =
+  case expr of
+    C.CVar {} ->
+      False
+    C.CString {} ->
+      False
+    C.CInt {} ->
+      False
+    C.CFloat {} ->
+      False
+    C.CChar {} ->
+      False
+    C.CApp f x ->
+      exprNeedsCgo f || exprNeedsCgo x
+    C.CLam _ body ->
+      exprNeedsCgo body
+    C.CLet _ bound body ->
+      exprNeedsCgo bound || exprNeedsCgo body
+    C.CCase scrut alts ->
+      exprNeedsCgo scrut || any (\(C.CoreAlt _ b) -> exprNeedsCgo b) alts
+    C.CRecord fields ->
+      any (exprNeedsCgo . snd) fields
+    C.CSelect base _ ->
+      exprNeedsCgo base
+    C.CDictWanted {} ->
+      False
+    C.CForeignImport _ symbol _ ->
+      symbol `Set.member` supportedForeignImports
+
+countArrowArgs :: Type -> Int
+countArrowArgs ty =
+  case ty of
+    TArrow _ b -> 1 + countArrowArgs b
+    _ -> 0
+
+codegenForeignImport :: S.ForeignConvention -> Text -> Type -> CG Text
+codegenForeignImport convention symbol ty =
+  case convention of
+    S.CCall ->
+      let arity = countArrowArgs ty
+       in pure (renderForeignImportPrim symbol arity)
+
+renderForeignImportPrim :: Text -> Int -> Text
+renderForeignImportPrim symbol arity =
+  let header = "rt.NewPrim(" <> T.pack (show arity) <> ", func(args []rt.Value) rt.Value {"
+      footer = "})"
+      bodyLines =
+        case symbol of
+          "puts" ->
+            renderCCallPuts
+          "strlen" ->
+            renderCCallStrlen
+          _ ->
+            [ "return rt.IO(func() rt.Value {"
+            , "  panic(" <> renderGoString ("Unknown FFI symbol: " <> symbol) <> ")"
+            , "})"
+            ]
+   in unlinesNoTrailing ([header] <> indentLines 2 bodyLines <> [footer])
+  where
+    renderCCallPuts =
+      [ "return rt.IO(func() rt.Value {"
+      , "  if len(args) != 1 {"
+      , "    panic(\"puts expects 1 argument\")"
+      , "  }"
+      , "  s, ok := args[0].(string)"
+      , "  if !ok {"
+      , "    panic(\"puts expects String\")"
+      , "  }"
+      , "  cs := C.CString(s)"
+      , "  defer C.free(unsafe.Pointer(cs))"
+      , "  r := C.puts(cs)"
+      , "  C.fflush(nil)"
+      , "  return int64(r)"
+      , "})"
+      ]
+
+    renderCCallStrlen =
+      [ "return rt.IO(func() rt.Value {"
+      , "  if len(args) != 1 {"
+      , "    panic(\"strlen expects 1 argument\")"
+      , "  }"
+      , "  s, ok := args[0].(string)"
+      , "  if !ok {"
+      , "    panic(\"strlen expects String\")"
+      , "  }"
+      , "  cs := C.CString(s)"
+      , "  defer C.free(unsafe.Pointer(cs))"
+      , "  r := C.strlen(cs)"
+      , "  return int64(r)"
+      , "})"
+      ]
 
 renderGoRune :: Char -> Text
 renderGoRune c =
