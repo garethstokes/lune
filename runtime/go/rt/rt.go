@@ -1,7 +1,10 @@
 package rt
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -31,6 +34,37 @@ type Prim struct {
 	Fn    func([]Value) Value
 	Args  []Value
 }
+
+type jsonKind int
+
+const (
+	jsonNullKind jsonKind = iota
+	jsonBoolKind
+	jsonIntKind
+	jsonFloatKind
+	jsonStringKind
+	jsonArrayKind
+	jsonObjectKind
+)
+
+type jsonValue struct {
+	kind jsonKind
+
+	b bool
+	i int64
+	f float64
+	s string
+
+	arr []*jsonValue
+	obj []jsonField
+}
+
+type jsonField struct {
+	key string
+	val *jsonValue
+}
+
+var jsonNull = &jsonValue{kind: jsonNullKind}
 
 type TVar struct {
 	val Value
@@ -240,6 +274,14 @@ func expectBool(v Value) bool {
 	}
 }
 
+func expectFloat64(v Value, ctx string) float64 {
+	f, ok := v.(float64)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Float, got %T", ctx, v))
+	}
+	return f
+}
+
 func expectInt64(v Value, ctx string) int64 {
 	n, ok := v.(int64)
 	if !ok {
@@ -264,6 +306,22 @@ func expectBytes(v Value, ctx string) []byte {
 	return bs
 }
 
+func showFloat(f float64) string {
+	if math.IsNaN(f) {
+		return "NaN"
+	}
+	if math.IsInf(f, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(f, -1) {
+		return "-Infinity"
+	}
+	if f == math.Trunc(f) {
+		return strconv.FormatFloat(f, 'f', 1, 64)
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
 func haskellDivMod(a, b int64) (int64, int64) {
 	if b == 0 {
 		panic("division by zero")
@@ -279,6 +337,75 @@ func haskellDivMod(a, b int64) (int64, int64) {
 
 func Builtin(name string) Value {
 	switch name {
+	case "prim_addFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_addFloat")
+			b := expectFloat64(args[1], "prim_addFloat")
+			return a + b
+		})
+	case "prim_subFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_subFloat")
+			b := expectFloat64(args[1], "prim_subFloat")
+			return a - b
+		})
+	case "prim_mulFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_mulFloat")
+			b := expectFloat64(args[1], "prim_mulFloat")
+			return a * b
+		})
+	case "prim_divFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_divFloat")
+			b := expectFloat64(args[1], "prim_divFloat")
+			return a / b
+		})
+	case "prim_eqFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_eqFloat")
+			b := expectFloat64(args[1], "prim_eqFloat")
+			return boolCon(a == b)
+		})
+	case "prim_gtFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_gtFloat")
+			b := expectFloat64(args[1], "prim_gtFloat")
+			return boolCon(a > b)
+		})
+	case "prim_ltFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_ltFloat")
+			b := expectFloat64(args[1], "prim_ltFloat")
+			return boolCon(a < b)
+		})
+	case "prim_geFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_geFloat")
+			b := expectFloat64(args[1], "prim_geFloat")
+			return boolCon(a >= b)
+		})
+	case "prim_leFloat":
+		return NewPrim(2, func(args []Value) Value {
+			a := expectFloat64(args[0], "prim_leFloat")
+			b := expectFloat64(args[1], "prim_leFloat")
+			return boolCon(a <= b)
+		})
+	case "prim_fromIntFloat":
+		return NewPrim(1, func(args []Value) Value {
+			n := expectInt64(args[0], "prim_fromIntFloat")
+			return float64(n)
+		})
+	case "prim_truncateFloat":
+		return NewPrim(1, func(args []Value) Value {
+			f := expectFloat64(args[0], "prim_truncateFloat")
+			return int64(f)
+		})
+	case "prim_showFloat":
+		return NewPrim(1, func(args []Value) Value {
+			f := expectFloat64(args[0], "prim_showFloat")
+			return showFloat(f)
+		})
 	case "prim_readFile":
 		return NewPrim(1, func(args []Value) Value {
 			path, ok := args[0].(string)
@@ -324,6 +451,185 @@ func Builtin(name string) Value {
 	case "prim_timeNowMicros":
 		return IO(func() Value {
 			return time.Now().UnixMicro()
+		})
+	case "prim_jsonParse":
+		return NewPrim(1, func(args []Value) Value {
+			s, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_jsonParse: expected String, got %T", args[0]))
+			}
+			j, err := parseJson(s)
+			if err != nil {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{err.Error()}}
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{j}}
+		})
+	case "prim_jsonStringify":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonStringify")
+			return stringifyJson(j)
+		})
+	case "prim_jsonNull":
+		return jsonNull
+	case "prim_jsonBool":
+		return NewPrim(1, func(args []Value) Value {
+			return &jsonValue{kind: jsonBoolKind, b: expectBool(args[0])}
+		})
+	case "prim_jsonInt":
+		return NewPrim(1, func(args []Value) Value {
+			return &jsonValue{kind: jsonIntKind, i: expectInt64(args[0], "prim_jsonInt")}
+		})
+	case "prim_jsonFloat":
+		return NewPrim(1, func(args []Value) Value {
+			return &jsonValue{kind: jsonFloatKind, f: expectFloat64(args[0], "prim_jsonFloat")}
+		})
+	case "prim_jsonString":
+		return NewPrim(1, func(args []Value) Value {
+			s, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_jsonString: expected String, got %T", args[0]))
+			}
+			return &jsonValue{kind: jsonStringKind, s: s}
+		})
+	case "prim_jsonArray":
+		return NewPrim(1, func(args []Value) Value {
+			items := sliceFromList(args[0], "prim_jsonArray")
+			arr := make([]*jsonValue, 0, len(items))
+			for _, item := range items {
+				arr = append(arr, expectJson(item, "prim_jsonArray"))
+			}
+			return &jsonValue{kind: jsonArrayKind, arr: arr}
+		})
+	case "prim_jsonObject":
+		return NewPrim(1, func(args []Value) Value {
+			items := sliceFromList(args[0], "prim_jsonObject")
+			obj := make([]jsonField, 0, len(items))
+			for _, item := range items {
+				rec, ok := item.(Record)
+				if !ok {
+					panic(fmt.Sprintf("prim_jsonObject: expected { key : String, value : Json }, got %T", item))
+				}
+				keyAny, ok := rec["key"]
+				if !ok {
+					panic("prim_jsonObject: missing field 'key'")
+				}
+				key, ok := keyAny.(string)
+				if !ok {
+					panic(fmt.Sprintf("prim_jsonObject: expected field 'key' String, got %T", keyAny))
+				}
+
+				valAny, ok := rec["value"]
+				if !ok {
+					panic("prim_jsonObject: missing field 'value'")
+				}
+				val := expectJson(valAny, "prim_jsonObject")
+				obj = append(obj, jsonField{key: key, val: val})
+			}
+			return &jsonValue{kind: jsonObjectKind, obj: obj}
+		})
+	case "prim_jsonType":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonType")
+			switch j.kind {
+			case jsonNullKind:
+				return "null"
+			case jsonBoolKind:
+				return "bool"
+			case jsonIntKind:
+				return "int"
+			case jsonFloatKind:
+				return "float"
+			case jsonStringKind:
+				return "string"
+			case jsonArrayKind:
+				return "array"
+			case jsonObjectKind:
+				return "object"
+			default:
+				panic("prim_jsonType: unknown json kind")
+			}
+		})
+	case "prim_jsonGetField":
+		return NewPrim(2, func(args []Value) Value {
+			field, ok := args[0].(string)
+			if !ok {
+				panic(fmt.Sprintf("prim_jsonGetField: expected String, got %T", args[0]))
+			}
+			j := expectJson(args[1], "prim_jsonGetField")
+			if j.kind != jsonObjectKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected object"}}
+			}
+			for i := len(j.obj) - 1; i >= 0; i-- {
+				if j.obj[i].key == field {
+					return Con{Name: "Lune.Prelude.Ok", Args: []Value{j.obj[i].val}}
+				}
+			}
+			return Con{Name: "Lune.Prelude.Err", Args: []Value{"missing field: " + field}}
+		})
+	case "prim_jsonGetIndex":
+		return NewPrim(2, func(args []Value) Value {
+			idx := expectInt64(args[0], "prim_jsonGetIndex")
+			j := expectJson(args[1], "prim_jsonGetIndex")
+			if j.kind != jsonArrayKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected array"}}
+			}
+			if idx < 0 || idx >= int64(len(j.arr)) {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"index out of bounds: " + strconv.FormatInt(idx, 10)}}
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{j.arr[idx]}}
+		})
+	case "prim_jsonToArray":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonToArray")
+			if j.kind != jsonArrayKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected array"}}
+			}
+			items := make([]Value, 0, len(j.arr))
+			for _, item := range j.arr {
+				items = append(items, item)
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{listFromSlice(items)}}
+		})
+	case "prim_jsonToBool":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonToBool")
+			if j.kind != jsonBoolKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected bool"}}
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{boolCon(j.b)}}
+		})
+	case "prim_jsonToInt":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonToInt")
+			if j.kind != jsonIntKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected int"}}
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{j.i}}
+		})
+	case "prim_jsonToFloat":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonToFloat")
+			switch j.kind {
+			case jsonFloatKind:
+				return Con{Name: "Lune.Prelude.Ok", Args: []Value{j.f}}
+			case jsonIntKind:
+				return Con{Name: "Lune.Prelude.Ok", Args: []Value{float64(j.i)}}
+			default:
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected number"}}
+			}
+		})
+	case "prim_jsonToString":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonToString")
+			if j.kind != jsonStringKind {
+				return Con{Name: "Lune.Prelude.Err", Args: []Value{"expected string"}}
+			}
+			return Con{Name: "Lune.Prelude.Ok", Args: []Value{j.s}}
+		})
+	case "prim_jsonIsNull":
+		return NewPrim(1, func(args []Value) Value {
+			j := expectJson(args[0], "prim_jsonIsNull")
+			return boolCon(j.kind == jsonNullKind)
 		})
 	case "prim_bytesEmpty":
 		return []byte{}
@@ -769,4 +1075,236 @@ func Builtin(name string) Value {
 	default:
 		panic("rt.Builtin: unknown primitive: " + name)
 	}
+}
+
+func expectJson(v Value, ctx string) *jsonValue {
+	j, ok := v.(*jsonValue)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Json, got %T", ctx, v))
+	}
+	return j
+}
+
+func sliceFromList(v Value, ctx string) []Value {
+	var out []Value
+	for {
+		con, ok := v.(Con)
+		if !ok {
+			panic(fmt.Sprintf("%s: expected List, got %T", ctx, v))
+		}
+		switch con.Name {
+		case "Lune.Prelude.Nil":
+			if len(con.Args) != 0 {
+				panic(ctx + ": expected Nil arity 0")
+			}
+			return out
+		case "Lune.Prelude.Cons":
+			if len(con.Args) != 2 {
+				panic(ctx + ": expected Cons arity 2")
+			}
+			out = append(out, con.Args[0])
+			v = con.Args[1]
+		default:
+			panic(ctx + ": expected List constructor, got: " + con.Name)
+		}
+	}
+}
+
+func listFromSlice(items []Value) Value {
+	var out Value = Con{Name: "Lune.Prelude.Nil", Args: nil}
+	for i := len(items) - 1; i >= 0; i-- {
+		out = Con{Name: "Lune.Prelude.Cons", Args: []Value{items[i], out}}
+	}
+	return out
+}
+
+func parseJson(input string) (*jsonValue, error) {
+	dec := json.NewDecoder(strings.NewReader(input))
+	dec.UseNumber()
+	val, err := parseJsonValue(dec)
+	if err != nil {
+		return nil, err
+	}
+
+	if tok, err := dec.Token(); err != nil {
+		if err == io.EOF {
+			return val, nil
+		}
+		return nil, err
+	} else {
+		return nil, fmt.Errorf("unexpected trailing token: %v", tok)
+	}
+}
+
+func parseJsonValue(dec *json.Decoder) (*jsonValue, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := tok.(type) {
+	case nil:
+		return jsonNull, nil
+	case bool:
+		return &jsonValue{kind: jsonBoolKind, b: t}, nil
+	case string:
+		return &jsonValue{kind: jsonStringKind, s: t}, nil
+	case json.Number:
+		return parseJsonNumber(t.String())
+	case json.Delim:
+		switch t {
+		case '{':
+			var fields []jsonField
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					return nil, err
+				}
+				key, ok := keyTok.(string)
+				if !ok {
+					return nil, fmt.Errorf("expected string object key, got %T", keyTok)
+				}
+
+				v, err := parseJsonValue(dec)
+				if err != nil {
+					return nil, err
+				}
+				fields = append(fields, jsonField{key: key, val: v})
+			}
+			endTok, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			end, ok := endTok.(json.Delim)
+			if !ok || end != '}' {
+				return nil, fmt.Errorf("expected '}', got %v", endTok)
+			}
+			return &jsonValue{kind: jsonObjectKind, obj: fields}, nil
+		case '[':
+			var elems []*jsonValue
+			for dec.More() {
+				v, err := parseJsonValue(dec)
+				if err != nil {
+					return nil, err
+				}
+				elems = append(elems, v)
+			}
+			endTok, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			end, ok := endTok.(json.Delim)
+			if !ok || end != ']' {
+				return nil, fmt.Errorf("expected ']', got %v", endTok)
+			}
+			return &jsonValue{kind: jsonArrayKind, arr: elems}, nil
+		default:
+			return nil, fmt.Errorf("unexpected delimiter: %q", t)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected token: %T", tok)
+	}
+}
+
+func parseJsonNumber(s string) (*jsonValue, error) {
+	if strings.ContainsAny(s, ".eE") {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &jsonValue{kind: jsonFloatKind, f: f}, nil
+	}
+
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &jsonValue{kind: jsonIntKind, i: i}, nil
+}
+
+func stringifyJson(j *jsonValue) string {
+	var b strings.Builder
+	writeJsonValue(&b, j)
+	return b.String()
+}
+
+func writeJsonValue(b *strings.Builder, j *jsonValue) {
+	switch j.kind {
+	case jsonNullKind:
+		b.WriteString("null")
+	case jsonBoolKind:
+		if j.b {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case jsonIntKind:
+		b.WriteString(strconv.FormatInt(j.i, 10))
+	case jsonFloatKind:
+		b.WriteString(showFloat(j.f))
+	case jsonStringKind:
+		writeJsonString(b, j.s)
+	case jsonArrayKind:
+		b.WriteByte('[')
+		for i, item := range j.arr {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			writeJsonValue(b, item)
+		}
+		b.WriteByte(']')
+	case jsonObjectKind:
+		b.WriteByte('{')
+		for i, kv := range j.obj {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			writeJsonString(b, kv.key)
+			b.WriteByte(':')
+			writeJsonValue(b, kv.val)
+		}
+		b.WriteByte('}')
+	default:
+		panic("stringifyJson: unknown json kind")
+	}
+}
+
+func writeJsonString(b *strings.Builder, s string) {
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString("\\\"")
+		case '\\':
+			b.WriteString("\\\\")
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		case '\b':
+			b.WriteString("\\b")
+		case '\f':
+			b.WriteString("\\f")
+		default:
+			if r < 0x20 {
+				b.WriteString("\\u")
+				b.WriteString(hex4(uint16(r)))
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+}
+
+func hex4(n uint16) string {
+	const hexdigits = "0123456789abcdef"
+	return string([]byte{
+		hexdigits[(n>>12)&0xf],
+		hexdigits[(n>>8)&0xf],
+		hexdigits[(n>>4)&0xf],
+		hexdigits[n&0xf],
+	})
 }

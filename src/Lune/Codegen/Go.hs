@@ -3,6 +3,8 @@ module Lune.Codegen.Go
   , codegenModule
   ) where
 
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Data.Char (isAlphaNum, isUpper, ord)
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -24,6 +26,18 @@ data CodegenError
   | CodegenDictWantedNotElaborated
   | CodegenIntOutOfRange Integer
   deriving (Show)
+
+type CG a = StateT Int (Either CodegenError) a
+
+throwCG :: CodegenError -> CG a
+throwCG err =
+  lift (Left err)
+
+freshTemp :: Text -> CG Text
+freshTemp prefix = do
+  n <- get
+  put (n + 1)
+  pure (prefix <> T.pack (show n))
 
 codegenModule :: Text -> C.CoreModule -> Either CodegenError Text
 codegenModule rtImportPath (C.CoreModule modName decls) = do
@@ -142,7 +156,7 @@ codegenDecl declMap declName = do
       Nothing -> Left (CodegenUnsupportedExpr (C.CVar declName))
       Just e -> Right e
 
-  goExpr <- codegenExpr declMap Map.empty expr
+  goExpr <- evalStateT (codegenExpr declMap Map.empty expr) 0
   let funName = goTopIdent declName
   Right (renderThunk funName goExpr)
 
@@ -159,23 +173,23 @@ renderThunk funName expr =
           <> map ("  " <>) bodyLines
           <> [ "}" ]
 
-codegenExpr :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> Either CodegenError Text
+codegenExpr :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> CG Text
 codegenExpr declMap env expr =
   case expr of
     C.CVar name ->
       codegenVar declMap env name
     C.CString s ->
-      Right (renderGoString s)
+      pure (renderGoString s)
     C.CInt n ->
       codegenInt n
     C.CFloat f ->
-      Right ("float64(" <> T.pack (show f) <> ")")
+      pure ("float64(" <> T.pack (show f) <> ")")
     C.CChar c ->
-      Right ("rune(" <> renderGoRune c <> ")")
+      pure ("rune(" <> renderGoRune c <> ")")
     C.CApp f x -> do
       f' <- codegenExpr declMap env f
       x' <- codegenExpr declMap env x
-      Right ("rt.Apply(" <> f' <> ", " <> x' <> ")")
+      pure ("rt.Apply(" <> f' <> ", " <> x' <> ")")
     C.CLam pats body ->
       codegenLam declMap env pats body
     C.CLet name bound body -> do
@@ -183,50 +197,60 @@ codegenExpr declMap env expr =
       let goName = goLocalIdent name
           env' = Map.insert name goName env
       bodyExpr <- codegenExpr declMap env' body
-      Right (renderIIFE (renderShortDecl goName boundExpr <> renderReturn bodyExpr))
+      let bindLines = renderShortDecl goName boundExpr
+          bodyLines = renderReturn bodyExpr
+      pure (renderIIFE (bindLines <> ["_ = " <> goName] <> bodyLines))
     C.CCase scrut alts ->
       codegenCase declMap env scrut alts
     C.CRecord fields ->
       codegenRecord declMap env fields
     C.CSelect base field -> do
       baseExpr <- codegenExpr declMap env base
-      Right ("rt.Select(" <> baseExpr <> ", " <> renderGoString field <> ")")
+      pure ("rt.Select(" <> baseExpr <> ", " <> renderGoString field <> ")")
     C.CDictWanted _ ->
-      Left CodegenDictWantedNotElaborated
+      throwCG CodegenDictWantedNotElaborated
     C.CForeignImport _ symbol _ ->
-      Left (CodegenForeignImportNotSupported symbol)
+      throwCG (CodegenForeignImportNotSupported symbol)
 
-codegenVar :: Map Text C.CoreExpr -> Map Text Text -> Text -> Either CodegenError Text
+codegenVar :: Map Text C.CoreExpr -> Map Text Text -> Text -> CG Text
 codegenVar declMap env name =
   case Map.lookup name env of
     Just localName ->
-      Right localName
+      pure localName
     Nothing ->
       case Map.lookup name declMap of
         Just _ ->
-          Right (goTopIdent name <> "()")
+          pure (goTopIdent name <> "()")
         Nothing ->
           if isConstructorName name
-            then Right ("rt.Con{Name: " <> renderGoString name <> ", Args: nil}")
+            then pure ("rt.Con{Name: " <> renderGoString name <> ", Args: nil}")
             else
               if isSupportedPrimitive name
-                then Right ("rt.Builtin(" <> renderGoString name <> ")")
-                else Left (CodegenUnsupportedPrimitive name)
+                then pure ("rt.Builtin(" <> renderGoString name <> ")")
+                else throwCG (CodegenUnsupportedPrimitive name)
 
-codegenLam :: Map Text C.CoreExpr -> Map Text Text -> [S.Pattern] -> C.CoreExpr -> Either CodegenError Text
+codegenLam :: Map Text C.CoreExpr -> Map Text Text -> [S.Pattern] -> C.CoreExpr -> CG Text
 codegenLam declMap env pats body =
+  codegenLamN 0 declMap env pats body
+
+codegenLamN :: Int -> Map Text C.CoreExpr -> Map Text Text -> [S.Pattern] -> C.CoreExpr -> CG Text
+codegenLamN argIx declMap env pats body =
   case pats of
     [] ->
-      Left (CodegenUnsupportedExpr (C.CLam [] body))
+      throwCG (CodegenUnsupportedExpr (C.CLam [] body))
     (p : ps) -> do
-      let argName = "_arg"
+      let argName =
+            case p of
+              S.PVar name -> goArgIdent name
+              S.PWildcard -> "_"
+              _ -> "_arg" <> T.pack (show argIx)
       bodyLines <-
         emitMatch argName p env $ \env' -> do
           nextExpr <-
             if null ps
               then codegenExpr declMap env' body
-              else codegenLam declMap env' ps body
-          Right (renderReturn nextExpr)
+              else codegenLamN (argIx + 1) declMap env' ps body
+          pure (renderReturn nextExpr)
 
       let bodyLines' =
             case p of
@@ -235,32 +259,26 @@ codegenLam declMap env pats body =
               _ ->
                 bodyLines
 
-      Right (renderFunc argName bodyLines')
+      pure (renderFunc argName bodyLines')
 
 emitMatch ::
   Text ->
   S.Pattern ->
   Map Text Text ->
-  (Map Text Text -> Either CodegenError [Text]) ->
-  Either CodegenError [Text]
+  (Map Text Text -> CG [Text]) ->
+  CG [Text]
 emitMatch scrutExpr pat env k =
   case pat of
-    S.PVar name -> do
-      let goName = goLocalIdent name
-          env' = Map.insert name goName env
-      rest <- k env'
-      Right (goName <> " := " <> scrutExpr : rest)
+    S.PVar name ->
+      k (Map.insert name scrutExpr env)
     S.PWildcard ->
       k env
     S.PCon conName ps -> do
-      inner <- emitMatches ps 0 env k
-      let bindArgs =
-            if any patternNeedsArgs ps
-              then "_args"
-              else "_"
+      argsName <- freshTemp "_args"
+      inner <- emitMatches argsName ps 0 env k
       let header =
             "if "
-              <> bindArgs
+              <> argsName
               <> ", ok := rt.MatchCon("
               <> scrutExpr
               <> ", "
@@ -269,42 +287,39 @@ emitMatch scrutExpr pat env k =
               <> T.pack (show (length ps))
               <> "); ok {"
           footer = "}"
-      Right ([header] <> indentLines 2 inner <> [footer])
+      pure ([header] <> indentLines 2 (("_ = " <> argsName) : inner) <> [footer])
   where
-    emitMatches [] _ env' k' =
+    emitMatches _ [] _ env' k' =
       k' env'
-    emitMatches (p : rest) ix env' k' =
-      emitMatch ("_args[" <> T.pack (show ix) <> "]") p env' $ \env'' ->
-        emitMatches rest (ix + 1) env'' k'
+    emitMatches argsName (p : rest) ix env' k' =
+      emitMatch (argsName <> "[" <> T.pack (show ix) <> "]") p env' $ \env'' ->
+        emitMatches argsName rest (ix + 1) env'' k'
 
-    patternNeedsArgs p =
-      case p of
-        S.PWildcard -> False
-        _ -> True
-
-codegenCase :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> [C.CoreAlt] -> Either CodegenError Text
+codegenCase :: Map Text C.CoreExpr -> Map Text Text -> C.CoreExpr -> [C.CoreAlt] -> CG Text
 codegenCase declMap env scrut alts = do
   scrutExpr <- codegenExpr declMap env scrut
-  (altLines, hasDefault) <- emitAlts alts
-  Right $
+  scrutName <- freshTemp "_scrut"
+  (altLines, hasDefault) <- emitAlts scrutName alts
+  pure $
     renderIIFE $
-      [ "_scrut := " <> scrutExpr
+      [ scrutName <> " := " <> scrutExpr
+      , "_ = " <> scrutName
       ]
         <> altLines
         <> if hasDefault then [] else ["panic(\"non-exhaustive case\")"]
   where
-    emitAlts [] =
-      Right ([], False)
-    emitAlts (C.CoreAlt pat body : rest) = do
+    emitAlts _ [] =
+      pure ([], False)
+    emitAlts scrutName (C.CoreAlt pat body : rest) = do
       linesForAlt <-
-        emitMatch "_scrut" pat env $ \env' -> do
+        emitMatch scrutName pat env $ \env' -> do
           bodyExpr <- codegenExpr declMap env' body
-          Right (renderReturn bodyExpr)
+          pure (renderReturn bodyExpr)
       if patternAlwaysMatches pat
-        then Right (linesForAlt, True)
+        then pure (linesForAlt, True)
         else do
-          (restLines, hasDefault) <- emitAlts rest
-          Right (linesForAlt <> restLines, hasDefault)
+          (restLines, hasDefault) <- emitAlts scrutName rest
+          pure (linesForAlt <> restLines, hasDefault)
 
 patternAlwaysMatches :: S.Pattern -> Bool
 patternAlwaysMatches pat =
@@ -313,27 +328,27 @@ patternAlwaysMatches pat =
     S.PWildcard -> True
     S.PCon {} -> False
 
-codegenRecord :: Map Text C.CoreExpr -> Map Text Text -> [(Text, C.CoreExpr)] -> Either CodegenError Text
+codegenRecord :: Map Text C.CoreExpr -> Map Text Text -> [(Text, C.CoreExpr)] -> CG Text
 codegenRecord declMap env fields = do
   fieldLines <-
     fmap concat $
       mapM
         ( \(name, e) -> do
             valExpr <- codegenExpr declMap env e
-            Right (renderAssign ("r[" <> renderGoString name <> "]") valExpr)
+            pure (renderAssign ("r[" <> renderGoString name <> "]") valExpr)
         )
         fields
-  Right $
+  pure $
     renderIIFE $
       ["r := make(rt.Record)"]
         <> fieldLines
         <> ["return r"]
 
-codegenInt :: Integer -> Either CodegenError Text
+codegenInt :: Integer -> CG Text
 codegenInt n =
   if n < minI64 || n > maxI64
-    then Left (CodegenIntOutOfRange n)
-    else Right ("int64(" <> T.pack (show n) <> ")")
+    then throwCG (CodegenIntOutOfRange n)
+    else pure ("int64(" <> T.pack (show n) <> ")")
   where
     minI64 = -9223372036854775808
     maxI64 = 9223372036854775807
@@ -351,16 +366,46 @@ isSupportedPrimitive name =
       , "prim_eqInt"
       , "prim_leInt"
       , "prim_geInt"
+      , "prim_addFloat"
+      , "prim_subFloat"
+      , "prim_mulFloat"
+      , "prim_divFloat"
+      , "prim_eqFloat"
+      , "prim_gtFloat"
+      , "prim_ltFloat"
+      , "prim_geFloat"
+      , "prim_leFloat"
+      , "prim_fromIntFloat"
+      , "prim_truncateFloat"
       , "prim_and"
       , "prim_or"
       , "prim_not"
       , "prim_eqString"
       , "prim_showInt"
+      , "prim_showFloat"
       , "prim_parseInt"
       , "prim_stringToChars"
       , "prim_charsToString"
       , "prim_charToInt"
       , "prim_intToChar"
+      , "prim_jsonParse"
+      , "prim_jsonStringify"
+      , "prim_jsonNull"
+      , "prim_jsonBool"
+      , "prim_jsonInt"
+      , "prim_jsonFloat"
+      , "prim_jsonString"
+      , "prim_jsonArray"
+      , "prim_jsonObject"
+      , "prim_jsonType"
+      , "prim_jsonGetField"
+      , "prim_jsonGetIndex"
+      , "prim_jsonToArray"
+      , "prim_jsonToBool"
+      , "prim_jsonToInt"
+      , "prim_jsonToFloat"
+      , "prim_jsonToString"
+      , "prim_jsonIsNull"
       , "prim_bytesEmpty"
       , "prim_bytesFromList"
       , "prim_bytesToList"
@@ -417,6 +462,10 @@ goTopIdent name =
 goLocalIdent :: Text -> Text
 goLocalIdent name =
   "l_" <> mangleIdent name
+
+goArgIdent :: Text -> Text
+goArgIdent name =
+  "a_" <> mangleIdent name
 
 mangleIdent :: Text -> Text
 mangleIdent =
