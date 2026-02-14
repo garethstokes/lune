@@ -1,6 +1,7 @@
 package rt
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -129,6 +130,22 @@ func (tx *Tx) commit() {
 
 var stmMu sync.Mutex
 var stmCond = sync.NewCond(&stmMu)
+
+var stdinMu sync.Mutex
+var stdinReader = bufio.NewReader(os.Stdin)
+
+func readStdinLine(ctx string) string {
+	stdinMu.Lock()
+	defer stdinMu.Unlock()
+
+	line, err := stdinReader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		panic(ctx + ": " + err.Error())
+	}
+	line = strings.TrimSuffix(line, "\n")
+	line = strings.TrimSuffix(line, "\r")
+	return line
+}
 
 func runAtomic(tx *Tx, ma Atomic) (val Value, retried bool) {
 	defer func() {
@@ -384,6 +401,26 @@ func showFloat(f float64) string {
 		return strconv.FormatFloat(f, 'f', 1, 64)
 	}
 	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+func parseDecimalInt64(s string) (int64, bool) {
+	const maxI64 = int64(9223372036854775807)
+	if s == "" {
+		return 0, false
+	}
+	var n int64 = 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		d := int64(c - '0')
+		if n > (maxI64-d)/10 {
+			return 0, false
+		}
+		n = n*10 + d
+	}
+	return n, true
 }
 
 func writeAll(w io.Writer, bs []byte) error {
@@ -1122,21 +1159,9 @@ func Builtin(name string) Value {
 			if !ok {
 				panic(fmt.Sprintf("prim_parseInt: expected String, got %T", args[0]))
 			}
-			const maxI64 = int64(9223372036854775807)
-			if s == "" {
+			n, ok2 := parseDecimalInt64(s)
+			if !ok2 {
 				return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
-			}
-			var n int64 = 0
-			for i := 0; i < len(s); i++ {
-				c := s[i]
-				if c < '0' || c > '9' {
-					return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
-				}
-				d := int64(c - '0')
-				if n > (maxI64-d)/10 {
-					return Con{Name: "Lune.Prelude.Err", Args: []Value{"invalid int"}}
-				}
-				n = n*10 + d
 			}
 			return Con{Name: "Lune.Prelude.Ok", Args: []Value{n}}
 		})
@@ -1212,6 +1237,19 @@ func Builtin(name string) Value {
 				fmt.Println(s)
 				return Con{Name: "Lune.Prelude.Unit", Args: nil}
 			})
+		})
+	case "prim_readLine":
+		return IO(func() Value {
+			return readStdinLine("prim_readLine")
+		})
+	case "prim_readInt":
+		return IO(func() Value {
+			s := readStdinLine("prim_readInt")
+			n, ok := parseDecimalInt64(s)
+			if !ok {
+				panic("prim_readInt: invalid int")
+			}
+			return n
 		})
 	case "$primSTMPure":
 		return NewPrim(1, func(args []Value) Value {

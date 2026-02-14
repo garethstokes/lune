@@ -437,6 +437,8 @@ isSupportedPrimitive name =
       , "prim_tlsClose"
       , "prim_appendString"
       , "prim_putStrLn"
+      , "prim_readLine"
+      , "prim_readInt"
       , "$primIOPure"
       , "prim_ioPure"
       , "$primIOBind"
