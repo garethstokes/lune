@@ -1,0 +1,26 @@
+model_builders_openrouter:
+openrouter:x
+model_builders_ollama:
+ollama:y
+routing_openrouter_missing_key:
+Unauthorized
+routing_ollama_mock:
+{"n":1}
+tool_wrapper_counts:
+[1,1]
+json_pure:
+{"n":1}
+tool_pure:
+{"n":1}
+json_prose_prefix:
+DecodeError unexpected character: S
+tool_prose_prefix:
+{"n":1}
+json_prose_suffix:
+DecodeError trailing garbage after JSON value
+tool_prose_suffix:
+{"n":1}
+tool_invalid:
+DecodeError Could not parse JSON in response: {not json}
+tool_no_json:
+DecodeError Could not find JSON in response: No JSON here.

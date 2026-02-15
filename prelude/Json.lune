@@ -1,0 +1,60 @@
+module Json exposing (decode)
+
+{-| Minimal JSON decoding typeclass used by Nova (v0).
+
+This is intentionally small: it provides a single `Json.Decode` typeclass
+carrying a `decoder`, and a `decode` helper that parses a JSON string and
+runs the decoder.
+
+Notes:
+- We reuse `Lune.Json` for parsing and `Lune.Json.Decode` for decoding.
+- The class name is `Json.Decode` (with a dot) to match Nova's surface API.
+- The class itself is not exported (module exports cannot include dots), but it
+  is available for constraints/instances once this module is imported.
+- Constrained instances (e.g. `Json.Decode a => Json.Decode (List a)`) are not
+  supported yet in Lune v0, so this module only provides base instances.
+-}
+
+import Lune.Prelude exposing (Result(..), String, Int, Float, Bool, List, Maybe)
+import Lune.Json as Raw
+import Lune.Json.Decode as D
+
+class Json.Decode a where
+  decoder : Decoder a
+
+decode : Json.Decode a => String -> Result String a
+decode s =
+  case Raw.parse s of
+    Err msg ->
+      Err msg
+    Ok json ->
+      case D.decodeValue decoder json of
+        Ok a ->
+          Ok a
+        Err err ->
+          Err err.message
+
+-- ===== Instances =====
+
+instance Json.Decode String where
+  decoder =
+    D.string
+
+instance Json.Decode Int where
+  decoder =
+    D.int
+
+instance Json.Decode Float where
+  decoder =
+    D.float
+
+instance Json.Decode Bool where
+  decoder =
+    D.bool
+
+-- Identity decode for raw Json values.
+instance Json.Decode Json where
+  decoder =
+    \j -> Ok j
+
+-- TODO: Add `List` / `Maybe` instances once instance constraints are supported.
