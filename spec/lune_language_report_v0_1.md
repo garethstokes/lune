@@ -89,6 +89,17 @@ main =
 
 Explicit braces `{}` are not supported in v0.1.
 
+### 2.1 Source Formatting (`lune --fmt`)
+
+The compiler includes a canonical, deterministic formatter:
+
+- `lune --fmt <file.lune>` overwrites the file with formatted output.
+- `lune --fmt --check <file.lune>` exits non-zero if formatting would change anything.
+- `lune --fmt --stdout <file.lune>` prints formatted output without modifying the file.
+
+The formatter is AST-based, semantics-preserving, idempotent, and enforces an 80-column maximum
+using a “flat then expand” layout algorithm. See `docs/Formatting.md` for the full style summary.
+
 ---
 
 ## 3. Modules and Packages
