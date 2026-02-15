@@ -93,6 +93,7 @@ data InstanceMethodDef = InstanceMethodDef
 data Expr
   = Var Text
   | StringLit Text
+  | TemplateLit TemplateFlavor [TemplatePart]
   | IntLit Integer
   | FloatLit Double
   | CharLit Char
@@ -104,6 +105,16 @@ data Expr
   | RecordLiteral [(Text, Expr)]
   | RecordUpdate Expr [(Text, Expr)]
   | FieldAccess Expr Text
+  deriving (Show)
+
+data TemplateFlavor
+  = TemplateInline
+  | TemplateBlock
+  deriving (Eq, Ord, Show)
+
+data TemplatePart
+  = TemplateText Text
+  | TemplateHole Expr
   deriving (Show)
 
 data Alt = Alt Pattern Expr

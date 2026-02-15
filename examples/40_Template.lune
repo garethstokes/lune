@@ -1,0 +1,73 @@
+module TemplateDemo exposing (main)
+
+import Lune.IO as IO
+import Template exposing (render, text, lines, block, join, vcat, hcat, indent, ensureNL, Semigroup(..), Monoid(..))
+
+main : Task Unit Unit
+main =
+  do
+    IO.println "dedent:"
+    IO.println
+      (render
+        ''
+              a
+                b
+          ''
+      )
+
+    IO.println "append_block_block:"
+    IO.println (render (''a'' <> ''b''))
+
+    IO.println "append_ensureNL_block:"
+    IO.println (render (ensureNL ''a'' <> ''b''))
+
+    IO.println "append_text_text:"
+    IO.println (render (text "a" <> text "b"))
+
+    IO.println "append_text_block:"
+    IO.println (render (text "a" <> ''b''))
+
+    IO.println "monoid_mconcat_inline:"
+    IO.println (render (mconcat [text "a", text "b", text "c"]))
+
+    IO.println "monoid_mconcat_blocks:"
+    IO.println (render (mconcat [''a'', ''b'', ''c'']))
+
+    IO.println "template_join:"
+    IO.println (render (join (text ",") [text "a", text "b", text "c"]))
+
+    IO.println "template_vcat_indent:"
+    IO.println (render (indent 2 (vcat [text "a", text "b", text "c"])))
+
+    IO.println "template_hcat:"
+    IO.println (render (hcat [text "a", text "b", text "c"]))
+
+    IO.println "template_lines:"
+    IO.println (render (lines ["a", "b", "c"]))
+
+    IO.println "template_block:"
+    IO.println (render (block "\na\n"))
+
+    IO.println "empty_left:"
+    IO.println (render (mempty <> ''x''))
+
+    IO.println "empty_right:"
+    IO.println (render (''x'' <> mempty))
+
+    let inner = ''inner line''
+
+    IO.println "interpolation_splice:"
+    IO.println
+      (render
+        ''
+          outer:
+          ${inner}
+          end
+        ''
+      )
+
+    IO.println "interpolation_text_splice:"
+    IO.println (render "pre${text "X"}post")
+
+    IO.println "escape:"
+    IO.println (render ''cost is \${amount}'')

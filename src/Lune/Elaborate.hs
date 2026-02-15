@@ -9,6 +9,7 @@ module Lune.Elaborate
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Builtins as Builtins
@@ -114,7 +115,7 @@ elaborateModule tm = do
       instanceDicts = buildInstanceDicts (tmInstanceEnv tm)
       dictCandidates = buildDictCandidates aliasEnv (tmInstanceEnv tm)
 
-  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm)) (Map.elems (tmInstanceEnv tm))
+  dictDecls <- mapM (elabInstanceDict methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm) aliasEnv) (Map.elems (tmInstanceEnv tm))
   otherDecls <- mapM (elabDecl methodIndex instanceDicts dictCandidates env0 (tmClassEnv tm) aliasEnv) decls
 
   pure
@@ -139,20 +140,55 @@ elaborateExpr env classEnv instanceEnv expr = do
     Right (s, _cs, _ty, core0) ->
       resolveInstanceDicts s (buildDictCandidates Map.empty instanceEnv) core0
 
-elabInstanceDict :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
-elabInstanceDict methodIndex instanceDicts dictCandidates env0 classEnv inst = do
+elabInstanceDict :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> AliasEnv -> IE.InstanceInfo -> Either ElaborateError CoreDecl
+elabInstanceDict methodIndex instanceDicts dictCandidates env0 classEnv aliasEnv inst = do
+  classInfo <-
+    case Map.lookup (IE.instanceInfoClass inst) classEnv of
+      Nothing ->
+        Left (ElaborateUnresolvedConstraint (Constraint (IE.instanceInfoClass inst) []))
+      Just info ->
+        Right info
+
+  classParam <-
+    case CE.classInfoParams classInfo of
+      (p : _) -> Right p
+      _ -> Left (ElaborateUnresolvedConstraint (Constraint (IE.instanceInfoClass inst) []))
+
+  let instTy = expandAliases aliasEnv (convertType aliasEnv (IE.instanceInfoHead inst))
+      instVars = Set.toList (ftvType instTy)
+      requiredSchemes = CE.classInfoMethods classInfo
+      methodSchemes =
+        Map.map (specializeMethodScheme (IE.instanceInfoClass inst) classParam instTy instVars) requiredSchemes
+
   let dictName = Builtins.instanceDictName (IE.instanceInfoClass inst) (IE.instanceInfoHeadCon inst)
-  fields <- mapM elabMethod (Map.toList (IE.instanceInfoMethods inst))
+  fields <- mapM (elabMethod methodSchemes) (Map.toList (IE.instanceInfoMethods inst))
   superFields <- elabSuperDictFields classEnv instanceDicts inst
   pure (CoreDecl dictName (CRecord (superFields <> fields)))
   where
-    elabMethod (methodName, methodExpr) =
-      case I.runInferM (inferCoreExpr methodIndex env0 methodExpr) of
+    elabMethod methodSchemes (methodName, methodExpr) = do
+      scheme <-
+        case Map.lookup methodName methodSchemes of
+          Nothing ->
+            Left (ElaborateMissingScheme methodName)
+          Just s ->
+            Right s
+      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme [] methodExpr) of
         Left err ->
           Left (ElaborateInferError (IE.instanceInfoClass inst <> " " <> IE.instanceInfoHeadCon inst <> "." <> methodName) err)
-        Right (s, _cs, _ty, core0) -> do
+        Right (s, core0) -> do
           core <- resolveInstanceDicts s dictCandidates core0
           Right (methodName, core)
+
+specializeMethodScheme :: Text -> Text -> Type -> [Text] -> Scheme -> Scheme
+specializeMethodScheme className classParam instTy instVars (Forall vars constraints ty) =
+  Forall varsFinal constraintsFinal tyFinal
+  where
+    subst = Map.singleton classParam instTy
+    vars' = filter (/= classParam) vars
+    tyFinal = applySubstType subst ty
+    constraintsSub = applySubstConstraints subst constraints
+    constraintsFinal = filter (/= Constraint className [instTy]) constraintsSub
+    varsFinal = Set.toList (Set.fromList (instVars <> vars'))
 
 elabValueDecl :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> S.Decl -> Either ElaborateError CoreDecl
 elabValueDecl methodIndex instanceDicts dictCandidates env0 classEnv decl =
@@ -256,6 +292,9 @@ inferCoreExpr methodIndex env expr =
     S.StringLit s ->
       pure (nullSubst, [], TCon "String", CString s)
 
+    S.TemplateLit flavor parts ->
+      inferTemplateLit methodIndex env flavor parts
+
     S.IntLit n ->
       pure (nullSubst, [], TCon "Int", CInt n)
 
@@ -349,6 +388,45 @@ inferCoreExpr methodIndex env expr =
           pure (s1, applySubstConstraints s1 c1, tv, CSelect cBase field)
         other ->
           I.inferFail (I.NotARecord other)
+
+inferTemplateLit :: MethodIndex -> TypeEnv -> S.TemplateFlavor -> [S.TemplatePart] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
+inferTemplateLit methodIndex env flavor parts = do
+  (s, cs, coreParts) <- go (nullSubst, [], []) parts
+  let isBlock =
+        case flavor of
+          S.TemplateInline -> False
+          S.TemplateBlock -> True
+      coreParts' = applySubstCoreTemplateParts s coreParts
+  pure (s, applySubstConstraints s cs, TCon "Template", CTemplate isBlock coreParts')
+  where
+    go acc [] =
+      pure acc
+    go (sAcc, cAcc, partsAcc) (part : rest) =
+      case part of
+        S.TemplateText t ->
+          go (sAcc, cAcc, partsAcc <> [CTemplateText t]) rest
+        S.TemplateHole e -> do
+          let env1 = applySubstEnv sAcc env
+          (s1, c1, t1, core1) <- inferCoreExpr methodIndex env1 e
+          let s = s1 `composeSubst` sAcc
+              cAcc' = applySubstConstraints s1 cAcc
+              t1' = applySubstType s1 t1
+              toTemplateC = Constraint "ToTemplate" [t1']
+              toTemplateFn = CSelect (CDictWanted toTemplateC) "toTemplate"
+              coreToTemplate = CApp toTemplateFn core1
+              partsAcc' = partsAcc <> [CTemplateHole t1' coreToTemplate]
+          go (s, cAcc' <> c1 <> [toTemplateC], partsAcc') rest
+
+applySubstCoreTemplateParts :: Subst -> [CoreTemplatePart] -> [CoreTemplatePart]
+applySubstCoreTemplateParts subst =
+  map
+    ( \p ->
+        case p of
+          CTemplateText _ ->
+            p
+          CTemplateHole ty holeExpr ->
+            CTemplateHole (applySubstType subst ty) holeExpr
+    )
 
 inferVar :: MethodIndex -> TypeEnv -> Text -> I.InferM (Subst, [Constraint], Type, CoreExpr)
 inferVar methodIndex env name =
@@ -485,9 +563,13 @@ replaceGivenDicts subst given =
           expr
         CString {} ->
           expr
+        CTemplate isBlock parts ->
+          CTemplate isBlock (map goTemplatePart parts)
         CInt {} ->
           expr
         CFloat {} ->
+          expr
+        CChar {} ->
           expr
         CApp f x ->
           CApp (go f) (go x)
@@ -501,9 +583,18 @@ replaceGivenDicts subst given =
           CRecord [(name, go e) | (name, e) <- fields]
         CSelect base field ->
           CSelect (go base) field
+        CForeignImport {} ->
+          expr
 
     goAlt (CoreAlt pat body) =
       CoreAlt pat (go body)
+
+    goTemplatePart part =
+      case part of
+        CTemplateText _ ->
+          part
+        CTemplateHole ty holeExpr ->
+          CTemplateHole ty (go holeExpr)
 
 deriveSuperDicts :: CE.ClassEnv -> Map Constraint CoreExpr -> Map Constraint CoreExpr
 deriveSuperDicts classEnv direct =
@@ -566,9 +657,13 @@ resolveInstanceDicts subst dictCandidates =
           Right expr
         CString {} ->
           Right expr
+        CTemplate isBlock parts ->
+          CTemplate isBlock <$> mapM goTemplatePart parts
         CInt {} ->
           Right expr
         CFloat {} ->
+          Right expr
+        CChar {} ->
           Right expr
         CApp f x ->
           CApp <$> go f <*> go x
@@ -582,9 +677,19 @@ resolveInstanceDicts subst dictCandidates =
           CRecord <$> mapM (\(n, e) -> do e' <- go e; pure (n, e')) fields
         CSelect base field ->
           CSelect <$> go base <*> pure field
+        CForeignImport {} ->
+          Right expr
 
     goAlt (CoreAlt pat body) =
       CoreAlt pat <$> go body
+
+    goTemplatePart part =
+      case part of
+        CTemplateText _ ->
+          Right part
+        CTemplateHole ty holeExpr -> do
+          holeExpr' <- go holeExpr
+          Right (CTemplateHole (applySubstType subst ty) holeExpr')
 
     resolveConstraint c =
       case constraintArgs c of

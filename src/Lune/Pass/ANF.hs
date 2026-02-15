@@ -43,6 +43,9 @@ anfComp expr =
       pure ([], expr)
     C.CString {} ->
       pure ([], expr)
+    C.CTemplate isBlock parts -> do
+      parts' <- mapM anfTemplatePart parts
+      pure ([], C.CTemplate isBlock parts')
     C.CInt {} ->
       pure ([], expr)
     C.CFloat {} ->
@@ -75,6 +78,15 @@ anfComp expr =
     C.CForeignImport {} ->
       pure ([], expr)
 
+anfTemplatePart :: C.CoreTemplatePart -> State AnfState C.CoreTemplatePart
+anfTemplatePart part =
+  case part of
+    C.CTemplateText _ ->
+      pure part
+    C.CTemplateHole ty holeExpr -> do
+      holeExpr' <- anfExpr holeExpr
+      pure (C.CTemplateHole ty holeExpr')
+
 anfAlt :: C.CoreAlt -> State AnfState C.CoreAlt
 anfAlt (C.CoreAlt pat body) = do
   body' <- anfExpr body
@@ -105,6 +117,7 @@ isAtom expr =
   case expr of
     C.CVar {} -> True
     C.CString {} -> True
+    C.CTemplate {} -> True
     C.CInt {} -> True
     C.CFloat {} -> True
     C.CChar {} -> True
@@ -148,6 +161,8 @@ collectNamesExpr expr =
       Set.singleton name
     C.CString {} ->
       Set.empty
+    C.CTemplate _ parts ->
+      foldMap collectPart parts
     C.CInt {} ->
       Set.empty
     C.CFloat {} ->
@@ -170,6 +185,13 @@ collectNamesExpr expr =
       Set.empty
     C.CForeignImport {} ->
       Set.empty
+  where
+    collectPart p =
+      case p of
+        C.CTemplateText _ ->
+          Set.empty
+        C.CTemplateHole _ holeExpr ->
+          collectNamesExpr holeExpr
 
 collectNamesAlt :: C.CoreAlt -> Set Text
 collectNamesAlt (C.CoreAlt pat body) =

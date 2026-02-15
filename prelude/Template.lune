@@ -1,0 +1,128 @@
+module Template exposing (
+  Template,
+  empty, text, line, lines, block,
+  append, join, vcat, hcat,
+  indent, ensureNL, render,
+  ToTemplate(..),
+  Semigroup(..),
+  Monoid(..)
+)
+
+{-| First-class templates with Nix-style multiline literals and interpolation.
+
+NOTE: Multiline literal dedent/newline stripping is implemented in the parser
+(see `dedentMultilineLiteral` in `src/Lune/Parser.hs`). Block-aware append
+semantics are implemented in the runtime (see `src/Lune/Template.hs`).
+-}
+
+import Lune.Prelude exposing (Bool(..), Int, Float, Char, String, List(..))
+import Lune.List as List
+import Lune.String as String
+
+-- Opaque runtime type.
+type Template = Template#
+
+-- ===== Core API =====
+
+empty : Template
+empty =
+  prim_templateEmpty
+
+text : String -> Template
+text =
+  prim_templateText
+
+line : String -> Template
+line =
+  prim_templateLine
+
+lines : List String -> Template
+lines =
+  prim_templateLines
+
+block : String -> Template
+block =
+  prim_templateBlock
+
+append : Template -> Template -> Template
+append =
+  prim_templateAppend
+
+join : Template -> List Template -> Template
+join =
+  prim_templateJoin
+
+vcat : List Template -> Template
+vcat =
+  prim_templateVcat
+
+hcat : List Template -> Template
+hcat =
+  prim_templateHcat
+
+indent : Int -> Template -> Template
+indent =
+  prim_templateIndent
+
+ensureNL : Template -> Template
+ensureNL =
+  prim_templateEnsureNL
+
+render : Template -> String
+render =
+  prim_templateRender
+
+-- ===== Coercion for interpolation =====
+
+class ToTemplate a where
+  toTemplate : a -> Template
+
+instance ToTemplate Template where
+  toTemplate =
+    \t -> t
+
+instance ToTemplate String where
+  toTemplate =
+    \s -> text s
+
+instance ToTemplate Int where
+  toTemplate =
+    \n -> text (prim_showInt n)
+
+instance ToTemplate Float where
+  toTemplate =
+    \n -> text (prim_showFloat n)
+
+instance ToTemplate Char where
+  toTemplate =
+    \c -> text (String.fromChar c)
+
+instance ToTemplate Bool where
+  toTemplate =
+    \b ->
+      case b of
+        True -> text "True"
+        False -> text "False"
+
+-- TODO: Provide a convenient default ToTemplate for user ADTs once a `Show`
+-- typeclass (or similar) exists in the standard library.
+
+-- ===== Semigroup / Monoid =====
+
+class Semigroup a where
+  (<>) : a -> a -> a
+
+class Semigroup a => Monoid a where
+  mempty : a
+  mconcat : List a -> a
+
+instance Semigroup Template where
+  (<>) =
+    append
+
+instance Monoid Template where
+  mempty =
+    empty
+
+  mconcat =
+    \xs -> List.foldl (<>) mempty xs

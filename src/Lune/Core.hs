@@ -3,6 +3,7 @@ module Lune.Core
   , CoreDecl (..)
   , CoreExpr (..)
   , CoreAlt (..)
+  , CoreTemplatePart (..)
   ) where
 
 import Data.Text (Text)
@@ -22,6 +23,7 @@ data CoreDecl = CoreDecl Text CoreExpr
 data CoreExpr
   = CVar Text
   | CString Text
+  | CTemplate Bool [CoreTemplatePart]
   | CInt Integer
   | CFloat Double
   | CChar Char
@@ -38,3 +40,7 @@ data CoreExpr
 data CoreAlt = CoreAlt S.Pattern CoreExpr
   deriving (Show)
 
+data CoreTemplatePart
+  = CTemplateText Text
+  | CTemplateHole Type CoreExpr
+  deriving (Show)

@@ -34,6 +34,7 @@ library
 
   other-modules:
       Lune.Builtins
+      Lune.Template
       Lune.Eval.FFI
       Lune.Eval.Types
       Lune.Eval.Runtime

@@ -35,6 +35,7 @@ data InferError
   | MissingRecordField Text
   | ConstructorArityMismatch Text Int Int
   | UnexpectedDoBlock
+  | EffectfulInterpolation Type
   | UnsupportedPattern S.Pattern
   deriving (Show)
 
@@ -137,6 +138,10 @@ inferExpr env expr =
     S.StringLit _ ->
       pure (nullSubst, [], TCon "String")
 
+    S.TemplateLit _ parts -> do
+      (s, cs) <- inferTemplateParts env parts
+      pure (s, applySubstConstraints s cs, TCon "Template")
+
     S.IntLit _ ->
       pure (nullSubst, [], TCon "Int")
 
@@ -191,6 +196,46 @@ inferExpr env expr =
     S.FieldAccess base field ->
       inferFieldAccess env base field
   where
+    inferTemplateParts :: TypeEnv -> [S.TemplatePart] -> InferM (Subst, [Constraint])
+    inferTemplateParts env0 =
+      go (nullSubst, [])
+      where
+        go acc [] =
+          pure acc
+        go (sAcc, cAcc) (part : rest) =
+          case part of
+            S.TemplateText _ ->
+              go (sAcc, cAcc) rest
+            S.TemplateHole e -> do
+              let env1 = applySubstEnv sAcc env0
+              (s1, c1, t1) <- inferExpr env1 e
+              let s = s1 `composeSubst` sAcc
+                  cAcc' = applySubstConstraints s1 cAcc
+                  t1' = applySubstType s1 t1
+                  c = cAcc' <> c1 <> [Constraint "ToTemplate" [t1']]
+              -- Best-effort purity rule: don't allow effect-typed expressions in
+              -- interpolation holes (SPEC E). This is a conservative check
+              -- until an effect system exists.
+              if isEffectType t1'
+                then throwInfer (EffectfulInterpolation t1')
+                else pure ()
+              go (s, c) rest
+        isEffectType ty =
+          case headTypeCon ty of
+            Just "IO" -> True
+            Just "Task" -> True
+            Just "STM" -> True
+            _ -> False
+
+        headTypeCon t =
+          case t of
+            TCon name ->
+              Just name
+            TApp f _ ->
+              headTypeCon f
+            _ ->
+              Nothing
+
     inferAlt :: Type -> Type -> TypeEnv -> (Subst, [Constraint]) -> Alt -> InferM (Subst, [Constraint])
     inferAlt scrutTy resTy envBase (sAcc, cAcc) (Alt pat body) = do
       let env1 = applySubstEnv sAcc envBase

@@ -38,6 +38,25 @@ cabal run lune -- examples/00_Hello.lune
 cabal run lune -- --eval examples/00_Hello.lune
 ```
 
+## Template Example
+
+```haskell
+module TemplateDemo exposing (main)
+
+import Lune.IO as IO
+import Template exposing (render, text, vcat, indent, Semigroup(..), Monoid(..))
+
+main : Task Unit Unit
+main =
+  do
+    let name = "world"
+    IO.println (render "Hello, ${name}!")
+
+    IO.println (render (text "a" <> ''b''))              -- block-aware newline
+    IO.println (render (mconcat [''a'', ''b'', ''c'']))  -- Monoid instance
+    IO.println (render (indent 2 (vcat [text "x", text "y"])))
+```
+
 ## Current Features (v0.1)
 
 | Feature | Status |

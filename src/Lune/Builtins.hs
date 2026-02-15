@@ -31,6 +31,7 @@ import qualified Lune.Core as C
 import qualified Lune.Eval.Runtime as ER
 import Lune.Eval.Types
 import qualified Lune.Syntax as S
+import qualified Lune.Template as Template
 import Lune.Type
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
@@ -72,6 +73,19 @@ builtinSchemes =
     , ("prim_eqString", Forall [] [] (TArrow (TCon "String") (TArrow (TCon "String") (TCon "Bool"))))
     , ("prim_showInt", Forall [] [] (TArrow (TCon "Int") (TCon "String")))
     , ("prim_parseInt", Forall [] [] (TArrow (TCon "String") (TApp (TApp (TCon "Result") (TCon "String")) (TCon "Int"))))
+    -- Template primitives
+    , ("prim_templateEmpty", Forall [] [] (TCon "Template"))
+    , ("prim_templateText", Forall [] [] (TArrow (TCon "String") (TCon "Template")))
+    , ("prim_templateLine", Forall [] [] (TArrow (TCon "String") (TCon "Template")))
+    , ("prim_templateLines", Forall [] [] (TArrow (TApp (TCon "List") (TCon "String")) (TCon "Template")))
+    , ("prim_templateBlock", Forall [] [] (TArrow (TCon "String") (TCon "Template")))
+    , ("prim_templateAppend", Forall [] [] (TArrow (TCon "Template") (TArrow (TCon "Template") (TCon "Template"))))
+    , ("prim_templateJoin", Forall [] [] (TArrow (TCon "Template") (TArrow (TApp (TCon "List") (TCon "Template")) (TCon "Template"))))
+    , ("prim_templateVcat", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Template")) (TCon "Template")))
+    , ("prim_templateHcat", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Template")) (TCon "Template")))
+    , ("prim_templateIndent", Forall [] [] (TArrow (TCon "Int") (TArrow (TCon "Template") (TCon "Template"))))
+    , ("prim_templateEnsureNL", Forall [] [] (TArrow (TCon "Template") (TCon "Template")))
+    , ("prim_templateRender", Forall [] [] (TArrow (TCon "Template") (TCon "String")))
     -- Char/String conversion primitives
     , ("prim_stringToChars", Forall [] [] (TArrow (TCon "String") (TApp (TCon "List") (TCon "Char"))))
     , ("prim_charsToString", Forall [] [] (TArrow (TApp (TCon "List") (TCon "Char")) (TCon "String")))
@@ -669,6 +683,19 @@ builtinEvalPrims =
     , ("prim_geInt", BuiltinPrim 2 primGeInt)
     , ("prim_appendString", BuiltinPrim 2 primAppendString)
     , ("prim_eqString", BuiltinPrim 2 primEqString)
+    -- Template primitives
+    , ("prim_templateEmpty", BuiltinPrim 0 primTemplateEmpty)
+    , ("prim_templateText", BuiltinPrim 1 primTemplateText)
+    , ("prim_templateLine", BuiltinPrim 1 primTemplateLine)
+    , ("prim_templateLines", BuiltinPrim 1 primTemplateLines)
+    , ("prim_templateBlock", BuiltinPrim 1 primTemplateBlock)
+    , ("prim_templateAppend", BuiltinPrim 2 primTemplateAppend)
+    , ("prim_templateJoin", BuiltinPrim 2 primTemplateJoin)
+    , ("prim_templateVcat", BuiltinPrim 1 primTemplateVcat)
+    , ("prim_templateHcat", BuiltinPrim 1 primTemplateHcat)
+    , ("prim_templateIndent", BuiltinPrim 2 primTemplateIndent)
+    , ("prim_templateEnsureNL", BuiltinPrim 1 primTemplateEnsureNL)
+    , ("prim_templateRender", BuiltinPrim 1 primTemplateRender)
     -- Char/String conversion primitives
     , ("prim_stringToChars", BuiltinPrim 1 primStringToChars)
     , ("prim_charsToString", BuiltinPrim 1 primCharsToString)
@@ -1065,6 +1092,170 @@ primEqString args =
   where
     isVString'' (VString _) = True
     isVString'' _ = False
+
+-- =============================================================================
+-- Template Primitives
+-- =============================================================================
+
+primTemplateEmpty :: [Value] -> Either EvalError Value
+primTemplateEmpty args =
+  case args of
+    [] ->
+      Right (VTemplate Template.empty)
+    _ ->
+      Left (NotAFunction (VPrim 0 primTemplateEmpty args))
+
+primTemplateText :: [Value] -> Either EvalError Value
+primTemplateText args =
+  case args of
+    [VString s] ->
+      Right (VTemplate (Template.text s))
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateText args))
+
+primTemplateLine :: [Value] -> Either EvalError Value
+primTemplateLine args =
+  case args of
+    [VString s] ->
+      Right (VTemplate (Template.line s))
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateLine args))
+
+primTemplateLines :: [Value] -> Either EvalError Value
+primTemplateLines args =
+  case args of
+    [listVal] ->
+      case valueToList listVal of
+        Nothing ->
+          Left (NotARecord listVal)
+        Just vals -> do
+          strs <- mapM expectString vals
+          Right (VTemplate (Template.lines strs))
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateLines args))
+  where
+    expectString v =
+      case v of
+        VString s -> Right s
+        other -> Left (ExpectedString other)
+
+primTemplateBlock :: [Value] -> Either EvalError Value
+primTemplateBlock args =
+  case args of
+    [VString s] ->
+      Right (VTemplate (Template.block s))
+    [other] ->
+      Left (ExpectedString other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateBlock args))
+
+primTemplateAppend :: [Value] -> Either EvalError Value
+primTemplateAppend args =
+  case args of
+    [VTemplate a, VTemplate b] ->
+      Right (VTemplate (Template.append a b))
+    [other, _] | not (isVTemplate other) ->
+      Left (ExpectedTemplate other)
+    [_, other] ->
+      Left (ExpectedTemplate other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primTemplateAppend args))
+  where
+    isVTemplate (VTemplate _) = True
+    isVTemplate _ = False
+
+primTemplateJoin :: [Value] -> Either EvalError Value
+primTemplateJoin args =
+  case args of
+    [VTemplate sep, listVal] ->
+      case valueToList listVal of
+        Nothing ->
+          Left (NotARecord listVal)
+        Just vals -> do
+          ts <- mapM expectTemplate vals
+          Right (VTemplate (Template.join sep ts))
+    [other, _] | not (isVTemplate other) ->
+      Left (ExpectedTemplate other)
+    [_, other] ->
+      Left (NotARecord other)
+    _ ->
+      Left (NotAFunction (VPrim 2 primTemplateJoin args))
+  where
+    isVTemplate (VTemplate _) = True
+    isVTemplate _ = False
+    expectTemplate v =
+      case v of
+        VTemplate t -> Right t
+        other -> Left (ExpectedTemplate other)
+
+primTemplateVcat :: [Value] -> Either EvalError Value
+primTemplateVcat args =
+  case args of
+    [listVal] ->
+      case valueToList listVal of
+        Nothing ->
+          Left (NotARecord listVal)
+        Just vals -> do
+          ts <- mapM expectTemplate vals
+          Right (VTemplate (Template.vcat ts))
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateVcat args))
+  where
+    expectTemplate v =
+      case v of
+        VTemplate t -> Right t
+        other -> Left (ExpectedTemplate other)
+
+primTemplateHcat :: [Value] -> Either EvalError Value
+primTemplateHcat args =
+  case args of
+    [listVal] ->
+      case valueToList listVal of
+        Nothing ->
+          Left (NotARecord listVal)
+        Just vals -> do
+          ts <- mapM expectTemplate vals
+          Right (VTemplate (Template.hcat ts))
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateHcat args))
+  where
+    expectTemplate v =
+      case v of
+        VTemplate t -> Right t
+        other -> Left (ExpectedTemplate other)
+
+primTemplateIndent :: [Value] -> Either EvalError Value
+primTemplateIndent args =
+  case args of
+    [VInt n, VTemplate t] ->
+      Right (VTemplate (Template.indent (fromInteger n) t))
+    _ ->
+      Left (NotAFunction (VPrim 2 primTemplateIndent args))
+
+primTemplateEnsureNL :: [Value] -> Either EvalError Value
+primTemplateEnsureNL args =
+  case args of
+    [VTemplate t] ->
+      Right (VTemplate (Template.ensureNL t))
+    [other] ->
+      Left (ExpectedTemplate other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateEnsureNL args))
+
+primTemplateRender :: [Value] -> Either EvalError Value
+primTemplateRender args =
+  case args of
+    [VTemplate t] -> do
+      rendered <- Template.render ER.force t
+      Right (VString rendered)
+    [other] ->
+      Left (ExpectedTemplate other)
+    _ ->
+      Left (NotAFunction (VPrim 1 primTemplateRender args))
 
 -- | prim_stringToChars : String -> List Char
 primStringToChars :: [Value] -> Either EvalError Value

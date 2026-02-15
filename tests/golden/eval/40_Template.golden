@@ -1,0 +1,46 @@
+dedent:
+a
+  b
+append_block_block:
+a
+b
+append_ensureNL_block:
+a
+b
+append_text_text:
+ab
+append_text_block:
+a
+b
+monoid_mconcat_inline:
+abc
+monoid_mconcat_blocks:
+a
+b
+c
+template_join:
+a,b,c
+template_vcat_indent:
+  a
+  b
+  c
+template_hcat:
+abc
+template_lines:
+a
+b
+c
+template_block:
+a
+empty_left:
+x
+empty_right:
+x
+interpolation_splice:
+outer:
+inner line
+end
+interpolation_text_splice:
+preXpost
+escape:
+cost is ${amount}

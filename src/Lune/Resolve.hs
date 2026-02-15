@@ -514,6 +514,9 @@ resolveExpr scope expr =
       resolveVar scope name
     S.StringLit _ ->
       Right expr
+    S.TemplateLit flavor parts -> do
+      parts' <- mapM (resolveTemplatePart scope) parts
+      Right (S.TemplateLit flavor parts')
     S.IntLit _ ->
       Right expr
     S.FloatLit _ ->
@@ -545,6 +548,14 @@ resolveExpr scope expr =
       S.RecordUpdate <$> resolveExpr scope base <*> mapM (\(n, e) -> do e' <- resolveExpr scope e; pure (n, e')) fields
     S.FieldAccess base field ->
       resolveFieldAccess scope base field
+
+resolveTemplatePart :: Scope -> S.TemplatePart -> Either ResolveError S.TemplatePart
+resolveTemplatePart scope part =
+  case part of
+    S.TemplateText _ ->
+      Right part
+    S.TemplateHole e ->
+      S.TemplateHole <$> resolveExpr scope e
 
 resolveVar :: Scope -> Text -> Either ResolveError S.Expr
 resolveVar scope name

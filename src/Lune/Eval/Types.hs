@@ -9,6 +9,10 @@ module Lune.Eval.Types
   , FiberState (..)
   , World (..)
   , Value (..)
+  , Template (..)
+  , TemplatePart (..)
+  , TemplateHole (..)
+  , TemplateMeta (..)
   , JsonValue (..)
   , EvalError (..)
   ) where
@@ -17,11 +21,12 @@ import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
+import Data.Sequence (Seq)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
-import Lune.Type (Constraint)
+import Lune.Type (Constraint, Type)
 import qualified Network.Socket as NS
 import qualified Data.ByteString as BS
 import qualified Network.Connection as NC
@@ -91,10 +96,43 @@ data JsonValue
   | JObject [(Text, JsonValue)]
   deriving (Eq, Ord, Show)
 
+data TemplateMeta = TemplateMeta
+  { templateIsEmpty :: !Bool
+  , templateStartsWithNL :: !Bool
+  , templateEndsWithNL :: !Bool
+  , templateIsBlock :: !Bool
+  }
+  deriving (Eq, Ord, Show)
+
+data TemplateHole = TemplateHole
+  { templateHoleType :: !Type
+  , templateHoleSpan :: !(Maybe ()) -- TODO: SourceSpan for error reporting
+  , templateHoleThunk :: !Value
+  }
+
+instance Show TemplateHole where
+  show (TemplateHole ty _ _) =
+    "<hole:" <> show ty <> ">"
+
+data TemplatePart
+  = TText !Text
+  | THole !TemplateHole
+  deriving (Show)
+
+data Template
+  = TemplateLeaf !TemplateMeta !(Seq TemplatePart)
+  | TemplateAppend !TemplateMeta !Template !Template
+  | TemplateIndent !TemplateMeta !Int !Template
+  | TemplateEnsureNL !TemplateMeta !Template
+
+instance Show Template where
+  show _ = "<template>"
+
 data Value
   = VInt Integer
   | VFloat Double
   | VString Text
+  | VTemplate Template
   | VChar Char
   | VTVar TVarId
   | VSTM STMAction
@@ -118,6 +156,7 @@ data EvalError
   | NotAResult Value
   | ExpectedJson Value
   | ExpectedString Value
+  | ExpectedTemplate Value
   | PatternMatchFailure S.Pattern Value
   | NonExhaustiveCase Value
   | NotARecord Value
@@ -135,6 +174,8 @@ instance Show Value where
         show f
       VString s ->
         show (T.unpack s)
+      VTemplate {} ->
+        "<template>"
       VChar c ->
         show c
       VCon name args ->

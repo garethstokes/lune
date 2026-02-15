@@ -8,11 +8,13 @@ module Lune.Eval.Runtime
 import Data.Char (isUpper)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
+import qualified Data.Sequence as Seq
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import qualified Lune.Eval.FFI as FFI
+import qualified Lune.Template as Template
 import Lune.Eval.Types
 import Lune.Type (Type (..))
 
@@ -38,6 +40,17 @@ evalExpr env expr =
 
     C.CString s ->
       Right (VString s)
+
+    C.CTemplate isBlock parts -> do
+      let parts' =
+            [ case p of
+                C.CTemplateText t ->
+                  TText t
+                C.CTemplateHole ty holeExpr ->
+                  THole (TemplateHole ty Nothing (VThunk env holeExpr))
+            | p <- parts
+            ]
+      Right (VTemplate (Template.leaf isBlock (Seq.fromList parts')))
 
     C.CInt n ->
       Right (VInt n)

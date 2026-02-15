@@ -122,7 +122,7 @@ foreignImportDecl = do
 
 typeSigDecl :: Parser Decl
 typeSigDecl = do
-  name <- identifier
+  name <- valueName
   symbol ":"
   ty <- parseQualTypeSameLine
   scn
@@ -130,7 +130,7 @@ typeSigDecl = do
 
 valueDecl :: Parser Decl
 valueDecl = do
-  name <- identifier
+  name <- valueName
   args <- many patternAtom
   symbol "="
   scnOptional
@@ -272,7 +272,7 @@ parseIndentedClassMethodSig ref =
 
 classMethodSig :: Parser ClassMethodSig
 classMethodSig = do
-  name <- identifier
+  name <- valueName
   symbol ":"
   ty <- parseQualTypeWith sc
   pure (ClassMethodSig name ty)
@@ -302,7 +302,7 @@ parseIndentedInstanceMethodDef ref =
 
 instanceMethodDef :: Parser InstanceMethodDef
 instanceMethodDef = do
-  name <- identifier
+  name <- valueName
   symbol "="
   scnOptional
   expr <- parseExpr
@@ -415,8 +415,20 @@ parseExpr =
     [ try parseLetIn
     , try parseCase
     , try parseLambda
-    , parseAppExpr
+    , parseInfixExpr
     ]
+
+-- | Parse low-precedence infix operators.
+--
+-- Currently this is intentionally minimal: we only support the Semigroup
+-- append operator @<>@ as required by the Template feature.
+parseInfixExpr :: Parser Expr
+parseInfixExpr = do
+  first <- parseAppExpr
+  rest <- many (try (infixOp "<>" *> parseAppExpr))
+  pure (foldl (\acc x -> App (App (Var "<>") acc) x) first rest)
+  where
+    infixOp op = scnOptional *> symbol op *> scnOptional
 
 parseAppExpr :: Parser Expr
 parseAppExpr = do
@@ -467,8 +479,10 @@ parseAtom =
     [ try parseDo
     , parseRecord
     , parseListLit
+    , try (Var <$> operatorName)
     , parenExpr
-    , StringLit . T.pack <$> lexeme stringLiteral
+    , try (lexeme parseMultilineTemplateLiteral)
+    , lexeme parseStringTemplateLiteral
     , CharLit <$> lexeme charLiteral
     , try (FloatLit <$> lexeme L.float)
     , IntLit <$> lexeme L.decimal
@@ -488,6 +502,170 @@ parseAtom =
 
     charLiteral :: Parser Char
     charLiteral = char '\'' *> L.charLiteral <* char '\''
+
+parseStringTemplateLiteral :: Parser Expr
+parseStringTemplateLiteral = do
+  _ <- char '"'
+  parts <- manyTill stringPart (char '"')
+  let parts' = mergeTemplateTextParts parts
+  case parts' of
+    [] ->
+      pure (StringLit "")
+    _ ->
+      if any isHole parts'
+        then pure (TemplateLit TemplateInline parts')
+        else pure (StringLit (concatText parts'))
+  where
+    isHole p =
+      case p of
+        TemplateHole {} -> True
+        _ -> False
+
+    concatText =
+      foldMap
+        (\p -> case p of TemplateText t -> t; _ -> "")
+
+    stringPart =
+      choice
+        [ try interpolationPart
+        , textPart
+        ]
+
+    textPart = do
+      chunks <- some stringTextChunk
+      pure (TemplateText (T.concat chunks))
+
+    -- Escaped literal "${" (no interpolation)
+    stringTextChunk =
+      choice
+        [ try (string "\\${" $> "${")
+        , do
+            notFollowedBy (string "${")
+            notFollowedBy (char '"')
+            c <- L.charLiteral
+            pure (T.singleton c)
+        ]
+
+    interpolationPart = do
+      _ <- string "${"
+      scnOptional
+      expr <- parseExpr
+      scnOptional
+      _ <- char '}'
+      pure (TemplateHole expr)
+
+parseMultilineTemplateLiteral :: Parser Expr
+parseMultilineTemplateLiteral = do
+  _ <- string "''"
+  raw <- T.pack <$> manyTill P.anySingle (try (string "''"))
+  content <-
+    case dedentMultilineLiteral raw of
+      Left msg -> fail msg
+      Right t -> pure t
+  parts <-
+    case runParser (templatePartsFromText <* eof) "<template>" content of
+      Left err -> fail (errorBundlePretty err)
+      Right ps -> pure (mergeTemplateTextParts ps)
+  pure (TemplateLit TemplateBlock parts)
+
+-- | Parse a stream of template parts from a 'Text' payload.
+--
+-- Used for multiline template literals after applying dedent/newline stripping.
+templatePartsFromText :: Parser [TemplatePart]
+templatePartsFromText =
+  many $
+    choice
+      [ try interpolationPart
+      , textPart
+      ]
+  where
+    textPart = do
+      chunks <- some blockTextChunk
+      pure (TemplateText (T.concat chunks))
+
+    -- Escaped literal "${" (no interpolation)
+    blockTextChunk =
+      choice
+        [ try (string "\\${" $> "${")
+        , do
+            notFollowedBy (string "${")
+            c <- P.anySingle
+            pure (T.singleton c)
+        ]
+
+    interpolationPart = do
+      _ <- string "${"
+      scnOptional
+      expr <- parseExpr
+      scnOptional
+      _ <- char '}'
+      pure (TemplateHole expr)
+
+-- | Apply Nix-style indentation dedent + edge-newline stripping for @'' ... ''@.
+--
+-- Rules implemented (see SPEC):
+--   B.1 Drop a leading newline immediately after the opener.
+--   B.2 Drop a trailing newline immediately before the closer.
+--   Dedent non-empty lines by the minimum leading-space count.
+--
+-- Tabs are rejected (syntax error); they are not treated as spaces.
+dedentMultilineLiteral :: Text -> Either String Text
+dedentMultilineLiteral raw0
+  | "\t" `T.isInfixOf` raw0 =
+      Left "Tabs are not allowed in '' ... '' template literals (indentation uses spaces only)."
+  | otherwise =
+      Right (stripFinalNewline (dedentBody (stripInitialNewline raw0)))
+  where
+    stripInitialNewline t =
+      fromMaybe t (T.stripPrefix "\n" t)
+
+    stripFinalNewline t =
+      fromMaybe t (T.stripSuffix "\n" t)
+
+    fromMaybe d m =
+      case m of
+        Nothing -> d
+        Just x -> x
+
+    dedentBody t =
+      let ls = T.splitOn "\n" t
+          indents =
+            [ leadingSpaces line
+            | line <- ls
+            , not (isBlankLine line)
+            ]
+          commonIndent =
+            case indents of
+              [] -> 0
+              _ -> minimum indents
+          dedentLine line =
+            if isBlankLine line
+              then dropLeadingSpaces commonIndent line
+              else dropLeadingSpaces commonIndent line
+       in T.intercalate "\n" (map dedentLine ls)
+
+    isBlankLine line =
+      T.all (== ' ') line || T.null line
+
+    leadingSpaces line =
+      T.length (T.takeWhile (== ' ') line)
+
+    dropLeadingSpaces n line =
+      let (prefix, rest) = T.splitAt n line
+       in if T.all (== ' ') prefix then rest else line
+
+mergeTemplateTextParts :: [TemplatePart] -> [TemplatePart]
+mergeTemplateTextParts =
+  go []
+  where
+    go acc [] =
+      reverse acc
+    go acc (p : ps) =
+      case (acc, p) of
+        (TemplateText a : rest, TemplateText b) ->
+          go (TemplateText (a <> b) : rest) ps
+        _ ->
+          go (p : acc) ps
 
 parseListLit :: Parser Expr
 parseListLit = do
@@ -765,6 +943,28 @@ reserved =
   , "alias"
   , "newtype"
   ]
+
+valueName :: Parser Text
+valueName =
+  valueNameWith sc
+
+valueNameWith :: Parser () -> Parser Text
+valueNameWith spaceConsumer =
+  identifierWith spaceConsumer <|> operatorNameWith spaceConsumer
+
+operatorName :: Parser Text
+operatorName =
+  operatorNameWith sc
+
+operatorNameWith :: Parser () -> Parser Text
+operatorNameWith spaceConsumer = L.lexeme spaceConsumer $ do
+  _ <- char '('
+  op <- some (satisfy isOpChar)
+  _ <- char ')'
+  pure (T.pack op)
+  where
+    isOpChar c =
+      c `elem` ("!$%&*+./<=>?@\\^|-~:" :: String)
 
 keyword :: Text -> Parser ()
 keyword word = lexeme (string word *> notFollowedBy (alphaNumChar <|> char '_'))

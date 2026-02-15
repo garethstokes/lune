@@ -26,6 +26,8 @@ desugarExpr expr =
       expr
     StringLit _ ->
       expr
+    TemplateLit flavor parts ->
+      TemplateLit flavor (map desugarTemplatePart parts)
     IntLit _ ->
       expr
     FloatLit _ ->
@@ -48,6 +50,14 @@ desugarExpr expr =
       RecordUpdate (desugarExpr base) [(name, desugarExpr value) | (name, value) <- fields]
     FieldAccess base field ->
       FieldAccess (desugarExpr base) field
+
+desugarTemplatePart :: TemplatePart -> TemplatePart
+desugarTemplatePart part =
+  case part of
+    TemplateText _ ->
+      part
+    TemplateHole e ->
+      TemplateHole (desugarExpr e)
 
 desugarAlt :: Alt -> Alt
 desugarAlt (Alt pat expr) =
