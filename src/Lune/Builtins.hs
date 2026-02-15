@@ -35,7 +35,7 @@ import Lune.Type
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import qualified Network.Connection as NC
-import System.IO.Error (userError)
+import System.IO.Error (isEOFError, userError)
 
 instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
@@ -416,6 +416,8 @@ builtinEvalPrims :: Map Text BuiltinPrim
 builtinEvalPrims =
   Map.fromList
     [ ("prim_putStrLn", BuiltinPrim 1 primPutStrLn)
+    , ("prim_readLine", BuiltinPrim 0 primReadLine)
+    , ("prim_readInt", BuiltinPrim 0 primReadInt)
     , ("prim_parseInt", BuiltinPrim 1 primParseInt)
     , ("prim_addInt", BuiltinPrim 2 primAddInt)
     , ("prim_subInt", BuiltinPrim 2 primSubInt)
@@ -548,6 +550,63 @@ primPutStrLn args =
       Left (NotAFunction (VPrim 1 primPutStrLn args))
   where
     preludeCon' n = "Lune.Prelude." <> n
+
+-- | prim_readLine : IO String
+primReadLine :: [Value] -> Either EvalError Value
+primReadLine [] =
+  Right $ VIO $ \world -> do
+    result <- try TIO.getLine
+    case result of
+      Left (e :: IOException) ->
+        if isEOFError e
+          then pure $ Right (world, VString "")
+          else pure $ Left $ ForeignError ("prim_readLine: " <> T.pack (show e))
+      Right line ->
+        let line' = T.dropWhileEnd (== '\r') line
+        in pure $ Right (world, VString line')
+primReadLine args =
+  Left (NotAFunction (VPrim 0 primReadLine args))
+
+-- | prim_readInt : IO Int
+primReadInt :: [Value] -> Either EvalError Value
+primReadInt [] =
+  Right $ VIO $ \world -> do
+    result <- try TIO.getLine
+    case result of
+      Left (e :: IOException) ->
+        if isEOFError e
+          then pure $ Left $ ForeignError "prim_readInt: EOF"
+          else pure $ Left $ ForeignError ("prim_readInt: " <> T.pack (show e))
+      Right line ->
+        let line' = T.dropWhileEnd (== '\r') line
+        in case parseDecimal line' of
+             Nothing ->
+               pure $ Left $ ForeignError "prim_readInt: invalid int"
+             Just n ->
+               pure $ Right (world, VInt n)
+  where
+    parseDecimal :: Text -> Maybe Integer
+    parseDecimal t
+      | T.null t = Nothing
+      | otherwise = T.foldl' step (Just 0) t
+
+    step :: Maybe Integer -> Char -> Maybe Integer
+    step acc c = do
+      n <- acc
+      case c of
+        '0' -> Just (n * 10 + 0)
+        '1' -> Just (n * 10 + 1)
+        '2' -> Just (n * 10 + 2)
+        '3' -> Just (n * 10 + 3)
+        '4' -> Just (n * 10 + 4)
+        '5' -> Just (n * 10 + 5)
+        '6' -> Just (n * 10 + 6)
+        '7' -> Just (n * 10 + 7)
+        '8' -> Just (n * 10 + 8)
+        '9' -> Just (n * 10 + 9)
+        _ -> Nothing
+primReadInt args =
+  Left (NotAFunction (VPrim 0 primReadInt args))
 
 primShowInt :: [Value] -> Either EvalError Value
 primShowInt args =
