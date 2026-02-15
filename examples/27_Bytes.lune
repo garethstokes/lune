@@ -12,11 +12,11 @@ wire protocols (PostgreSQL, Redis, etc.) in pure Lune.
 -}
 
 import Lune.IO as IO
-import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String)
+import Lune.Prelude exposing (List(..), Result(..))
 import Lune.Bytes as Bytes exposing (Bytes)
 import Lune.String as Str
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "=== Bytes Manipulation Example ==="
@@ -29,7 +29,7 @@ main =
     demoWireProtocol
 
 -- Create bytes from a list of ints
-demoFromList : IO Unit
+demoFromList : Task Unit Unit
 demoFromList =
   do
     IO.println "Creating bytes from [72, 101, 108, 108, 111] (ASCII 'Hello')"
@@ -40,7 +40,7 @@ helloBytes : Bytes
 helloBytes = Bytes.fromList (Cons 72 (Cons 101 (Cons 108 (Cons 108 (Cons 111 Nil)))))
 
 -- Pack and unpack a 32-bit integer
-demoPack32 : IO Unit
+demoPack32 : Task Unit Unit
 demoPack32 =
   do
     IO.println "Packing 305419896 (0x12345678) as 4 bytes big-endian"
@@ -56,7 +56,7 @@ packed32 : Bytes
 packed32 = Bytes.packInt32BE 305419896
 
 -- Pack a 16-bit integer
-demoPack16 : IO Unit
+demoPack16 : Task Unit Unit
 demoPack16 =
   do
     IO.println "Packing 1000 as 2 bytes big-endian"
@@ -72,7 +72,7 @@ packed16 : Bytes
 packed16 = Bytes.packInt16BE 1000
 
 -- Concatenation
-demoConcat : IO Unit
+demoConcat : Task Unit Unit
 demoConcat =
   do
     IO.println "Concatenating 2-byte and 4-byte sequences"
@@ -83,7 +83,7 @@ header : Bytes
 header = Bytes.concat packed16 packed32
 
 -- Slicing
-demoSlice : IO Unit
+demoSlice : Task Unit Unit
 demoSlice =
   do
     IO.println "Slicing bytes 2-6 (the 32-bit portion from header)"
@@ -94,7 +94,7 @@ sliced : Bytes
 sliced = Bytes.slice 2 4 header
 
 -- Wire protocol pattern
-demoWireProtocol : IO Unit
+demoWireProtocol : Task Unit Unit
 demoWireProtocol =
   do
     IO.println "=== Wire Protocol Pattern ==="

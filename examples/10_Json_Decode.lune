@@ -7,9 +7,9 @@ import Lune.Json as Json
 import Lune.Json.Decode as D
 import Lune.Json.Decode exposing (Decoder)
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Unit, Result(..), Maybe(..), String, Float)
+import Lune.Prelude exposing (Float, Maybe(..), Result(..), String)
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "=== JSON Decoding ==="
@@ -17,7 +17,7 @@ main =
     decodeNested
     decodeWithMaybe
 
-decodeUser : IO Unit
+decodeUser : Task Unit Unit
 decodeUser =
   case Json.parse "{\"name\":\"Bob\",\"score\":87.5}" of
     Err msg -> IO.println (Str.append "Parse error: " msg)
@@ -32,7 +32,7 @@ userDecoder =
     (D.field "name" D.string)
     (D.field "score" D.float)
 
-decodeNested : IO Unit
+decodeNested : Task Unit Unit
 decodeNested =
   case Json.parse "{\"data\":{\"value\":42.0}}" of
     Err _ -> IO.println "Parse failed"
@@ -41,7 +41,7 @@ decodeNested =
         Err err -> IO.println (Str.append "Error: " err.message)
         Ok v -> IO.println (Str.append "Nested value: " (Str.fromFloat v))
 
-decodeWithMaybe : IO Unit
+decodeWithMaybe : Task Unit Unit
 decodeWithMaybe =
   case Json.parse "{\"required\":1,\"optional\":null}" of
     Err _ -> IO.println "Parse failed"

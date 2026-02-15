@@ -139,7 +139,7 @@ import Data.List exposing (map, foldl)
 
 ## 5. Expressions
 
-Expressions in Lune are pure unless they return `IO`.
+Expressions in Lune are pure unless they return an effectful type (typically `Task`).
 
 ### 5.1 Expression Forms
 
@@ -489,31 +489,62 @@ All failure is via:
 
 ```haskell
 Result e a
+Task e a
+```
+
+`Task e a` is the primary user-facing effect type. Conceptually, it represents:
+
+```haskell
 IO (Result e a)
 ```
 
-### 14.3 IO Model
+but is implemented as a distinct type constructor so it can have its own
+`Functor`/`Applicative`/`Monad` instance. This allows `do`-notation to
+short-circuit on `Err` automatically.
 
-IO is a monad:
+### 14.3 Task Model
+
+Task is a monad:
 
 ```haskell
-readFile : String -> IO (Result Error String)
-writeFile : String -> String -> IO (Result Error Unit)
+readFile : String -> Task Error String
+writeFile : String -> String -> Task Error Unit
 ```
 
-### 14.4 Network IO
+In `do`-notation, binding a `Task`:
+
+- binds the value inside `Ok`
+- short-circuits the whole `do` block on `Err`
+
+```haskell
+x <- readFile "hello.txt"
+-- If readFile returns Err e, the rest of the block is skipped and the
+-- whole Task returns Err e.
+```
+
+### 14.4 Primitive IO
+
+`IO a` is the primitive runtime effect used by low-level primitives and FFI.
+User code typically uses `Task` instead. You can observe a task as an IO
+result via:
+
+```haskell
+attempt : Task e a -> IO (Result e a)
+```
+
+### 14.5 Network IO
 
 TCP socket operations are available via `Lune.Net.Socket`:
 
 ```haskell
-listen  : Int -> IO (Result Error Socket)
-accept  : Socket -> IO (Result Error Connection)
-connect : String -> Int -> IO (Result Error Connection)
-recv    : Connection -> IO (Result Error String)
-send    : Connection -> String -> IO (Result Error Unit)
+listen  : Int -> Task Error Socket
+accept  : Socket -> Task Error Connection
+connect : String -> Int -> Task Error Connection
+recv    : Connection -> Task Error String
+send    : Connection -> String -> Task Error Unit
 ```
 
-### 14.5 Concurrency
+### 14.6 Concurrency
 
 Lune supports:
 
@@ -523,8 +554,8 @@ Lune supports:
 Core primitives:
 
 ```haskell
-spawn : IO a -> IO (Fiber a)
-atomically : STM a -> IO a
+spawn : Task e a -> Task e2 (Fiber (Result e a))
+commit : Atomic a -> Task e a
 ```
 
 ---
@@ -555,7 +586,7 @@ Lune v0.1 prelude includes:
 - `Bool`, `Int`, `String`
 - `List`, `Maybe`, `Result`
 - `Functor`, `Applicative`, `Monad`
-- `IO`, `STM`, `TVar`, `Fiber`
+- `Task`, `Atomic`, `Shared`
 
 Primitives:
 

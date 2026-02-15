@@ -40,13 +40,14 @@ Currently, only whitelisted C functions can be called:
 module FFI_Puts exposing (main)
 
 import Lune.IO as IO
+import Lune.Task as Task
 
 foreign import ccall "puts" puts : String -> IO Int
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
-    _ <- puts "Hello from C!"
+    _ <- Task.fromIO (puts "Hello from C!")
     IO.println "Hello from Lune!"
 ```
 
@@ -57,13 +58,14 @@ module FFI_Strlen exposing (main)
 
 import Lune.IO as IO
 import Lune.String as Str
+import Lune.Task as Task
 
 foreign import ccall "strlen" strlen : String -> IO Int
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
-    len <- strlen "Hello, World!"
+    len <- Task.fromIO (strlen "Hello, World!")
     IO.println (Str.append "Length: " (Str.fromInt len))
 ```
 

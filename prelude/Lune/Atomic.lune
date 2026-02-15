@@ -15,7 +15,7 @@ This is a surface alias layer over STM-style primitives. Runtime semantics are
 not implemented here; the compiler/runtime provide the `prim_*` hooks.
 -}
 
-import Lune.Prelude exposing (IO, Unit)
+import Lune.Prelude exposing (Task(..), Result(..), Unit)
 
 -- Internal runtime types (not part of the standard library surface).
 type STM a = STM#
@@ -24,8 +24,9 @@ type TVar a = TVar#
 type alias Atomic a = STM a
 type alias Shared a = TVar a
 
-commit : Atomic a -> IO a
-commit = prim_atomically
+commit : Atomic a -> Task e a
+commit ma =
+  Task (prim_ioBind (prim_atomically ma) (\a -> prim_ioPure (Ok a)))
 
 new : a -> Atomic (Shared a)
 new = prim_newTVar

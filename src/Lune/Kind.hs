@@ -87,7 +87,7 @@ builtinKindEnv =
     , ("Quint", kindFromArity 5)
     , ("Atomic", KArr KType KType)
     , ("Shared", KArr KType KType)
-    , ("Task", KArr KType KType)
+    , ("Task", kindFromArity 2)
     ]
 
 builtinClassEnv :: ClassEnv

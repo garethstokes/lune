@@ -32,7 +32,7 @@ Note: Formatting and parsing are handled by the database decoder/encoder,
 which converts PostgreSQL timestamp strings to/from Timestamp values.
 -}
 
-import Lune.Prelude exposing (Int, Bool(..), IO, Applicative(..), Monad(..))
+import Lune.Prelude exposing (Bool(..), Int, Result(..), Task(..))
 import Lune.Int as Int
 
 -- =============================================================================
@@ -47,11 +47,9 @@ type Timestamp = Timestamp Int
 -- =============================================================================
 
 -- | Get the current time
-now : IO Timestamp
+now : Task e Timestamp
 now =
-  do
-    micros <- prim_timeNowMicros
-    pure (Timestamp micros)
+  Task (prim_ioBind prim_timeNowMicros (\micros -> prim_ioPure (Ok (Timestamp micros))))
 
 -- | Create a timestamp from microseconds since epoch
 fromMicros : Int -> Timestamp

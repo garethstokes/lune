@@ -99,7 +99,7 @@ codegenModule rtImportPath (C.CoreModule modName decls) = do
           ])
         <>
       [ "func main() {"
-      , "  rt.RunIO(rt.MustIO(" <> mainGoName <> "()))"
+      , "  rt.RunIO(rt.AsIO(" <> mainGoName <> "()))"
       , "}"
       , ""
       ]
@@ -476,6 +476,8 @@ isSupportedPrimitive name =
       , "prim_ioPure"
       , "$primIOBind"
       , "$primIOThen"
+      , "prim_ioBind"
+      , "prim_ioThen"
       , "$primSTMPure"
       , "$primSTMBind"
       , "prim_newTVar"

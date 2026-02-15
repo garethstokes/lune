@@ -18,7 +18,7 @@ trySecond : Shared Int -> Atomic Unit
 trySecond tv =
   Atomic.write tv 42
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "Testing orElse:"

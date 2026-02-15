@@ -1,15 +1,13 @@
 module FileRead exposing (main)
 
 import Lune.IO as IO
-import Lune.String as Str
-import Lune.Prelude exposing (Result(..))
+import Lune.Task as Task
 
-main : IO Unit
+main : Task Unit Unit
 main =
-  do
-    result <- IO.readFile "README.md"
-    case result of
-      Ok _ ->
-        IO.println "Successfully read README.md"
-      Err _ ->
-        IO.println "Error reading file"
+  Task.onError
+    (do
+      _ <- IO.readFile "README.md"
+      IO.println "Successfully read README.md"
+    )
+    (\_ -> IO.println "Error reading file")

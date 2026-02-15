@@ -259,6 +259,16 @@ func MustIO(v Value) IO {
 	return io
 }
 
+func AsIO(v Value) IO {
+	if io, ok := v.(IO); ok {
+		return io
+	}
+	if args, ok := MatchCon(v, "Lune.Prelude.Task", 1); ok {
+		return MustIO(args[0])
+	}
+	panic(fmt.Sprintf("rt.AsIO: expected IO or Task, got %T", v))
+}
+
 func expectAtomic(v Value, ctx string) Atomic {
 	a, ok := v.(Atomic)
 	if !ok {
@@ -1318,7 +1328,7 @@ func Builtin(name string) Value {
 			x := args[0]
 			return IO(func() Value { return x })
 		})
-	case "$primIOBind":
+	case "$primIOBind", "prim_ioBind":
 		return NewPrim(2, func(args []Value) Value {
 			ma := MustIO(args[0])
 			k := args[1]
@@ -1328,7 +1338,7 @@ func Builtin(name string) Value {
 				return mb()
 			})
 		})
-	case "$primIOThen":
+	case "$primIOThen", "prim_ioThen":
 		return NewPrim(2, func(args []Value) Value {
 			ma := MustIO(args[0])
 			mb := MustIO(args[1])

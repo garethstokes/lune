@@ -69,7 +69,6 @@ It re-exports the core types and typeclasses required for most programs.
 
 #### Exported effect and concurrency types
 
-- `IO`
 - `Atomic`, `Shared`
 - `Task`
 
@@ -170,19 +169,20 @@ Exports:
 
 Exports:
 
-- `println  : String -> IO Unit`
-- `readLine : IO String`
-- `readInt  : IO Int`
-- `sleepMs  : Int -> IO Unit`
-- `readFile : String -> IO (Result Error String)`
-- `writeFile : String -> String -> IO (Result Error Unit)`
+- `println  : String -> Task e Unit`
+- `readLine : Task e String`
+- `readInt  : Task e Int`
+- `sleepMs  : Int -> Task e Unit`
+- `readFile : String -> Task Error String`
+- `writeFile : String -> String -> Task Error Unit`
 
 Types:
 
 - `type Error`
 
-The `IO` effect represents interaction with the external world.
-All observable side effects must occur within `IO`.
+The `Lune.IO` module provides user-facing world interaction via `Task`.
+The primitive `IO` type still exists for low-level primitives and FFI, but
+most user code should use `Task`.
 
 ---
 
@@ -195,18 +195,18 @@ Types:
 - `type Connection`
 
 Functions:
-- `listen      : Int -> IO (Result Error Socket)`
-- `accept      : Socket -> IO (Result Error Connection)`
-- `connect     : String -> Int -> IO (Result Error Connection)`
-- `recv        : Connection -> IO (Result Error String)`
-- `send        : Connection -> String -> IO (Result Error Unit)`
-- `closeConn   : Connection -> IO (Result Error Unit)`
-- `closeSocket : Socket -> IO (Result Error Unit)`
+- `listen      : Int -> Task Error Socket`
+- `accept      : Socket -> Task Error Connection`
+- `connect     : String -> Int -> Task Error Connection`
+- `recv        : Connection -> Task Error String`
+- `send        : Connection -> String -> Task Error Unit`
+- `closeConn   : Connection -> Task Error Unit`
+- `closeSocket : Socket -> Task Error Unit`
 
 The `Socket` type represents a listening TCP socket bound to a port.
 The `Connection` type represents an established TCP connection.
 
-All socket operations return `Result Error a` to allow graceful error handling.
+All socket operations use `Task Error a` to allow graceful error handling.
 
 ---
 
@@ -268,10 +268,10 @@ Shared state may only be accessed within the `Atomic` effect.
 
 Exports:
 
-- `commit : Atomic a -> IO a`
+- `commit : Atomic a -> Task e a`
 
 `commit` executes an atomic computation and makes its effects visible
-atomically within `IO`.
+atomically within `Task`.
 
 ### 9.4 Shared state operations
 
@@ -293,25 +293,49 @@ the observed shared values changes.
 
 ---
 
-## 10. Concurrency tasks
+## 10. Task effect
 
 ### 10.1 Lune.Task
 
 Exports:
 
 Types:
-- `Task a`
+- `Task e a`
 
 Functions:
-- `start : IO a -> IO (Task a)`
-- `await : Task a -> IO a`
-- `yield : IO Unit`
+- `succeed : a -> Task e a`
+- `fail : e -> Task e a`
+- `map : (a -> b) -> Task e a -> Task e b`
+- `andThen : Task e a -> (a -> Task e b) -> Task e b`
+- `then : Task e a -> Task e b -> Task e b`
+- `mapError : (e -> e2) -> Task e a -> Task e2 a`
+- `onError : Task e a -> (e -> Task e2 a) -> Task e2 a`
+- `fromIO : IO a -> Task e a`
+- `attempt : Task e a -> IO (Result e a)`
 
-Tasks represent lightweight concurrent computations scheduled by the runtime.
+`Task e a` represents suspendable world interaction with typed failure.
+
+In `do`-notation, binding a `Task` short-circuits the block on `Err`.
 
 ---
 
-## 11. Typeclasses
+## 11. Fibers
+
+### 11.1 Lune.Fiber
+
+Exports:
+
+Types:
+- `Fiber a`
+
+Functions:
+- `spawn : Task e a -> Task e2 (Fiber (Result e a))`
+- `await : Fiber (Result e a) -> Task e a`
+- `yield : Task e Unit`
+
+---
+
+## 12. Typeclasses
 
 ### 11.1 Functor
 
@@ -341,7 +365,7 @@ do-notation.
 
 ---
 
-## 12. Non-goals and internal identifiers
+## 13. Non-goals and internal identifiers
 
 The following are explicitly **not** part of the standard library API:
 
@@ -355,10 +379,10 @@ These identifiers may exist internally but are not visible to user code.
 
 ---
 
-## 13. Example
+## 14. Example
 
 ```
-increment : Shared Int -> IO Unit
+increment : Shared Int -> Task e Unit
 increment counter =
   Atomic.commit do
     x <- Atomic.read counter
@@ -367,7 +391,7 @@ increment counter =
 
 ---
 
-## 14. Versioning
+## 15. Versioning
 
 This document defines the standard library surface for **Lune v0.1**.
 Changes to exported names or semantics require a new version of this

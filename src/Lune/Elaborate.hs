@@ -646,6 +646,8 @@ buildDictCandidates aliasEnv instanceEnv =
       case headCon of
         "Result" ->
           TApp (TCon "Result") (TVar "e")
+        "Task" ->
+          TApp (TCon "Task") (TVar "e")
         other ->
           TCon other
 
@@ -659,6 +661,11 @@ ctorsFromDecl aliasEnv decl =
     S.DeclType typeName vars ctors ->
       let resultTy = foldl TApp (TCon typeName) (map TVar vars)
        in map (ctorScheme vars resultTy) ctors
+    S.DeclNewtype typeName vars ctorName ctorTy ->
+      let resultTy = foldl TApp (TCon typeName) (map TVar vars)
+          argTy = expandAliases aliasEnv (convertType aliasEnv ctorTy)
+          ty = TArrow argTy resultTy
+       in [(ctorName, Forall vars [] ty)]
     _ ->
       []
   where

@@ -1,24 +1,92 @@
 module Lune.Task exposing (
-  Task,
-  start,
-  await,
-  yield
+  succeed,
+  fail,
+  fromIO,
+  map,
+  andThen,
+  then,
+  mapError,
+  onError,
+  attempt
 )
 
-{-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
+{-| `Task e a` is the primary user-facing effect in Lune.
 
-import Lune.Prelude exposing (IO, Unit)
+It represents an effectful computation that may fail with an error `e`
+or succeed with a value `a`.
+-}
 
--- Internal runtime type (not part of the standard library surface).
-type Fiber a = Fiber#
+import Lune.Prelude exposing (Task(..), Result(..))
 
-type alias Task a = Fiber a
+succeed : a -> Task e a
+succeed a =
+  Task (prim_ioPure (Ok a))
 
-start : IO a -> IO (Task a)
-start = prim_spawn
+fail : e -> Task e a
+fail e =
+  Task (prim_ioPure (Err e))
 
-await : Task a -> IO a
-await = prim_await
+fromIO : IO a -> Task e a
+fromIO io =
+  Task (prim_ioBind io (\a -> prim_ioPure (Ok a)))
 
-yield : IO Unit
-yield = prim_yield
+map : (a -> b) -> Task e a -> Task e b
+map f task =
+  case task of
+    Task io ->
+      Task
+        ( prim_ioBind io (\r ->
+            case r of
+              Err e -> prim_ioPure (Err e)
+              Ok a -> prim_ioPure (Ok (f a))
+          )
+        )
+
+andThen : Task e a -> (a -> Task e b) -> Task e b
+andThen task k =
+  case task of
+    Task io ->
+      Task
+        ( prim_ioBind io (\r ->
+            case r of
+              Err e -> prim_ioPure (Err e)
+              Ok a ->
+                case k a of
+                  Task io2 -> io2
+          )
+        )
+
+then : Task e a -> Task e b -> Task e b
+then ta tb =
+  andThen ta (\_ -> tb)
+
+mapError : (e -> e2) -> Task e a -> Task e2 a
+mapError f task =
+  case task of
+    Task io ->
+      Task
+        ( prim_ioBind io (\r ->
+            case r of
+              Err e -> prim_ioPure (Err (f e))
+              Ok a -> prim_ioPure (Ok a)
+          )
+        )
+
+onError : Task e a -> (e -> Task e2 a) -> Task e2 a
+onError task handler =
+  case task of
+    Task io ->
+      Task
+        ( prim_ioBind io (\r ->
+            case r of
+              Ok a -> prim_ioPure (Ok a)
+              Err e ->
+                case handler e of
+                  Task io2 -> io2
+          )
+        )
+
+attempt : Task e a -> IO (Result e a)
+attempt task =
+  case task of
+    Task io -> io

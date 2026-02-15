@@ -5,9 +5,8 @@ import Lune.Http as Http
 import Lune.Json.Encode as E
 import Lune.Json as Json
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Unit)
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     let r1 = Http.ok "hello"

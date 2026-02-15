@@ -2,45 +2,42 @@ module EchoServer exposing (main)
 
 import Lune.IO as IO
 import Lune.Net.Socket as Socket
+import Lune.Task as Task
 import Lune.String as Str
-import Lune.Prelude exposing (Result(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "Starting echo server on port 8080..."
-    socketResult <- Socket.listen 8080
-    case socketResult of
-      Err _ ->
-        IO.println "Failed to listen"
-      Ok sock ->
-        do
-          IO.println "Waiting for connection..."
-          connResult <- Socket.accept sock
-          case connResult of
-            Err _ ->
-              IO.println "Accept failed"
-            Ok conn ->
-              do
-                IO.println "Client connected!"
-                handleClient conn
-                _ <- Socket.closeConn conn
-                _ <- Socket.closeSocket sock
-                IO.println "Server shutdown"
+    Task.onError
+      (do
+        sock <- Socket.listen 8080
+        IO.println "Waiting for connection..."
+        Task.onError
+          (do
+            conn <- Socket.accept sock
+            IO.println "Client connected!"
+            handleClient conn
+            _ <- Task.onError (Socket.closeConn conn) (\_ -> Task.succeed unit)
+            _ <- Task.onError (Socket.closeSocket sock) (\_ -> Task.succeed unit)
+            IO.println "Server shutdown"
+          )
+          (\_ -> IO.println "Accept failed")
+      )
+      (\_ -> IO.println "Failed to listen")
 
-handleClient : Socket.Connection -> IO Unit
+handleClient : Socket.Connection -> Task Error Unit
 handleClient conn =
-  do
-    recvResult <- Socket.recv conn
-    case recvResult of
-      Err _ ->
-        IO.println "Recv error"
-      Ok msg ->
-        case Str.eq msg "" of
-          True ->
-            IO.println "Client disconnected"
-          False ->
-            do
-              IO.println (Str.append "Received: " msg)
-              _ <- Socket.send conn (Str.append "Echo: " msg)
-              handleClient conn
+  Task.onError
+    (do
+      msg <- Socket.recv conn
+      case Str.eq msg "" of
+        True ->
+          IO.println "Client disconnected"
+        False ->
+          do
+            IO.println (Str.append "Received: " msg)
+            _ <- Task.onError (Socket.send conn (Str.append "Echo: " msg)) (\_ -> Task.succeed unit)
+            handleClient conn
+    )
+    (\_ -> IO.println "Recv error")

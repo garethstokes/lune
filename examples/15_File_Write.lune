@@ -1,21 +1,19 @@
 module FileWrite exposing (main)
 
 import Lune.IO as IO
+import Lune.Task as Task
 import Lune.String as Str
-import Lune.Prelude exposing (Result(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
-  do
-    writeResult <- IO.writeFile "/tmp/lune-test.txt" "Hello from Lune!"
-    case writeResult of
-      Ok _ ->
-        do
-          readResult <- IO.readFile "/tmp/lune-test.txt"
-          case readResult of
-            Ok contents ->
-              IO.println (Str.append "Wrote and read: " contents)
-            Err _ ->
-              IO.println "Read error"
-      Err _ ->
-        IO.println "Write error"
+  Task.onError
+    (do
+      _ <- IO.writeFile "/tmp/lune-test.txt" "Hello from Lune!"
+      Task.onError
+        (do
+          contents <- IO.readFile "/tmp/lune-test.txt"
+          IO.println (Str.append "Wrote and read: " contents)
+        )
+        (\_ -> IO.println "Read error")
+    )
+    (\_ -> IO.println "Write error")

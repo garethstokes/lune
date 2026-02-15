@@ -117,6 +117,8 @@ builtinSchemes =
     , ("prim_ioPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
     , ("$primIOBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
     , ("$primIOThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
+    , ("prim_ioBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
+    , ("prim_ioThen", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TApp (TCon "IO") (TVar "b")) (TApp (TCon "IO") (TVar "b")))))
     , ("$primSTMPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "STM") (TVar "a"))))
     , ("$primSTMBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "STM") (TVar "b"))) (TApp (TCon "STM") (TVar "b")))))
     -- Socket primitives
@@ -179,6 +181,9 @@ builtinInstanceDicts =
     [ (("Functor", "IO"), instanceDictName "Functor" "IO")
     , (("Applicative", "IO"), instanceDictName "Applicative" "IO")
     , (("Monad", "IO"), instanceDictName "Monad" "IO")
+    , (("Functor", "Task"), instanceDictName "Functor" "Task")
+    , (("Applicative", "Task"), instanceDictName "Applicative" "Task")
+    , (("Monad", "Task"), instanceDictName "Monad" "Task")
     , (("Functor", "Result"), instanceDictName "Functor" "Result")
     , (("Applicative", "Result"), instanceDictName "Applicative" "Result")
     , (("Monad", "Result"), instanceDictName "Monad" "Result")
@@ -192,6 +197,9 @@ builtinCoreDecls =
   [ dictFunctorIO
   , dictApplicativeIO
   , dictMonadIO
+  , dictFunctorTask
+  , dictApplicativeTask
+  , dictMonadTask
   , dictFunctorResult
   , dictApplicativeResult
   , dictMonadResult
@@ -203,6 +211,7 @@ builtinCoreDecls =
     preludeCon n = "Lune.Prelude." <> n
     conOk = preludeCon "Ok"
     conErr = preludeCon "Err"
+    conTask = preludeCon "Task"
 
     dictFunctorIO =
       C.CoreDecl
@@ -261,6 +270,222 @@ builtinCoreDecls =
             , ("then", C.CVar "$primIOThen")
             ]
         )
+
+    dictFunctorTask =
+      C.CoreDecl
+        (instanceDictName "Functor" "Task")
+        ( C.CRecord
+            [ ( "map"
+              , C.CLam
+                  [S.PVar "f", S.PVar "ta"]
+                  ( C.CCase
+                      (C.CVar "ta")
+                      [ C.CoreAlt
+                          (S.PCon conTask [S.PVar "io"])
+                          ( C.CApp
+                              (C.CVar conTask)
+                              ( C.CApp
+                                  (C.CApp (C.CVar "$primIOBind") (C.CVar "io"))
+                                  ( C.CLam
+                                      [S.PVar "r"]
+                                      ( C.CCase
+                                          (C.CVar "r")
+                                          [ C.CoreAlt
+                                              (S.PCon conErr [S.PVar "e"])
+                                              ( C.CApp
+                                                  (C.CVar "$primIOPure")
+                                                  (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                              )
+                                          , C.CoreAlt
+                                              (S.PCon conOk [S.PVar "a"])
+                                              ( C.CApp
+                                                  (C.CVar "$primIOPure")
+                                                  ( C.CApp
+                                                      (C.CVar conOk)
+                                                      (C.CApp (C.CVar "f") (C.CVar "a"))
+                                                  )
+                                              )
+                                          ]
+                                      )
+                                  )
+                              )
+                          )
+                      ]
+                  )
+              )
+            ]
+        )
+
+    dictApplicativeTask =
+      C.CoreDecl
+        (instanceDictName "Applicative" "Task")
+        ( C.CRecord
+            [ ("$superFunctor", C.CVar (instanceDictName "Functor" "Task"))
+            , ( "pure"
+              , C.CLam
+                  [S.PVar "a"]
+                  ( C.CApp
+                      (C.CVar conTask)
+                      ( C.CApp
+                          (C.CVar "$primIOPure")
+                          (C.CApp (C.CVar conOk) (C.CVar "a"))
+                      )
+                  )
+              )
+            , ("apply", applicativeApplyTask)
+            ]
+        )
+      where
+        applicativeApplyTask =
+          C.CLam
+            [S.PVar "tf", S.PVar "ta"]
+            ( C.CCase
+                (C.CVar "tf")
+                [ C.CoreAlt
+                    (S.PCon conTask [S.PVar "ioF"])
+                    ( C.CCase
+                        (C.CVar "ta")
+                        [ C.CoreAlt
+                            (S.PCon conTask [S.PVar "ioA"])
+                            ( C.CApp
+                                (C.CVar conTask)
+                                ( C.CApp
+                                    (C.CApp (C.CVar "$primIOBind") (C.CVar "ioF"))
+                                    ( C.CLam
+                                        [S.PVar "rf"]
+                                        ( C.CCase
+                                            (C.CVar "rf")
+                                            [ C.CoreAlt
+                                                (S.PCon conErr [S.PVar "e"])
+                                                ( C.CApp
+                                                    (C.CVar "$primIOPure")
+                                                    (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                                )
+                                            , C.CoreAlt
+                                                (S.PCon conOk [S.PVar "f"])
+                                                ( C.CApp
+                                                    (C.CApp (C.CVar "$primIOBind") (C.CVar "ioA"))
+                                                    ( C.CLam
+                                                        [S.PVar "ra"]
+                                                        ( C.CCase
+                                                            (C.CVar "ra")
+                                                            [ C.CoreAlt
+                                                                (S.PCon conErr [S.PVar "e"])
+                                                                ( C.CApp
+                                                                    (C.CVar "$primIOPure")
+                                                                    (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                                                )
+                                                            , C.CoreAlt
+                                                                (S.PCon conOk [S.PVar "a"])
+                                                                ( C.CApp
+                                                                    (C.CVar "$primIOPure")
+                                                                    ( C.CApp
+                                                                        (C.CVar conOk)
+                                                                        ( C.CApp
+                                                                            (C.CVar "f")
+                                                                            (C.CVar "a")
+                                                                        )
+                                                                    )
+                                                                )
+                                                            ]
+                                                        )
+                                                    )
+                                                )
+                                            ]
+                                        )
+                                    )
+                                )
+                            )
+                        ]
+                    )
+                ]
+            )
+
+    dictMonadTask =
+      C.CoreDecl
+        (instanceDictName "Monad" "Task")
+        ( C.CRecord
+            [ ("$superApplicative", C.CVar (instanceDictName "Applicative" "Task"))
+            , ("andThen", monadAndThenTask)
+            , ("then", monadThenTask)
+            ]
+        )
+      where
+        monadAndThenTask =
+          C.CLam
+            [S.PVar "ta", S.PVar "k"]
+            ( C.CCase
+                (C.CVar "ta")
+                [ C.CoreAlt
+                    (S.PCon conTask [S.PVar "io"])
+                    ( C.CApp
+                        (C.CVar conTask)
+                        ( C.CApp
+                            (C.CApp (C.CVar "$primIOBind") (C.CVar "io"))
+                            ( C.CLam
+                                [S.PVar "r"]
+                                ( C.CCase
+                                    (C.CVar "r")
+                                    [ C.CoreAlt
+                                        (S.PCon conErr [S.PVar "e"])
+                                        ( C.CApp
+                                            (C.CVar "$primIOPure")
+                                            (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                        )
+                                    , C.CoreAlt
+                                        (S.PCon conOk [S.PVar "a"])
+                                        ( C.CCase
+                                            (C.CApp (C.CVar "k") (C.CVar "a"))
+                                            [ C.CoreAlt
+                                                (S.PCon conTask [S.PVar "io2"])
+                                                (C.CVar "io2")
+                                            ]
+                                        )
+                                    ]
+                                )
+                            )
+                        )
+                    )
+                ]
+            )
+
+        monadThenTask =
+          C.CLam
+            [S.PVar "ta", S.PVar "tb"]
+            ( C.CCase
+                (C.CVar "ta")
+                [ C.CoreAlt
+                    (S.PCon conTask [S.PVar "ioA"])
+                    ( C.CCase
+                        (C.CVar "tb")
+                        [ C.CoreAlt
+                            (S.PCon conTask [S.PVar "ioB"])
+                            ( C.CApp
+                                (C.CVar conTask)
+                                ( C.CApp
+                                    (C.CApp (C.CVar "$primIOBind") (C.CVar "ioA"))
+                                    ( C.CLam
+                                        [S.PVar "r"]
+                                        ( C.CCase
+                                            (C.CVar "r")
+                                            [ C.CoreAlt
+                                                (S.PCon conErr [S.PVar "e"])
+                                                ( C.CApp
+                                                    (C.CVar "$primIOPure")
+                                                    (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                                )
+                                            , C.CoreAlt
+                                                (S.PCon conOk [S.PWildcard])
+                                                (C.CVar "ioB")
+                                            ]
+                                        )
+                                    )
+                                )
+                            )
+                        ]
+                    )
+                ]
+            )
 
     dictFunctorResult =
       C.CoreDecl
@@ -453,6 +678,8 @@ builtinEvalPrims =
     , ("prim_ioPure", BuiltinPrim 1 primIOPure)
     , ("$primIOBind", BuiltinPrim 2 primIOBind)
     , ("$primIOThen", BuiltinPrim 2 primIOThen)
+    , ("prim_ioBind", BuiltinPrim 2 primIOBind)
+    , ("prim_ioThen", BuiltinPrim 2 primIOThen)
     -- JSON primitives
     , ("prim_jsonParse", BuiltinPrim 1 primJsonParse)
     , ("prim_jsonStringify", BuiltinPrim 1 primJsonStringify)

@@ -9,11 +9,11 @@ module Lune.Http.Api exposing (
   fail
 )
 
-import Lune.Prelude exposing (IO, Result(..), Maybe(..), Unit, List(..), Int, Bool(..), String, unit)
-import Lune.IO as IO
+import Lune.Prelude exposing (Bool(..), Int, List(..), Maybe(..), Result(..), String, Unit)
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.Http.Server as Server
 import Lune.String as Str
+import Lune.Task as Task
 import Lune.Json as Json
 import Lune.Json.Decode as D
 
@@ -26,18 +26,18 @@ type alias ServerConfig e ctx =
 type alias Route e ctx =
   { method : Method
   , pattern : String
-  , handler : Request -> ctx -> IO (Result e Response)
+  , handler : Request -> ctx -> Task e Response
   }
 
 type alias Routes e ctx = List (Route e ctx)
 
-pure : a -> IO (Result e a)
-pure a = IO.pure (Ok a)
+pure : a -> Task e a
+pure = Task.succeed
 
-fail : e -> IO (Result e a)
-fail e = IO.pure (Err e)
+fail : e -> Task e a
+fail = Task.fail
 
-orFail : e -> Maybe a -> IO (Result e a)
+orFail : e -> Maybe a -> Task e a
 orFail err maybe =
   case maybe of
     Nothing -> fail err
@@ -52,21 +52,19 @@ jsonBody toErr decoder request =
         Err decodeErr -> Err (toErr decodeErr.message)
         Ok value -> Ok value
 
-serve : ServerConfig e ctx -> Routes e ctx -> IO Unit
+serve : ServerConfig e ctx -> Routes e ctx -> Task Error Unit
 serve config routes =
   Server.serve config.port (handleRequest config routes)
 
-handleRequest : ServerConfig e ctx -> Routes e ctx -> Request -> IO Response
+handleRequest : ServerConfig e ctx -> Routes e ctx -> Request -> Task Error Response
 handleRequest config routes request =
   case findMatchingRoute request routes of
     Nothing ->
-      IO.pure notFoundResponse
+      Task.succeed notFoundResponse
     Just route ->
-      do
-        result <- route.handler request config.context
-        case result of
-          Err e -> IO.pure (config.errorHandler e)
-          Ok response -> IO.pure response
+      Task.onError
+        (route.handler request config.context)
+        (\e -> Task.succeed (config.errorHandler e))
 
 findMatchingRoute : Request -> Routes e ctx -> Maybe (Route e ctx)
 findMatchingRoute request routes =

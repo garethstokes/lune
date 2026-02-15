@@ -29,7 +29,7 @@ case result of
 ```
 -}
 
-import Lune.Prelude exposing (IO, Result, Int, String, Unit)
+import Lune.Prelude exposing (Int, String, Task(..), Unit)
 import Lune.IO exposing (Error)
 import Lune.Bytes exposing (Bytes)
 
@@ -38,18 +38,22 @@ type TlsConn = TlsConn#
 
 -- | Connect to a host over TLS
 -- Parameters: hostname, port
-connect : String -> Int -> IO (Result Error TlsConn)
-connect = prim_tlsConnect
+connect : String -> Int -> Task Error TlsConn
+connect host port =
+  Task (prim_tlsConnect host port)
 
 -- | Send bytes over a TLS connection
-sendBytes : TlsConn -> Bytes -> IO (Result Error Unit)
-sendBytes = prim_tlsSendBytes
+sendBytes : TlsConn -> Bytes -> Task Error Unit
+sendBytes conn bytes =
+  Task (prim_tlsSendBytes conn bytes)
 
 -- | Receive up to N bytes from a TLS connection
 -- Returns as soon as data is available (may be less than N)
-recvBytes : TlsConn -> Int -> IO (Result Error Bytes)
-recvBytes = prim_tlsRecvBytes
+recvBytes : TlsConn -> Int -> Task Error Bytes
+recvBytes conn n =
+  Task (prim_tlsRecvBytes conn n)
 
 -- | Close a TLS connection
-close : TlsConn -> IO (Result Error Unit)
-close = prim_tlsClose
+close : TlsConn -> Task Error Unit
+close conn =
+  Task (prim_tlsClose conn)

@@ -17,12 +17,18 @@ import Lune.Eval.Types
 import Lune.Type (Type (..))
 
 runIO :: Value -> IO (Either EvalError (World, Value))
-runIO v =
-  case v of
-    VIO act ->
-      act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing)
-    other ->
-      pure (Left (NotAnIO other))
+runIO v = do
+  case force v of
+    Left err ->
+      pure (Left err)
+    Right v' ->
+      case v' of
+        VIO act ->
+          act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing)
+        VCon "Lune.Prelude.Task" [io] ->
+          runIO io
+        other ->
+          pure (Left (NotAnIO other))
 
 evalExpr :: Env -> C.CoreExpr -> Either EvalError Value
 evalExpr env expr =

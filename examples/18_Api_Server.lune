@@ -1,14 +1,12 @@
 module ApiServer exposing (main)
 
-import Lune.IO as IO
 import Lune.Http.Api as Api
 import Lune.Http.Api exposing (ServerConfig, Routes)
 import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.Json as Json
 import Lune.Json.Encode as E
-import Lune.String as Str
-import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..), Int, String)
+import Lune.Task as Task
 
 -- Error type
 type AppError =
@@ -79,16 +77,15 @@ routes =
     , Route.post "/users" createUserHandler
     ]
 
--- Handlers now return IO (Result e Response) directly
-healthHandler : Request -> Context -> IO (Result AppError Response)
+healthHandler : Request -> Context -> Task AppError Response
 healthHandler request ctx =
   Api.pure (jsonResponse 200 (encodeHealth { status = "ok" }))
 
-getUserHandler : Request -> Context -> IO (Result AppError Response)
+getUserHandler : Request -> Context -> Task AppError Response
 getUserHandler request ctx =
   Api.pure (jsonResponse 200 (encodeUser { id = 123, name = "Alice" }))
 
-createUserHandler : Request -> Context -> IO (Result AppError Response)
+createUserHandler : Request -> Context -> Task AppError Response
 createUserHandler request ctx =
   Api.pure (jsonResponse 201 (encodeUser { id = 456, name = "Created" }))
 
@@ -99,5 +96,8 @@ config =
   , context = { appName = "MyApp" }
   }
 
-main : IO Unit
-main = Api.serve config routes
+main : Task Unit Unit
+main =
+  Task.onError
+    (Api.serve config routes)
+    (\_ -> Task.succeed unit)

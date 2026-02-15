@@ -8,7 +8,7 @@ This example shows how to use the derive macro to automatically generate:
 - CRUD helper functions (findById, findAll, insert, update, delete)
 -}
 
-import Lune.Prelude exposing (Bool, Int, String, Maybe(..), List(..), IO, Unit)
+import Lune.Prelude exposing (Bool, Int, String, Maybe(..), List(..))
 import Lune.Database.Query exposing (getSql, getParams, eq, where_)
 import Lune.Database exposing (DbValue(..))
 import Lune.Database.Decode exposing (timestamp)

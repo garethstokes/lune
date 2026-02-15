@@ -53,7 +53,7 @@ cabal run lune -- --eval examples/00_Hello.lune
 | Module system with imports | Working |
 | JSON parsing/encoding | Working |
 | Multi-line function application | Working |
-| Concurrency (Tasks, STM) | Working |
+| Concurrency (Fibers, STM) | Working |
 | File I/O (read/write) | Working |
 | TCP Sockets | Working |
 | Web Framework (Api monad) | Basic (JSON APIs) |
@@ -87,7 +87,7 @@ import Lune.IO as IO
 import Lune.Int as Int
 import Lune.String as Str
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "Hello, Lune!"
@@ -102,23 +102,23 @@ module ConcurrencyDemo exposing (main)
 
 import Lune.IO as IO
 import Lune.Atomic as Atomic
-import Lune.Task as Task
+import Lune.Fiber as Fiber
 import Lune.String as Str
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     counter <- Atomic.commit (Atomic.new 0)
-    t1 <- Task.start (increment counter)
-    t2 <- Task.start (increment counter)
-    _ <- Task.yield
-    _ <- Task.yield
-    _ <- Task.await t1
-    _ <- Task.await t2
+    f1 <- Fiber.spawn (increment counter)
+    f2 <- Fiber.spawn (increment counter)
+    _ <- Fiber.yield
+    _ <- Fiber.yield
+    _ <- Fiber.await f1
+    _ <- Fiber.await f2
     n <- Atomic.commit (Atomic.read counter)
     IO.println (Str.append "Final: " (Str.fromInt n))
 
-increment : Shared Int -> IO Unit
+increment : Shared Int -> Task Unit Unit
 increment tv =
   do
     _ <- Atomic.commit
@@ -135,17 +135,18 @@ increment tv =
 module FileDemo exposing (main)
 
 import Lune.IO as IO
+import Lune.Task as Task
 import Lune.String as Str
-import Lune.Prelude exposing (Result(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
-  do
-    _ <- IO.writeFile "/tmp/test.txt" "Hello from Lune!"
-    result <- IO.readFile "/tmp/test.txt"
-    case result of
-      Ok contents -> IO.println (Str.append "Read: " contents)
-      Err _ -> IO.println "Error reading file"
+  Task.onError
+    (do
+      _ <- IO.writeFile "/tmp/test.txt" "Hello from Lune!"
+      contents <- IO.readFile "/tmp/test.txt"
+      IO.println (Str.append "Read: " contents)
+    )
+    (\_ -> IO.println "Error reading file")
 ```
 
 ## TCP Socket Example
@@ -154,29 +155,23 @@ main =
 module EchoServer exposing (main)
 
 import Lune.IO as IO
+import Lune.Task as Task
 import Lune.Net.Socket as Socket
 import Lune.String as Str
-import Lune.Prelude exposing (Result(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
-  do
-    socketResult <- Socket.listen 8080
-    case socketResult of
-      Err _ -> IO.println "Failed to listen"
-      Ok sock ->
-        do
-          connResult <- Socket.accept sock
-          case connResult of
-            Err _ -> IO.println "Accept failed"
-            Ok conn ->
-              do
-                recvResult <- Socket.recv conn
-                case recvResult of
-                  Ok msg -> Socket.send conn (Str.append "Echo: " msg)
-                  Err _ -> IO.println "Recv error"
-                _ <- Socket.closeConn conn
-                Socket.closeSocket sock
+  Task.onError
+    (do
+      sock <- Socket.listen 8080
+      conn <- Socket.accept sock
+      msg <- Socket.recv conn
+      _ <- Socket.send conn (Str.append "Echo: " msg)
+      _ <- Socket.closeConn conn
+      _ <- Socket.closeSocket sock
+      IO.println "Done"
+    )
+    (\_ -> IO.println "Socket error")
 ```
 
 ## Web API Example
@@ -188,7 +183,7 @@ import Lune.IO as IO
 import Lune.Http.Api as Api
 import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
-import Lune.Prelude exposing (IO, Result(..), Unit)
+import Lune.Prelude exposing (Unit)
 
 type AppError = NotFound String | BadRequest String
 
@@ -198,12 +193,12 @@ errorHandler err =
     NotFound msg -> { status = 404, headers = [], body = msg }
     BadRequest msg -> { status = 400, headers = [], body = msg }
 
--- Handlers return IO (Result e Response) directly
-healthHandler : Request -> {} -> IO (Result AppError Response)
+-- Handlers return Task e Response
+healthHandler : Request -> {} -> Task AppError Response
 healthHandler req ctx =
   Api.pure { status = 200, headers = [], body = "{\"status\":\"ok\"}" }
 
-main : IO Unit
+main : Task Error Unit
 main =
   do
     let routes = Route.define [ Route.get "/health" healthHandler ]
@@ -217,13 +212,14 @@ main =
 module FFI_Puts exposing (main)
 
 import Lune.IO as IO
+import Lune.Task as Task
 
 foreign import ccall "puts" puts : String -> IO Int
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
-    _ <- puts "Hello from C!"
+    _ <- Task.fromIO (puts "Hello from C!")
     IO.println "Hello from Lune!"
 ```
 

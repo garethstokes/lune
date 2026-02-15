@@ -22,41 +22,50 @@ Binary operations are useful for implementing wire protocols
 (PostgreSQL, Redis, custom protocols, etc.) in pure Lune.
 -}
 
-import Lune.Prelude exposing (IO, Int, Result, String, Unit)
+import Lune.Prelude exposing (Int, String, Task(..), Unit)
 import Lune.IO exposing (Error)
 import Lune.Bytes exposing (Bytes)
 
 type Socket = Socket#
 type Connection = Connection#
 
-listen : Int -> IO (Result Error Socket)
-listen = prim_tcpListen
+listen : Int -> Task Error Socket
+listen port =
+  Task (prim_tcpListen port)
 
-accept : Socket -> IO (Result Error Connection)
-accept = prim_tcpAccept
+accept : Socket -> Task Error Connection
+accept sock =
+  Task (prim_tcpAccept sock)
 
-connect : String -> Int -> IO (Result Error Connection)
-connect = prim_tcpConnect
+connect : String -> Int -> Task Error Connection
+connect host port =
+  Task (prim_tcpConnect host port)
 
 -- | Receive text data from a connection
-recv : Connection -> IO (Result Error String)
-recv = prim_connRecv
+recv : Connection -> Task Error String
+recv conn =
+  Task (prim_connRecv conn)
 
 -- | Send text data over a connection
-send : Connection -> String -> IO (Result Error Unit)
-send = prim_connSend
+send : Connection -> String -> Task Error Unit
+send conn msg =
+  Task (prim_connSend conn msg)
 
 -- | Receive up to N bytes of binary data from a connection
 -- Returns as soon as data is available (may be less than N bytes)
-recvBytes : Connection -> Int -> IO (Result Error Bytes)
-recvBytes = prim_connRecvBytes
+recvBytes : Connection -> Int -> Task Error Bytes
+recvBytes conn n =
+  Task (prim_connRecvBytes conn n)
 
 -- | Send binary data over a connection
-sendBytes : Connection -> Bytes -> IO (Result Error Unit)
-sendBytes = prim_connSendBytes
+sendBytes : Connection -> Bytes -> Task Error Unit
+sendBytes conn bytes =
+  Task (prim_connSendBytes conn bytes)
 
-closeConn : Connection -> IO (Result Error Unit)
-closeConn = prim_connClose
+closeConn : Connection -> Task Error Unit
+closeConn conn =
+  Task (prim_connClose conn)
 
-closeSocket : Socket -> IO (Result Error Unit)
-closeSocket = prim_socketClose
+closeSocket : Socket -> Task Error Unit
+closeSocket sock =
+  Task (prim_socketClose sock)

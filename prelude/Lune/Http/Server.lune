@@ -3,59 +3,59 @@ module Lune.Http.Server exposing (
   Handler
 )
 
-import Lune.Prelude exposing (IO, Unit, Result(..), Int, String, unit, Pair(..))
+import Lune.Prelude exposing (Int, Result(..), String, Unit, unit)
 import Lune.IO as IO
+import Lune.Task as Task
 import Lune.Net.Socket as Socket
 import Lune.Net.Socket exposing (Socket, Connection)
 import Lune.Http exposing (Request, Response)
 import Lune.Http.Internal as Internal
 import Lune.String as Str
 
-type alias Handler = Request -> IO Response
+type alias Handler = Request -> Task Error Response
 
-serve : Int -> Handler -> IO Unit
+serve : Int -> Handler -> Task Error Unit
 serve port handler =
   do
     IO.println (Str.append "Starting HTTP server on port " (Str.fromInt port))
-    socketResult <- Socket.listen port
-    case socketResult of
-      Err _ ->
-        IO.println "Failed to start server"
-      Ok sock ->
+    Task.onError
+      (do
+        sock <- Socket.listen port
         acceptLoop sock handler
+      )
+      (\_ -> IO.println "Failed to start server")
 
-acceptLoop : Socket -> Handler -> IO Unit
+acceptLoop : Socket -> Handler -> Task Error Unit
 acceptLoop sock handler =
-  do
-    connResult <- Socket.accept sock
-    case connResult of
-      Err _ ->
-        IO.println "Accept failed, stopping server"
-      Ok conn ->
-        do
-          handleConnection conn handler
-          acceptLoop sock handler
+  Task.onError
+    (do
+      conn <- Socket.accept sock
+      handleConnection conn handler
+      acceptLoop sock handler
+    )
+    (\_ -> IO.println "Accept failed, stopping server")
 
-handleConnection : Connection -> Handler -> IO Unit
+handleConnection : Connection -> Handler -> Task Error Unit
 handleConnection conn handler =
-  do
-    recvResult <- Socket.recv conn
-    case recvResult of
-      Err _ ->
-        do
-          _ <- Socket.closeConn conn
-          IO.pure unit
-      Ok rawRequest ->
-        case Internal.parseHttpRequest rawRequest of
-          Err _ ->
-            do
-              _ <- Socket.send conn "HTTP/1.1 400 Bad Request\r\n\r\n"
-              _ <- Socket.closeConn conn
-              IO.pure unit
-          Ok request ->
-            do
-              response <- handler request
-              let rawResponse = Internal.formatHttpResponse response
-              _ <- Socket.send conn rawResponse
-              _ <- Socket.closeConn conn
-              IO.pure unit
+  Task.onError
+    (do
+      rawRequest <- Socket.recv conn
+      case Internal.parseHttpRequest rawRequest of
+        Err _ ->
+          do
+            _ <- Task.onError (Socket.send conn "HTTP/1.1 400 Bad Request\r\n\r\n") (\_ -> Task.succeed unit)
+            _ <- Task.onError (Socket.closeConn conn) (\_ -> Task.succeed unit)
+            Task.succeed unit
+        Ok request ->
+          do
+            response <- handler request
+            let rawResponse = Internal.formatHttpResponse response
+            _ <- Task.onError (Socket.send conn rawResponse) (\_ -> Task.succeed unit)
+            _ <- Task.onError (Socket.closeConn conn) (\_ -> Task.succeed unit)
+            Task.succeed unit
+    )
+    (\_ ->
+      do
+        _ <- Task.onError (Socket.closeConn conn) (\_ -> Task.succeed unit)
+        Task.succeed unit
+    )

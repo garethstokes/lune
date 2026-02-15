@@ -1,0 +1,31 @@
+module Lune.Fiber exposing (
+  Fiber,
+  spawn,
+  await,
+  yield
+)
+
+{-| Fibers are lightweight concurrent computations scheduled by the runtime.
+
+A fiber can be spawned from a `Task e a`. Awaiting a fiber yields the same `Task`
+result (short-circuiting on `Err`).
+-}
+
+import Lune.Prelude exposing (Task(..), Result(..), Unit)
+
+-- Internal runtime type (not part of the standard library surface).
+type Fiber a = Fiber#
+
+spawn : Task e a -> Task e2 (Fiber (Result e a))
+spawn task =
+  case task of
+    Task io ->
+      Task (prim_ioBind (prim_spawn io) (\fib -> prim_ioPure (Ok fib)))
+
+await : Fiber (Result e a) -> Task e a
+await fib =
+  Task (prim_await fib)
+
+yield : Task e Unit
+yield =
+  Task (prim_ioBind prim_yield (\u -> prim_ioPure (Ok u)))

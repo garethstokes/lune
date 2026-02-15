@@ -10,40 +10,46 @@ The test uses trust authentication (no password).
 -}
 
 import Lune.IO as IO
-import Lune.Prelude exposing (IO, Result(..), Unit, Maybe(..))
+import Lune.Task as Task
+import Lune.Prelude exposing (Result(..), Unit, Maybe(..))
 import Lune.Database.Postgres.Pool as Pool
 import Lune.Database.Postgres.Query as Query
 import Lune.Database.Postgres.Connection as Conn
 import Lune.Json.Encode as Encode
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "=== Generic Pool Test ==="
     IO.println ""
     IO.println "Creating pool with max 5 connections..."
 
-    pool <- Pool.createPool
-      { host = "localhost"
-      , port = 5432
-      , database = "postgres"
-      , user = "postgres"
-      , password = Nothing
-      , maxConnections = 5
-      }
+    pool <-
+      Task.fromIO
+        ( Pool.createPool
+            { host = "localhost"
+            , port = 5432
+            , database = "postgres"
+            , user = "postgres"
+            , password = Nothing
+            , maxConnections = 5
+            }
+        )
 
     IO.println "Pool created successfully!"
     IO.println ""
     IO.println "Using connection from pool to query SELECT 1..."
 
-    result <- Pool.withConnection pool (\conn ->
-      Query.query conn "SELECT 1"
-    )
+    result <-
+      Task.fromIO
+        ( Pool.withConnection pool (\conn ->
+            Query.query conn "SELECT 1"
+          )
+        )
 
     case result of
       Err e ->
         do
-          IO.print "Error: "
           IO.println (Encode.encode 0 (Conn.errorEncoder e))
       Ok rows ->
         do
@@ -53,5 +59,5 @@ main =
 
     IO.println ""
     IO.println "Destroying pool..."
-    Pool.destroyPool pool
+    Task.fromIO (Pool.destroyPool pool)
     IO.println "Done!"

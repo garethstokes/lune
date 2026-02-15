@@ -80,15 +80,14 @@ queryParams : Request -> List { key : String, value : String }
 
 ## 3. Handler Pattern
 
-Handlers return `IO (Result e Response)` directly:
+Handlers return `Task e Response`:
 
 ```
-handler : Request -> ctx -> IO (Result e Response)
+handler : Request -> ctx -> Task e Response
 ```
 
 This pattern:
-- Uses IO for effectful operations
-- Uses Result for typed error handling
+- Uses Task for effectful operations with typed failure
 - Receives both the request and user-defined context
 - Returns a Response on success or error type `e` on failure
 
@@ -96,13 +95,13 @@ This pattern:
 
 ```
 -- Wrap a successful response
-pure : a -> IO (Result e a)
+pure : a -> Task e a
 
 -- Create a failure
-fail : e -> IO (Result e a)
+fail : e -> Task e a
 
 -- Fail if Maybe is Nothing
-orFail : e -> Maybe a -> IO (Result e a)
+orFail : e -> Maybe a -> Task e a
 
 -- Parse JSON request body
 jsonBody : (String -> e) -> Decoder a -> Request -> Result e a
@@ -118,7 +117,7 @@ jsonBody : (String -> e) -> Decoder a -> Request -> Result e a
 type alias Route e ctx =
   { method : Method
   , pattern : String
-  , handler : Request -> ctx -> IO (Result e Response)
+  , handler : Request -> ctx -> Task e Response
   }
 
 type alias Routes e ctx = List (Route e ctx)
@@ -127,11 +126,11 @@ type alias Routes e ctx = List (Route e ctx)
 ### Route Constructors
 
 ```
-get : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
-post : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
-put : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
-patch : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
-delete : String -> (Request -> ctx -> IO (Result e Response)) -> Route e ctx
+get : String -> (Request -> ctx -> Task e Response) -> Route e ctx
+post : String -> (Request -> ctx -> Task e Response) -> Route e ctx
+put : String -> (Request -> ctx -> Task e Response) -> Route e ctx
+patch : String -> (Request -> ctx -> Task e Response) -> Route e ctx
+delete : String -> (Request -> ctx -> Task e Response) -> Route e ctx
 
 define : List (Route e ctx) -> Routes e ctx
 ```
@@ -158,7 +157,7 @@ type alias ServerConfig e ctx =
   , context : ctx
   }
 
-serve : ServerConfig e ctx -> Routes e ctx -> IO Unit
+serve : ServerConfig e ctx -> Routes e ctx -> Task Error Unit
 ```
 
 ### Error Handler
@@ -197,7 +196,7 @@ import Lune.Http.Api as Api
 import Lune.Http.Route as Route
 import Lune.Http exposing (Request, Response, Method(..))
 import Lune.String as Str
-import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Maybe(..))
+import Lune.Prelude exposing (Task, Unit, List(..), Maybe(..))
 
 -- Error type
 type AppError =
@@ -233,8 +232,8 @@ routes =
     , Route.post "/users" createUserHandler
     ]
 
--- Handlers return IO (Result e Response) directly
-healthHandler : Request -> Context -> IO (Result AppError Response)
+-- Handlers return Task e Response
+healthHandler : Request -> Context -> Task AppError Response
 healthHandler request ctx =
   Api.pure
     { status = 200
@@ -242,7 +241,7 @@ healthHandler request ctx =
     , body = "{\"status\":\"ok\"}"
     }
 
-getUserHandler : Request -> Context -> IO (Result AppError Response)
+getUserHandler : Request -> Context -> Task AppError Response
 getUserHandler request ctx =
   Api.pure
     { status = 200
@@ -250,7 +249,7 @@ getUserHandler request ctx =
     , body = "{\"id\":123,\"name\":\"Alice\"}"
     }
 
-createUserHandler : Request -> Context -> IO (Result AppError Response)
+createUserHandler : Request -> Context -> Task AppError Response
 createUserHandler request ctx =
   Api.pure
     { status = 201
@@ -258,7 +257,7 @@ createUserHandler request ctx =
     , body = "{\"id\":456,\"name\":\"Created\"}"
     }
 
-main : IO Unit
+main : Task Error Unit
 main =
   Api.serve
     { port = 8080
@@ -286,7 +285,7 @@ userDecoder =
     (D.field "name" D.string)
     (D.field "age" D.int)
 
-createUserHandler : Request -> Context -> IO (Result AppError Response)
+createUserHandler : Request -> Context -> Task AppError Response
 createUserHandler request ctx =
   case Api.jsonBody ParseError userDecoder request of
     Err e -> Api.fail e

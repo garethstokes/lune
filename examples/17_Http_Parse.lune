@@ -1,19 +1,18 @@
 module HttpParseTest exposing (main)
 
 import Lune.IO as IO
-import Lune.Http as Http
 import Lune.Http.Internal as Internal
 import Lune.String as Str
-import Lune.Prelude exposing (Result(..), IO, Unit)
+import Lune.Prelude exposing (Result(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "=== HTTP Parse Test ==="
     testParseGet
     testParsePost
 
-testParseGet : IO Unit
+testParseGet : Task Unit Unit
 testParseGet =
   case Internal.parseHttpRequest "GET /users/123 HTTP/1.1\r\nHost: localhost\r\n\r\n" of
     Err e -> IO.println (Str.append "Parse error: " e)
@@ -22,7 +21,7 @@ testParseGet =
         IO.println (Str.append "Path: " req.path)
         IO.println "GET request parsed successfully"
 
-testParsePost : IO Unit
+testParsePost : Task Unit Unit
 testParsePost =
   case Internal.parseHttpRequest "POST /users HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"name\":\"Alice\"}" of
     Err e -> IO.println (Str.append "Parse error: " e)

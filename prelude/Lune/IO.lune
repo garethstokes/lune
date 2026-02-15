@@ -5,34 +5,35 @@ module Lune.IO exposing (
   sleepMs,
   readFile,
   writeFile,
-  Error,
-  pure
+  Error
 )
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
-import Lune.Prelude exposing (IO, Int, Result(..), String, Unit, Pair(..))
+import Lune.Prelude exposing (Task(..), Int, Result(..), String, Unit)
 
 type Error = Error#
 
-println : String -> IO Unit
-println = prim_putStrLn
+println : String -> Task e Unit
+println s =
+  Task (prim_ioBind (prim_putStrLn s) (\u -> prim_ioPure (Ok u)))
 
-readLine : IO String
-readLine = prim_readLine
+readLine : Task e String
+readLine =
+  Task (prim_ioBind prim_readLine (\s -> prim_ioPure (Ok s)))
 
-readInt : IO Int
-readInt = prim_readInt
+readInt : Task e Int
+readInt =
+  Task (prim_ioBind prim_readInt (\n -> prim_ioPure (Ok n)))
 
-sleepMs : Int -> IO Unit
-sleepMs = prim_sleepMs
+sleepMs : Int -> Task e Unit
+sleepMs ms =
+  Task (prim_ioBind (prim_sleepMs ms) (\u -> prim_ioPure (Ok u)))
 
-readFile : String -> IO (Result Error String)
-readFile = prim_readFile
+readFile : String -> Task Error String
+readFile path =
+  Task (prim_readFile path)
 
-writeFile : String -> String -> IO (Result Error Unit)
-writeFile = prim_writeFile
-
-{-| Wrap a pure value in IO. -}
-pure : a -> IO a
-pure x = prim_ioPure x
+writeFile : String -> String -> Task Error Unit
+writeFile path contents =
+  Task (prim_writeFile path contents)

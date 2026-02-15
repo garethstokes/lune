@@ -5,7 +5,7 @@ import Lune.Atomic as Atomic
 import Lune.String as Str
 import Lune.Int as Int
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     counter <- Atomic.commit (Atomic.new 0)

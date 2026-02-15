@@ -6,15 +6,14 @@ import Lune.IO as IO
 import Lune.Json as Json
 import Lune.Json exposing (Json)
 import Lune.Json.Encode as E
-import Lune.Prelude exposing (IO, Unit, unit, Bool(..))
+import Lune.Prelude exposing (Bool(..))
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
-    _ <- IO.println "=== JSON Encoding ==="
-    _ <- IO.println (Json.stringify userJson)
-    _ <- IO.println (Json.stringify scoresJson)
-    pure unit
+    IO.println "=== JSON Encoding ==="
+    IO.println (Json.stringify userJson)
+    IO.println (Json.stringify scoresJson)
 
 userJson : Json
 userJson =

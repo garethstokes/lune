@@ -1,25 +1,25 @@
 module FiberBasic exposing (main)
 
 import Lune.IO as IO
-import Lune.Task as Task
+import Lune.Fiber as Fiber
 import Lune.String as Str
 
-worker : String -> IO Unit
+worker : String -> Task Unit Unit
 worker name =
   do
     IO.println (Str.append name " started")
     IO.println (Str.append name " finished")
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "Main: spawning tasks"
-    t1 <- Task.start (worker "Task1")
-    t2 <- Task.start (worker "Task2")
+    t1 <- Fiber.spawn (worker "Task1")
+    t2 <- Fiber.spawn (worker "Task2")
     IO.println "Main: yielding to let tasks run"
-    _ <- Task.yield
-    _ <- Task.yield
+    _ <- Fiber.yield
+    _ <- Fiber.yield
     IO.println "Main: awaiting results"
-    _ <- Task.await t1
-    _ <- Task.await t2
+    _ <- Fiber.await t1
+    _ <- Fiber.await t2
     IO.println "Main: done"

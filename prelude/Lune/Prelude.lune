@@ -8,9 +8,8 @@ module Lune.Prelude exposing (
   Pair(..), Triple(..), Quad(..), Quint(..),
   fst, snd,
 
-  IO,
   Atomic, Shared,
-  Task,
+  Task(..),
 
   Functor(..),
   Applicative(..),
@@ -90,12 +89,13 @@ type STM a = STM#
 type TVar a = TVar#
 type Fiber a = Fiber#
 
+-- Primary user-facing effect: IO with typed failure.
+newtype Task e a =
+  Task (IO (Result e a))
+
 -- Atomic vibe: surface aliases over STM/TVar.
 type alias Atomic a = STM a
 type alias Shared a = TVar a
-
--- Task vibe: surface alias over Fiber.
-type alias Task a = Fiber a
 
 -- ===== Typeclasses =====
 

@@ -14,12 +14,11 @@ sendBytes/recvBytes work with raw Bytes for binary protocols.
 -}
 
 import Lune.IO as IO
-import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String)
 import Lune.Bytes as Bytes exposing (Bytes)
 import Lune.Net.Socket as Socket exposing (Connection)
 import Lune.String as Str
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "=== Binary TCP Socket Example ==="

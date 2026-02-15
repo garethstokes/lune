@@ -2,7 +2,7 @@ module Main exposing (main)
 
 import Lune.IO as IO
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     IO.println "Hello, world!"

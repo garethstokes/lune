@@ -51,7 +51,7 @@ builtinArities =
   , ("Validation", 2)
   , ("Atomic", 1)
   , ("Shared", 1)
-  , ("Task", 1)
+  , ("Task", 2)
   ]
 
 declaredArities :: [Decl] -> ArityEnv

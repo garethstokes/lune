@@ -2,29 +2,29 @@ module STMExample exposing (main)
 
 import Lune.IO as IO
 import Lune.Atomic as Atomic
-import Lune.Task as Task
+import Lune.Fiber as Fiber
 import Lune.String as Str
 import Lune.Int as Int
 import Lune.Prelude exposing (Shared)
 
-main : IO Unit
+main : Task Unit Unit
 main =
   do
     tv <- Atomic.commit (Atomic.new 0)
-    t1 <- Task.start (incrementN tv 5)
-    t2 <- Task.start (incrementN tv 5)
-    _ <- Task.yield
-    _ <- Task.yield
-    _ <- Task.await t1
-    _ <- Task.await t2
+    t1 <- Fiber.spawn (incrementN tv 5)
+    t2 <- Fiber.spawn (incrementN tv 5)
+    _ <- Fiber.yield
+    _ <- Fiber.yield
+    _ <- Fiber.await t1
+    _ <- Fiber.await t2
     n <- Atomic.commit (Atomic.read tv)
     IO.println (Str.append "counter=" (Str.fromInt n))
 
-incrementN : Shared Int -> Int -> IO Unit
+incrementN : Shared Int -> Int -> Task Unit Unit
 incrementN tv count =
   incrementLoop tv count
 
-incrementLoop : Shared Int -> Int -> IO Unit
+incrementLoop : Shared Int -> Int -> Task Unit Unit
 incrementLoop tv remaining =
   case Int.lte remaining 0 of
     True ->
