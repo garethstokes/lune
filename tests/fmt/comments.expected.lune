@@ -1,0 +1,16 @@
+{-| Leading doc comment.
+Multiline.
+-}
+module FmtComments exposing (main)
+import A
+-- between imports
+import B
+-- between imports and decls
+
+x = 1
+-- trailing comment
+{- block between decls -}
+
+y = 2
+
+main = x

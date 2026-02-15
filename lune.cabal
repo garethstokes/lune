@@ -28,6 +28,9 @@ library
       Lune.Codegen.Go
       Lune.Elaborate
       Lune.Eval
+      Lune.Fmt
+      Lune.Fmt.Doc
+      Lune.Fmt.Format
       Lune.ModuleGraph
       Lune.Resolve
       Lune.Pass.ANF

@@ -21,6 +21,7 @@ import System.Process
   , readProcessWithExitCode
   )
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import qualified Data.Map.Strict as Map
 import qualified Lune.Codegen.C as CodegenC
 import qualified Lune.Codegen.Go as CodegenGo
@@ -30,10 +31,12 @@ import qualified Lune.Eval as Eval
 import qualified Lune.Core as Core
 import qualified Lune.Pass.ANF as ANF
 import Lune.Parser (parseFile)
+import qualified Lune.Parser as Parser
 import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Resolve as Resolve
+import qualified Lune.Fmt as Fmt
 import System.FilePath (takeDirectory, (</>))
 
 main :: IO ()
@@ -48,6 +51,7 @@ main = do
 data Command
   = CmdRun Options
   | CmdBuild BuildOptions
+  | CmdFmt FmtOptions
 
 data BuildTarget
   = BuildTargetC
@@ -65,8 +69,47 @@ parseCommand args =
   case args of
     ("build" : rest) ->
       CmdBuild <$> parseBuildArgs rest
+    _ | "--fmt" `elem` args ->
+          CmdFmt <$> parseFmtArgs args
     _ ->
       CmdRun <$> parseArgs args
+
+data FmtOptions = FmtOptions
+  { fmtPath :: FilePath
+  , fmtCheck :: Bool
+  , fmtStdout :: Bool
+  }
+
+parseFmtArgs :: [String] -> Either String FmtOptions
+parseFmtArgs args =
+  let rest = filter (/= "--fmt") args
+      (flags, positionals) = partitionFlags rest
+      check = "--check" `elem` flags
+      stdout = "--stdout" `elem` flags
+      unknown = filter (`notElem` ["--check", "--stdout"]) flags
+   in case () of
+        _
+          | not (null unknown) ->
+              Left fmtUsage
+          | check && stdout ->
+              Left fmtUsage
+          | [path] <- positionals ->
+              Right (FmtOptions {fmtPath = path, fmtCheck = check, fmtStdout = stdout})
+          | otherwise ->
+              Left fmtUsage
+  where
+    fmtUsage = "Usage: lune --fmt [--check|--stdout] <file.lune>"
+
+    partitionFlags =
+      foldr
+        ( \a (fs, ps) ->
+            if "--" `isPrefixOf` a
+              then (a : fs, ps)
+              else (fs, a : ps)
+        )
+        ([], [])
+
+    isPrefixOf prefix str = take (length prefix) str == prefix
 
 parseBuildArgs :: [String] -> Either String BuildOptions
 parseBuildArgs args =
@@ -98,6 +141,32 @@ runCommand cmd =
       run opts
     CmdBuild opts ->
       build opts
+    CmdFmt opts ->
+      runFmt opts
+
+runFmt :: FmtOptions -> IO ()
+runFmt opts = do
+  contents <- TIO.readFile (fmtPath opts)
+  parsed <- Parser.parseFileEither (fmtPath opts)
+  mod' <-
+    case parsed of
+      Left err -> do
+        putStrLn err
+        exitFailure
+      Right m ->
+        pure m
+
+  let formatted = Fmt.formatModuleTextWithComments contents mod'
+
+  if fmtStdout opts
+    then TIO.putStr formatted
+    else
+      if fmtCheck opts
+        then
+          if formatted == contents
+            then pure ()
+            else exitFailure
+        else TIO.writeFile (fmtPath opts) formatted
 
 data Options = Options
   { optPath :: FilePath

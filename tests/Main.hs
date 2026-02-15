@@ -20,6 +20,7 @@ import System.FilePath ((</>), takeBaseName)
 import System.Process (readProcessWithExitCode)
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Golden (goldenVsStringDiff)
+import Test.Tasty.HUnit (testCase, assertEqual)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
 
@@ -28,6 +29,7 @@ main = do
   -- Discover example files
   examples <- discoverExamples "examples"
   invalidExamples <- discoverExamples "examples/invalid"
+  fmtCases <- discoverFmtCases "tests/fmt"
 
   -- Build test tree
   defaultMain $ testGroup "Lune Golden Tests"
@@ -35,6 +37,9 @@ main = do
     , testGroup "Core" (map coreTest examples)
     , testGroup "Eval" (map evalTest examples)
     , testGroup "Negative" (map negativeTest invalidExamples)
+    , testGroup "Fmt" (map fmtGoldenTest fmtCases)
+    , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
+    , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
     ]
 
 -- | Discover .lune files in a directory, sorted for determinism.
@@ -43,6 +48,37 @@ discoverExamples dir = do
   files <- listDirectory dir
   let luneFiles = filter (".lune" `isSuffixOf`) files
   pure $ map (dir </>) (sort luneFiles)
+
+data FmtCase = FmtCase
+  { fmtName :: String
+  , fmtInputPath :: FilePath
+  , fmtExpectedPath :: FilePath
+  }
+
+discoverFmtCases :: FilePath -> IO [FmtCase]
+discoverFmtCases dir = do
+  files <- listDirectory dir
+  let inputFiles = sort (filter (".input.lune" `isSuffixOf`) files)
+  pure $
+    map
+      ( \f ->
+          let base0 = takeBaseName f
+              base = dropSuffix ".input" base0
+              inputPath = dir </> f
+              expectedPath = dir </> (base ++ ".expected.lune")
+           in FmtCase {fmtName = base, fmtInputPath = inputPath, fmtExpectedPath = expectedPath}
+      )
+      inputFiles
+  where
+    dropSuffix suf s =
+      case reverse suf `stripPrefix` reverse s of
+        Just rest -> reverse rest
+        Nothing -> s
+
+    stripPrefix [] ys = Just ys
+    stripPrefix (x : xs) (y : ys)
+      | x == y = stripPrefix xs ys
+    stripPrefix _ _ = Nothing
 
 -- | Run the lune compiler with given flags.
 runLune :: [String] -> FilePath -> IO (ExitCode, String, String)
@@ -72,6 +108,10 @@ goldenPath stage sourceFile =
 -- | Diff command for comparing outputs.
 diffCmd :: FilePath -> FilePath -> [String]
 diffCmd ref new = ["diff", "-u", ref, new]
+
+rawOutput :: String -> LBS.ByteString
+rawOutput =
+  LBS8.pack
 
 -- =============================================================================
 -- Parse Tests
@@ -125,3 +165,28 @@ negativeTest file = goldenVsStringDiff testName diffCmd (goldenPath "neg" file) 
   pure $ normalizeOutput output
   where
     testName = takeBaseName file
+
+-- =============================================================================
+-- Fmt Tests
+-- =============================================================================
+
+fmtGoldenTest :: FmtCase -> TestTree
+fmtGoldenTest c =
+  goldenVsStringDiff (fmtName c) diffCmd (fmtExpectedPath c) $ do
+    (_, stdout, stderr) <- runLune ["--fmt", "--stdout"] (fmtInputPath c)
+    pure $ rawOutput (stderr ++ stdout)
+
+fmtIdempotentTest :: FmtCase -> TestTree
+fmtIdempotentTest c =
+  testCase (fmtName c) $ do
+    expected <- readFile (fmtExpectedPath c)
+    (_, stdout, stderr) <- runLune ["--fmt", "--stdout"] (fmtExpectedPath c)
+    assertEqual "fmt(fmt(expected)) == expected" expected (stderr ++ stdout)
+
+fmtCheckTest :: FmtCase -> TestTree
+fmtCheckTest c =
+  testCase (fmtName c) $ do
+    (exitIn, _outIn, _errIn) <- runLune ["--fmt", "--check"] (fmtInputPath c)
+    (exitEx, _outEx, _errEx) <- runLune ["--fmt", "--check"] (fmtExpectedPath c)
+    assertEqual "fmt --check input fails" False (exitIn == ExitSuccess)
+    assertEqual "fmt --check expected succeeds" True (exitEx == ExitSuccess)

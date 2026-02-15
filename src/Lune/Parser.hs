@@ -110,6 +110,7 @@ foreignImportDecl = do
   scnOptional  -- allow optional newline after symbol name
   name <- identifier
   symbol ":"
+  scnOptional
   ty <- parseQualTypeSameLine
   scn
   pure (DeclForeignImport convention (T.pack symbolName) name ty)
@@ -124,6 +125,7 @@ typeSigDecl :: Parser Decl
 typeSigDecl = do
   name <- valueName
   symbol ":"
+  scnOptional
   ty <- parseQualTypeSameLine
   scn
   pure (DeclTypeSig name ty)
@@ -198,7 +200,7 @@ typeDecl = do
   scn
   pure (DeclType name vars ctors)
   where
-    trySep = try (scn *> symbol "|" <* scnOptional)
+    trySep = try (scnOptional *> symbol "|" <* scnOptional)
 
 newtypeDecl :: Parser Decl
 newtypeDecl = do
@@ -215,7 +217,7 @@ newtypeDecl = do
 typeCtor :: Parser TypeCtor
 typeCtor = do
   name <- typeConstructor
-  args <- many (typeAtomWith sc)
+  args <- many (typeAtomWith scTypeSig)
   pure (TypeCtor name args)
 
 classDecl :: Parser Decl
@@ -250,13 +252,15 @@ classParam =
 parseKind :: Parser Type
 parseKind = parseArrowKind
   where
+    sym = L.symbol scTypeSig
+
     parseArrowKind = do
-      kinds <- kindAtom `sepBy1` symbol "->"
+      kinds <- kindAtom `sepBy1` sym "->"
       pure (foldr1 TypeArrow kinds)
 
     kindAtom =
       choice
-        [ between (symbol "(") (symbol ")") parseKind
+        [ between (sym "(") (sym ")") parseKind
         , kindType
         ]
 
@@ -272,9 +276,11 @@ parseIndentedClassMethodSig ref =
 
 classMethodSig :: Parser ClassMethodSig
 classMethodSig = do
+  ref <- L.indentLevel
   name <- valueName
   symbol ":"
-  ty <- parseQualTypeWith sc
+  scnOptional
+  ty <- parseQualTypeWith (scTypeSigFrom ref)
   pure (ClassMethodSig name ty)
 
 instanceDecl :: Parser Decl
@@ -293,7 +299,7 @@ instanceDecl = do
 
 parseInstanceHeadType :: Parser Type
 parseInstanceHeadType = do
-  atoms <- some (typeAtomWith sc)
+  atoms <- some (typeAtomWith scTypeSig)
   pure (foldl1 TypeApp atoms)
 
 parseIndentedInstanceMethodDef :: P.Pos -> Parser InstanceMethodDef
@@ -310,7 +316,7 @@ instanceMethodDef = do
 
 parseType :: Parser Type
 parseType =
-  parseTypeWith sc
+  parseTypeWith scTypeSig
 
 parseQualTypeSameLine :: Parser QualType
 parseQualTypeSameLine =
@@ -411,12 +417,13 @@ typeAtomWith spaceConsumer = typeAtom
 
 parseExpr :: Parser Expr
 parseExpr =
-  choice
-    [ try parseLetIn
-    , try parseCase
-    , try parseLambda
-    , parseInfixExpr
-    ]
+  scnOptional
+    *> choice
+      [ try parseLetIn
+      , try parseCase
+      , try parseLambda
+      , parseInfixExpr
+      ]
 
 -- | Parse low-precedence infix operators.
 --
@@ -701,13 +708,50 @@ parseLambda = do
 
 parseLetIn :: Parser Expr
 parseLetIn = do
+  ref0 <- L.indentLevel
+  let ref = mkPos (unPos ref0)
   keyword "let"
-  name <- identifier
-  symbol "="
-  scnOptional
-  bound <- parseExpr
-  keyword "in"
-  LetIn name bound <$> parseExpr
+
+  -- Block form:
+  -- let
+  --   x = ...
+  --   y = ...
+  -- in
+  --   body
+  isBlock <- P.option False (True <$ P.lookAhead (char '\n'))
+  if isBlock
+    then parseLetBlock ref
+    else parseLetInline
+  where
+    parseLetInline = do
+      name <- identifier
+      symbol "="
+      scnOptional
+      bound <- parseExpr
+      keyword "in"
+      LetIn name bound <$> parseExpr
+
+    parseLetBlock ref = do
+      skipNewlines
+      firstBind <- parseLetBindingIndented ref
+      restBinds <- many (try (skipNewlines *> parseLetBindingIndented ref))
+      skipNewlines
+      _ <- L.indentGuard scIndent EQ ref
+      keyword "in"
+      scnOptional
+      body <- parseExpr
+      let binds = firstBind : restBinds
+      pure (foldr (\(n, rhs) acc -> LetIn n rhs acc) body binds)
+
+    parseLetBindingIndented ref =
+      L.indentGuard scIndent GT ref *> parseLetBinding
+
+    parseLetBinding = do
+      name <- identifier
+      symbol "="
+      scnOptional
+      rhs <- parseExpr
+      pure (name, rhs)
 
 parseCase :: Parser Expr
 parseCase = do
@@ -715,6 +759,7 @@ parseCase = do
   let ref = mkPos (unPos ref0)
   keyword "case"
   scrut <- parseExpr
+  scnOptional
   keyword "of"
   skipNewlines
   firstAlt <- parseCaseAltIndented ref
@@ -838,7 +883,7 @@ parseRecord = between (symbol "{") (symbol "}") recordBody
   where
     recordBody = do
       scnOptional
-      base <- optional (try (identifier <* symbol "|"))
+      base <- optional (try (identifier <* scnOptional <* symbol "|"))
       fields <- recordField `sepBy` fieldSep
       scnOptional
       pure $
@@ -863,9 +908,12 @@ exposingList = do
   where
     body = do
       scnOptional
-      items <- exposingItem `sepBy` (symbol "," <* scnOptional)
+      items <- exposingItem `sepBy` exposingSep
       scnOptional
       pure items
+
+    exposingSep =
+      try (scnOptional *> symbol "," <* scnOptional)
 
 exposingItem :: Parser Expose
 exposingItem = do
@@ -987,6 +1035,29 @@ scTypeSig =
         [ void $ some (satisfy (\c -> c == ' ' || c == '\t'))
         , try (char '\n' *> some (char ' ' <|> char '\t') $> ())
         ]
+
+-- | Space consumer for type signatures that may span multiple lines.
+--
+-- Newlines are only consumed when the next line is indented more than the
+-- column where the signature started. This prevents a type signature in an
+-- indented block (e.g. a class method) from accidentally consuming the next
+-- sibling signature line.
+scTypeSigFrom :: P.Pos -> Parser ()
+scTypeSigFrom ref =
+  L.space consumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  where
+    consumer =
+      choice
+        [ void $ some (satisfy (\c -> c == ' ' || c == '\t'))
+        , continuationNewline
+        ]
+
+    continuationNewline =
+      try $ do
+        _ <- char '\n'
+        void $ some (char ' ' <|> char '\t')
+        lvl <- L.indentLevel
+        if lvl > ref then pure () else empty
 
 sc :: Parser ()
 sc =

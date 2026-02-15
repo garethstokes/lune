@@ -38,6 +38,19 @@ cabal run lune -- examples/00_Hello.lune
 cabal run lune -- --eval examples/00_Hello.lune
 ```
 
+## Formatting
+
+```bash
+# Format file in place
+cabal run lune -- --fmt path/to/File.lune
+
+# Check formatting (non-zero exit if changes)
+cabal run lune -- --fmt --check path/to/File.lune
+
+# Print formatted output (no file changes)
+cabal run lune -- --fmt --stdout path/to/File.lune
+```
+
 ## Template Example
 
 ```haskell

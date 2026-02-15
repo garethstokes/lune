@@ -1,0 +1,74 @@
+module FmtExposing exposing (
+  main
+  , a
+  , b
+  , c
+  , d
+  , e
+  , f
+  , g
+  , h
+  , i
+  , j
+  , k
+  , l
+  , m
+  , n
+  , o
+  , p
+  , q
+  , r
+  , s
+  , t
+  , u
+  , v
+  , w
+  , x
+  , y
+  , z
+  , aa
+  , ab
+  , ac
+  , ad
+  , ae
+  , af
+  , ag
+  , ah
+  , ai
+  , aj
+)
+import Foo.Bar exposing (
+  x
+  , y
+  , z
+  , Alpha(..)
+  , Beta(..)
+  , Gamma
+  , Delta
+  , Epsilon
+  , Zeta
+  , Eta
+  , Theta
+  , Iota
+  , Kappa
+  , Lambda
+  , Mu
+  , Nu
+  , Xi
+  , Omicron
+  , Pi
+  , Rho
+  , Sigma
+  , Tau
+  , Upsilon
+  , Phi
+  , Chi
+  , Psi
+  , Omega
+)
+
+main = 0
+
+a = 1
+
+b = 2

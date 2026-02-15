@@ -1,0 +1,21 @@
+module FmtLayout exposing (main, longApp)
+import Lune.IO as IO
+
+longApp =
+  someVeryLongFunctionName a b c d e f g h i j k l m n o p q r s t u v w x y z
+
+main : Task Unit Unit
+main =
+  do
+    let x = 1
+    IO.println (
+        let
+          y = x
+        in
+          y
+      )
+    case x of
+      Ok y ->
+        IO.println "ok"
+      Err e ->
+        IO.println "err"
