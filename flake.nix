@@ -53,11 +53,14 @@
             zlib
             pkg-config
             go
+            tree-sitter
           ];
 
           additionalShellHook = ''
             # Add zlib to LD_LIBRARY_PATH for Haskell native dependencies
-            export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+            export LD_LIBRARY_PATH=${
+              pkgs.lib.makeLibraryPath [ pkgs.zlib ]
+            }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
             echo "Lune development shell"
             echo "  ghc:   $(ghc --version)"

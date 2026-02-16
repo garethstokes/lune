@@ -1,0 +1,41 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "lune",
+      "camelcase": "Lune",
+      "title": "Lune",
+      "scope": "source.lune",
+      "file-types": [
+        "ln",
+        "lu",
+        "lune"
+      ],
+      "injection-regex": "^lune$",
+      "class-name": "TreeSitterLune"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Lune is good",
+    "authors": [
+      {
+        "name": "Gareth Evans",
+        "email": "garrydanger@gmail.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/garethstokes/lune"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}
