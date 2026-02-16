@@ -3,6 +3,7 @@ module Lune.ModuleGraph
   , LoadedModule (..)
   , Program (..)
   , loadProgram
+  , loadProgramWithEntryModule
   , resolveModulePath
   ) where
 
@@ -41,37 +42,41 @@ data Program = Program
 
 loadProgram :: FilePath -> IO (Either ModuleError Program)
 loadProgram entryPath = do
-  let entryDir = takeDirectory entryPath
   entryResult <- Parser.parseFileEither entryPath
   case entryResult of
     Left err ->
       pure (Left (ModuleParseError entryPath err))
-    Right entryModule -> do
-      -- Expand @derive annotations before loading imports
-      case Derive.expandDerives entryModule of
-        Left deriveErr ->
-          pure (Left (DeriveExpansionError deriveErr))
-        Right expandedModule -> do
-          let entryName = S.modName expandedModule
-          let entryLoaded =
-                LoadedModule
-                  { lmName = entryName
-                  , lmPath = entryPath
-                  , lmModule = expandedModule
+    Right entryModule ->
+      loadProgramWithEntryModule entryPath entryModule
+
+loadProgramWithEntryModule :: FilePath -> S.Module -> IO (Either ModuleError Program)
+loadProgramWithEntryModule entryPath entryModule = do
+  let entryDir = takeDirectory entryPath
+  -- Expand @derive annotations before loading imports
+  case Derive.expandDerives entryModule of
+    Left deriveErr ->
+      pure (Left (DeriveExpansionError deriveErr))
+    Right expandedModule -> do
+      let entryName = S.modName expandedModule
+          entryLoaded =
+            LoadedModule
+              { lmName = entryName
+              , lmPath = entryPath
+              , lmModule = expandedModule
+              }
+      loaded <- loadModule entryDir [] Map.empty entryLoaded
+      case loaded of
+        Left err ->
+          pure (Left err)
+        Right (mods, order) ->
+          pure
+            ( Right
+                Program
+                  { progEntryName = entryName
+                  , progModules = mods
+                  , progOrder = order
                   }
-          loaded <- loadModule entryDir [] Map.empty entryLoaded
-          case loaded of
-            Left err ->
-              pure (Left err)
-            Right (mods, order) ->
-              pure
-                ( Right
-                    Program
-                      { progEntryName = entryName
-                      , progModules = mods
-                      , progOrder = order
-                      }
-                )
+            )
 
 loadModule :: FilePath -> [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
 loadModule entryDir stack loaded m =

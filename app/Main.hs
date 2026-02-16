@@ -31,12 +31,12 @@ import qualified Lune.Eval as Eval
 import qualified Lune.Core as Core
 import qualified Lune.Pass.ANF as ANF
 import Lune.Parser (parseFile)
-import qualified Lune.Parser as Parser
 import Lune.Check (typecheckModule, renderScheme)
 import Lune.Validate (validateModule)
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Resolve as Resolve
 import qualified Lune.Fmt as Fmt
+import qualified Lune.LSP.Server as LSP
 import System.FilePath (takeDirectory, (</>))
 
 main :: IO ()
@@ -52,6 +52,15 @@ data Command
   = CmdRun Options
   | CmdBuild BuildOptions
   | CmdFmt FmtOptions
+  | CmdLsp LspOptions
+
+data LspTransport
+  = LspStdio
+  deriving (Eq, Show)
+
+data LspOptions = LspOptions
+  { lspTransport :: LspTransport
+  }
 
 data BuildTarget
   = BuildTargetC
@@ -67,12 +76,26 @@ data BuildOptions = BuildOptions
 parseCommand :: [String] -> Either String Command
 parseCommand args =
   case args of
+    ("lsp" : rest) ->
+      CmdLsp <$> parseLspArgs rest
     ("build" : rest) ->
       CmdBuild <$> parseBuildArgs rest
     _ | "--fmt" `elem` args ->
           CmdFmt <$> parseFmtArgs args
     _ ->
       CmdRun <$> parseArgs args
+
+parseLspArgs :: [String] -> Either String LspOptions
+parseLspArgs args =
+  case args of
+    [] ->
+      Right (LspOptions {lspTransport = LspStdio})
+    ["--stdio"] ->
+      Right (LspOptions {lspTransport = LspStdio})
+    _ ->
+      Left lspUsage
+  where
+    lspUsage = "Usage: lune lsp [--stdio]"
 
 data FmtOptions = FmtOptions
   { fmtPath :: FilePath
@@ -143,20 +166,24 @@ runCommand cmd =
       build opts
     CmdFmt opts ->
       runFmt opts
+    CmdLsp opts ->
+      runLsp opts
+
+runLsp :: LspOptions -> IO ()
+runLsp opts =
+  case lspTransport opts of
+    LspStdio -> LSP.runStdio
 
 runFmt :: FmtOptions -> IO ()
 runFmt opts = do
   contents <- TIO.readFile (fmtPath opts)
-  parsed <- Parser.parseFileEither (fmtPath opts)
-  mod' <-
-    case parsed of
+  formatted <-
+    case Fmt.formatText (fmtPath opts) contents of
       Left err -> do
-        putStrLn err
+        TIO.putStrLn (Fmt.renderFmtError err)
         exitFailure
-      Right m ->
-        pure m
-
-  let formatted = Fmt.formatModuleTextWithComments contents mod'
+      Right t ->
+        pure t
 
   if fmtStdout opts
     then TIO.putStr formatted

@@ -99,6 +99,7 @@ main =
 - `spec/lune_json_v0_1.md` - JSON module specification
 - `core/lune_core_ir_v0_1.md` - Core IR specification
 - `docs/FFI.md` - Foreign Function Interface guide
+- `docs/lsp.md` - Editor integration (LSP)
 
 ## Tests
 

@@ -2,15 +2,37 @@
 
 module Lune.Fmt
   ( formatModuleTextWithComments
+  , FmtError (..)
+  , renderFmtError
+  , formatText
   ) where
 
 import Data.Char (isAlphaNum)
 import Data.List (sortOn)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
 import qualified Lune.Fmt.Doc as D
 import qualified Lune.Fmt.Format as Fmt
+import Text.Megaparsec (errorBundlePretty)
+
+data FmtError
+  = FmtParseError !Text
+  deriving (Eq, Show)
+
+renderFmtError :: FmtError -> Text
+renderFmtError err =
+  case err of
+    FmtParseError msg -> msg
+
+formatText :: FilePath -> Text -> Either FmtError Text
+formatText path src =
+  case Parser.parseTextBundle path src of
+    Left err ->
+      Left (FmtParseError (T.pack (errorBundlePretty err)))
+    Right m ->
+      Right (formatModuleTextWithComments src m)
 
 data CommentKind
   = CommentLine

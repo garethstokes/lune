@@ -1,6 +1,8 @@
 module Lune.Parser
   ( parseFile
   , parseFileEither
+  , parseTextEither
+  , parseTextBundle
   , parseModule
   , parseExpr
   , parseDo
@@ -19,6 +21,7 @@ import Data.Void (Void)
 import Lune.Syntax
 import Text.Megaparsec
   ( Parsec
+  , ParseErrorBundle
   , between
   , choice
   , eof
@@ -57,10 +60,17 @@ parseFile path = do
 parseFileEither :: FilePath -> IO (Either String Module)
 parseFileEither path = do
   contents <- T.readFile path
-  pure $
-    case runParser (scnOptional *> parseModule <* eof) path contents of
-      Left err -> Left (errorBundlePretty err)
-      Right mod' -> Right mod'
+  pure (parseTextEither path contents)
+
+parseTextEither :: FilePath -> Text -> Either String Module
+parseTextEither path contents =
+  case parseTextBundle path contents of
+    Left err -> Left (errorBundlePretty err)
+    Right mod' -> Right mod'
+
+parseTextBundle :: FilePath -> Text -> Either (ParseErrorBundle Text Void) Module
+parseTextBundle path contents =
+  runParser (scnOptional *> parseModule <* eof) path contents
 
 parseModule :: Parser Module
 parseModule = do
