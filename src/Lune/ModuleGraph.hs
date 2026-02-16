@@ -15,7 +15,8 @@ import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
 import qualified Lune.Derive as Derive
 import System.Directory (doesFileExist)
-import System.FilePath (splitDirectories, takeDirectory, (</>))
+import System.Environment (lookupEnv)
+import System.FilePath (splitDirectories, takeDirectory, (</>), isAbsolute)
 
 data ModuleError
   = ModuleParseError FilePath String
@@ -113,7 +114,11 @@ isPreludePath :: FilePath -> Bool
 isPreludePath path =
   case splitDirectories path of
     ("prelude" : _) -> True
-    _ -> False
+    _ ->
+      -- Also check for absolute Nix store paths containing prelude
+      "lune-prelude" `isInfixOf` path
+  where
+    isInfixOf needle haystack = needle `elem` words (map (\c -> if c == '/' || c == '-' then ' ' else c) haystack)
 
 loadImports :: FilePath -> [Text] -> Map Text LoadedModule -> [S.Import] -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
 loadImports entryDir stack loaded imports =
@@ -155,6 +160,7 @@ loadImports entryDir stack loaded imports =
 
 resolveModulePath :: FilePath -> Text -> IO (Either ModuleError FilePath)
 resolveModulePath entryDir modName = do
+  preludePath <- lookupEnv "LUNE_PRELUDE_PATH"
   let (relDir, relDot) = moduleNameToPaths modName
       localCandidates =
         [ entryDir </> relDir
@@ -162,8 +168,9 @@ resolveModulePath entryDir modName = do
         , "." </> relDir
         , "." </> relDot
         ]
+      preludeDir = maybe "prelude" id preludePath
       candidates =
-        dedupePaths (localCandidates <> ["prelude" </> relDir])
+        dedupePaths (localCandidates <> [preludeDir </> relDir])
   found <- firstExisting candidates
   case found of
     Nothing ->

@@ -12,7 +12,7 @@ import System.Directory
   , removeDirectoryRecursive
   , removeFile
   )
-import System.Environment (getArgs, getEnvironment)
+import System.Environment (getArgs, getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.Process
   ( CreateProcess (cwd, env)
@@ -465,12 +465,13 @@ buildC opts coreMod = do
 
 buildGo :: BuildOptions -> Core.CoreModule -> IO ()
 buildGo opts coreMod = do
+  runtimePath <- lookupEnv "LUNE_RUNTIME_PATH"
   let goModulePath = "lune.local/generated"
       rtImportPath = goModulePath <> "/rt"
       goDir = buildOutput opts <> ".go-build"
       goModPath = goDir </> "go.mod"
       mainPath = goDir </> "main.go"
-      runtimeTemplateRoot = "runtime/go"
+      runtimeTemplateRoot = maybe "runtime/go" id runtimePath
       coreMod' = ANF.anfModule coreMod
 
   runtimeExists <- doesDirectoryExist runtimeTemplateRoot
