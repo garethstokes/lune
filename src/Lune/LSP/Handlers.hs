@@ -56,6 +56,7 @@ import Language.LSP.Protocol.Types
 import qualified Lune.Check as Check
 import Lune.Desugar (desugarModule)
 import qualified Lune.Fmt as Fmt
+import Lune.ModuleGraph (ModuleLoader (..))
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Parser as Parser
 import qualified Lune.Resolve as Resolve
@@ -163,7 +164,8 @@ handleDidClose stateRef (TNotificationMessage _ _ (DidCloseTextDocumentParams (T
 
 publishCheckedDiagnostics :: IORef LspState -> FilePath -> Text -> LspM () ()
 publishCheckedDiagnostics stateRef path contents = do
-  diags <- liftIO (checkFile path contents)
+  let loader = mkLspModuleLoader stateRef
+  diags <- liftIO (checkFile loader path contents)
   let lspDiags = map (toLspDiagnostic contents) diags
       uri = filePathToUri' path
   liftIO $
@@ -258,14 +260,14 @@ toLspDiagnostic doc (LuneDiag sp sev msg) =
         Nothing
         Nothing
 
-checkFile :: FilePath -> Text -> IO [LuneDiag]
-checkFile path contents =
+checkFile :: ModuleLoader -> FilePath -> Text -> IO [LuneDiag]
+checkFile loader path contents =
   handleExceptions $ do
     case parseModuleFromText path contents of
       Left bundle ->
         pure [diagFromParseBundle bundle]
       Right m -> do
-        loaded <- MG.loadProgramWithEntryModule path m
+        loaded <- MG.loadProgramWithEntryModuleUsing loader path m
         case loaded of
           Left err ->
             pure [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))]
@@ -312,3 +314,17 @@ parseModuleInfo path contents =
   case Parser.parseTextBundle path contents of
     Left _ -> (Nothing, Set.empty)
     Right m -> (Just (S.modName m), Set.fromList (map S.impName (S.modImports m)))
+
+-- | Create a ModuleLoader that reads from open buffers first, then disk.
+mkLspModuleLoader :: IORef LspState -> ModuleLoader
+mkLspModuleLoader stateRef = ModuleLoader
+  { mlReadFileText = \path -> do
+      st <- readIORef stateRef
+      case lookupOpenDocText path st of
+        Just txt -> pure (Right txt)
+        Nothing -> do
+          result <- try (TIO.readFile path) :: IO (Either SomeException Text)
+          pure $ case result of
+            Left e -> Left (displayException e)
+            Right t -> Right t
+  }
