@@ -38,6 +38,12 @@ main =
 import Lune.Prelude exposing (
   Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit
 )
+import Lune.Atomic as Atomic exposing (Atomic, Shared)
+import Lune.Fiber as Fiber exposing (Fiber)
+import Lune.Task as Task
+import Lune.IO as IO
+import Lune.Int as Int
+import Lune.String as String
 
 -- =============================================================================
 -- Public Types
