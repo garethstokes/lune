@@ -20,6 +20,7 @@ import System.FilePath (splitDirectories, takeDirectory, (</>), isAbsolute)
 
 data ModuleError
   = ModuleParseError FilePath String
+  | ModuleReadError FilePath String
   | MissingModule Text [FilePath]
   | ModuleNameMismatch Text Text FilePath
   | DuplicateModuleName Text FilePath FilePath
