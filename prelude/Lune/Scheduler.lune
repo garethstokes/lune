@@ -310,3 +310,56 @@ triggerInternal sched jobId =
         Atomic.write sched.state.queue (Cons jobId queue)
       )
     Task.succeed Unit
+
+-- =============================================================================
+-- Runner
+-- =============================================================================
+
+-- | Main runner loop - processes jobs from the queue
+runnerLoop : Scheduler -> Task Unit Unit
+runnerLoop sched =
+  do
+    isRunning <- Atomic.commit (Atomic.read sched.state.running)
+    case isRunning of
+      False -> Task.succeed Unit
+      True ->
+        do
+          maybeJob <- Atomic.commit (tryDequeue sched)
+          case maybeJob of
+            Nothing ->
+              do
+                _ <- Fiber.yield
+                runnerLoop sched
+            Just entry ->
+              do
+                _ <- executeJob sched entry
+                runnerLoop sched
+
+-- | Try to dequeue a job, respecting concurrency policy
+tryDequeue : Scheduler -> Atomic (Maybe JobEntry)
+tryDequeue sched =
+  do
+    queue <- Atomic.read sched.state.queue
+    case queue of
+      Nil -> pure Nothing
+      Cons jobId rest ->
+        do
+          Atomic.write sched.state.queue rest
+          jobs <- Atomic.read sched.state.jobs
+          case findJob jobId jobs of
+            Nothing ->
+              pure Nothing
+            Just entry ->
+              case entry.spec.concurrency of
+                AllowConcurrent ->
+                  pure (Just entry)
+                OneInstance ->
+                  do
+                    inFlight <- Atomic.read sched.state.inFlight
+                    case memberJobId jobId inFlight of
+                      True ->
+                        pure Nothing
+                      False ->
+                        do
+                          Atomic.write sched.state.inFlight (Cons jobId inFlight)
+                          pure (Just entry)
