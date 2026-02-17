@@ -2,7 +2,7 @@ module Scheduler exposing (main)
 
 {-| Demonstrates the job scheduler with different schedule types. -}
 
-import Lune.Prelude exposing (Task, Result(..), Unit, Int)
+import Lune.Prelude exposing (Task, Result(..), Unit, unit, Int)
 import Lune.IO as IO
 import Lune.Scheduler as Scheduler exposing (
   Scheduler, JobId(..), Schedule(..), Concurrency(..), JobSpec, SchedulerError
@@ -16,22 +16,13 @@ main =
     sched <- Scheduler.new
 
     _ <- IO.println "Registering periodic job..."
-    tickResult <- registerTick sched
-    case tickResult of
-      Err e -> IO.println "Failed to register tick job"
-      Ok u -> IO.println "Registered tick job"
+    _ <- registerTick sched
 
     _ <- IO.println "Registering one-shot job..."
-    oneshotResult <- registerOneshot sched
-    case oneshotResult of
-      Err e -> IO.println "Failed to register oneshot job"
-      Ok u -> IO.println "Registered oneshot job"
+    _ <- registerOneshot sched
 
     _ <- IO.println "Registering manual job..."
-    manualResult <- registerManual sched
-    case manualResult of
-      Err e -> IO.println "Failed to register manual job"
-      Ok u -> IO.println "Registered manual job"
+    _ <- registerManual sched
 
     _ <- IO.println "Starting scheduler..."
     _ <- Scheduler.start sched
@@ -39,7 +30,7 @@ main =
     _ <- IO.sleepMs 3000
 
     _ <- IO.println "Triggering manual job..."
-    _ <- Scheduler.trigger sched (JobId "manual")
+    _ <- Task.onError (Scheduler.trigger sched (JobId "manual")) (\e -> Task.succeed unit)
 
     _ <- IO.sleepMs 2000
 
@@ -48,29 +39,44 @@ main =
 
     IO.println "Done!"
 
-registerTick : Scheduler -> Task SchedulerError Unit
+registerTick : Scheduler -> Task Unit Unit
 registerTick sched =
-  Scheduler.register sched
-    { id = JobId "tick"
-    , schedule = EveryMs 1000
-    , concurrency = OneInstance
-    , action = IO.println "  tick!"
-    }
+  Task.onError
+    (do
+      _ <- Scheduler.register sched
+        { id = JobId "tick"
+        , schedule = EveryMs 1000
+        , concurrency = OneInstance
+        , action = IO.println "  tick!"
+        }
+      Task.succeed unit
+    )
+    (\e -> Task.succeed unit)
 
-registerOneshot : Scheduler -> Task SchedulerError Unit
+registerOneshot : Scheduler -> Task Unit Unit
 registerOneshot sched =
-  Scheduler.register sched
-    { id = JobId "oneshot"
-    , schedule = AfterMs 2500
-    , concurrency = AllowConcurrent
-    , action = IO.println "  oneshot fired!"
-    }
+  Task.onError
+    (do
+      _ <- Scheduler.register sched
+        { id = JobId "oneshot"
+        , schedule = AfterMs 2500
+        , concurrency = AllowConcurrent
+        , action = IO.println "  oneshot fired!"
+        }
+      Task.succeed unit
+    )
+    (\e -> Task.succeed unit)
 
-registerManual : Scheduler -> Task SchedulerError Unit
+registerManual : Scheduler -> Task Unit Unit
 registerManual sched =
-  Scheduler.register sched
-    { id = JobId "manual"
-    , schedule = Manual
-    , concurrency = OneInstance
-    , action = IO.println "  manual job executed!"
-    }
+  Task.onError
+    (do
+      _ <- Scheduler.register sched
+        { id = JobId "manual"
+        , schedule = Manual
+        , concurrency = OneInstance
+        , action = IO.println "  manual job executed!"
+        }
+      Task.succeed unit
+    )
+    (\e -> Task.succeed unit)

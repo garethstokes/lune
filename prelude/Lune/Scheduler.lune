@@ -36,7 +36,7 @@ main =
 -}
 
 import Lune.Prelude exposing (
-  Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit, Monad(..)
+  Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit, unit, Applicative(..), Monad(..)
 )
 import Lune.Atomic as Atomic exposing (Atomic, Shared)
 import Lune.Fiber as Fiber exposing (Fiber)
@@ -127,7 +127,7 @@ start sched =
   do
     _ <- Atomic.commit (Atomic.write sched.state.running True)
     _ <- Fiber.spawn (runnerLoop sched)
-    Task.succeed Unit
+    Task.succeed unit
 
 -- | Stop the scheduler (runner will exit on next iteration)
 stop : Scheduler -> Task e Unit
@@ -204,7 +204,7 @@ register sched spec =
             do
               let entry = { spec = spec, timerFiber = Nothing }
               Atomic.write sched.state.jobs (Cons entry jobs)
-              pure (Ok Unit)
+              pure (Ok unit)
       )
     case result of
       Err e -> Task.fail e
@@ -217,15 +217,15 @@ armSchedule : Scheduler -> JobSpec -> Task e Unit
 armSchedule sched spec =
   case spec.schedule of
     Manual ->
-      Task.succeed Unit
+      Task.succeed unit
     AfterMs delayMs ->
       do
         _ <- Fiber.spawn (afterMsTimer sched spec.id delayMs)
-        Task.succeed Unit
+        Task.succeed unit
     EveryMs intervalMs ->
       do
         _ <- Fiber.spawn (everyMsTimer sched spec.id intervalMs)
-        Task.succeed Unit
+        Task.succeed unit
 
 -- | Timer for AfterMs: sleep then trigger once
 afterMsTimer : Scheduler -> JobId -> Int -> Task Unit Unit
@@ -242,7 +242,7 @@ everyMsTimer sched jobId intervalMs =
   do
     isRunning <- Atomic.commit (Atomic.read sched.state.running)
     case isRunning of
-      False -> Task.succeed Unit
+      False -> Task.succeed unit
       True ->
         do
           _ <- IO.sleepMs intervalMs
@@ -273,7 +273,7 @@ unregisterInternal sched jobId =
         inFlight <- Atomic.read sched.state.inFlight
         Atomic.write sched.state.inFlight (removeJobId jobId inFlight)
       )
-    Task.succeed Unit
+    Task.succeed unit
 
 -- | Manually trigger a job to run
 -- Returns Err if job doesn't exist or scheduler not running
@@ -294,11 +294,11 @@ trigger sched jobId =
                   do
                     queue <- Atomic.read sched.state.queue
                     Atomic.write sched.state.queue (Cons jobId queue)
-                    pure (Ok Unit)
+                    pure (Ok unit)
             )
           case result of
             Err e -> Task.fail e
-            Ok u -> Task.succeed Unit
+            Ok u -> Task.succeed unit
 
 -- | Internal trigger (doesn't fail, used by timers)
 triggerInternal : Scheduler -> JobId -> Task e Unit
@@ -309,7 +309,7 @@ triggerInternal sched jobId =
         queue <- Atomic.read sched.state.queue
         Atomic.write sched.state.queue (Cons jobId queue)
       )
-    Task.succeed Unit
+    Task.succeed unit
 
 -- =============================================================================
 -- Runner
@@ -321,7 +321,7 @@ runnerLoop sched =
   do
     isRunning <- Atomic.commit (Atomic.read sched.state.running)
     case isRunning of
-      False -> Task.succeed Unit
+      False -> Task.succeed unit
       True ->
         do
           maybeJob <- Atomic.commit (tryDequeue sched)
@@ -368,10 +368,10 @@ tryDequeue sched =
 executeJob : Scheduler -> JobEntry -> Task Unit Unit
 executeJob sched entry =
   do
-    _ <- Task.onError entry.spec.action (\err -> Task.succeed Unit)
+    _ <- Task.onError entry.spec.action (\err -> Task.succeed unit)
     case entry.spec.concurrency of
       AllowConcurrent ->
-        Task.succeed Unit
+        Task.succeed unit
       OneInstance ->
         do
           _ <- Atomic.commit
@@ -379,4 +379,4 @@ executeJob sched entry =
               inFlight <- Atomic.read sched.state.inFlight
               Atomic.write sched.state.inFlight (removeJobId entry.spec.id inFlight)
             )
-          Task.succeed Unit
+          Task.succeed unit
