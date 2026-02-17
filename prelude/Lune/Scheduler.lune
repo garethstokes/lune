@@ -99,3 +99,24 @@ type alias JobEntry =
   { spec : JobSpec
   , timerFiber : Maybe (Fiber (Result Unit Unit))
   }
+
+-- =============================================================================
+-- Lifecycle
+-- =============================================================================
+
+-- | Create a new scheduler (not yet running)
+new : Task e Scheduler
+new =
+  do
+    runningVar <- Atomic.commit (Atomic.new False)
+    jobsVar <- Atomic.commit (Atomic.new Nil)
+    queueVar <- Atomic.commit (Atomic.new Nil)
+    inFlightVar <- Atomic.commit (Atomic.new Nil)
+    Task.succeed
+      { state =
+        { running = runningVar
+        , jobs = jobsVar
+        , queue = queueVar
+        , inFlight = inFlightVar
+        }
+      }
