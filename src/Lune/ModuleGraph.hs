@@ -3,9 +3,10 @@ module Lune.ModuleGraph
   , LoadedModule (..)
   , Program (..)
   , ModuleLoader (..)
-  , defaultDiskLoader    -- NEW
+  , defaultDiskLoader
   , loadProgram
   , loadProgramWithEntryModule
+  , loadProgramWithEntryModuleUsing
   , resolveModulePath
   ) where
 
@@ -21,6 +22,7 @@ import qualified Lune.Derive as Derive
 import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.FilePath (splitDirectories, takeDirectory, (</>), isAbsolute)
+import Text.Megaparsec (errorBundlePretty)
 
 data ModuleError
   = ModuleParseError FilePath String
@@ -72,9 +74,11 @@ loadProgram entryPath = do
       loadProgramWithEntryModule entryPath entryModule
 
 loadProgramWithEntryModule :: FilePath -> S.Module -> IO (Either ModuleError Program)
-loadProgramWithEntryModule entryPath entryModule = do
+loadProgramWithEntryModule = loadProgramWithEntryModuleUsing defaultDiskLoader
+
+loadProgramWithEntryModuleUsing :: ModuleLoader -> FilePath -> S.Module -> IO (Either ModuleError Program)
+loadProgramWithEntryModuleUsing loader entryPath entryModule = do
   let entryDir = takeDirectory entryPath
-  -- Expand @derive annotations before loading imports
   case Derive.expandDerives entryModule of
     Left deriveErr ->
       pure (Left (DeriveExpansionError deriveErr))
@@ -86,7 +90,7 @@ loadProgramWithEntryModule entryPath entryModule = do
               , lmPath = entryPath
               , lmModule = expandedModule
               }
-      loaded <- loadModule entryDir [] Map.empty entryLoaded
+      loaded <- loadModuleUsing loader entryDir [] Map.empty entryLoaded
       case loaded of
         Left err ->
           pure (Left err)
@@ -100,8 +104,8 @@ loadProgramWithEntryModule entryPath entryModule = do
                   }
             )
 
-loadModule :: FilePath -> [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
-loadModule entryDir stack loaded m =
+loadModuleUsing :: ModuleLoader -> FilePath -> [Text] -> Map Text LoadedModule -> LoadedModule -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
+loadModuleUsing loader entryDir stack loaded m =
   case Map.lookup (lmName m) loaded of
     Just existing ->
       if lmPath existing == lmPath m
@@ -111,7 +115,7 @@ loadModule entryDir stack loaded m =
       if lmName m `elem` stack
         then pure (Left (ImportCycle (reverse (lmName m : stack))))
         else do
-          deps <- loadImports entryDir (lmName m : stack) loaded (implicitPreludeImports m (S.modImports (lmModule m)))
+          deps <- loadImportsUsing loader entryDir (lmName m : stack) loaded (implicitPreludeImports m (S.modImports (lmModule m)))
           case deps of
             Left err ->
               pure (Left err)
@@ -141,8 +145,8 @@ isPreludePath path =
   where
     isInfixOf needle haystack = needle `elem` words (map (\c -> if c == '/' || c == '-' then ' ' else c) haystack)
 
-loadImports :: FilePath -> [Text] -> Map Text LoadedModule -> [S.Import] -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
-loadImports entryDir stack loaded imports =
+loadImportsUsing :: ModuleLoader -> FilePath -> [Text] -> Map Text LoadedModule -> [S.Import] -> IO (Either ModuleError (Map Text LoadedModule, [Text]))
+loadImportsUsing loader entryDir stack loaded imports =
   go loaded [] imports
   where
     go accLoaded accOrder [] =
@@ -158,26 +162,30 @@ loadImports entryDir stack loaded imports =
             Left err ->
               pure (Left err)
             Right path -> do
-              parsed <- Parser.parseFileEither path
-              case parsed of
-                Left perr ->
-                  pure (Left (ModuleParseError path perr))
-                Right m -> do
-                  if S.modName m /= modName
-                    then pure (Left (ModuleNameMismatch modName (S.modName m) path))
-                    else do
-                      let modInfo =
-                            LoadedModule
-                              { lmName = modName
-                              , lmPath = path
-                              , lmModule = m
-                              }
-                      loadedRes <- loadModule entryDir stack accLoaded modInfo
-                      case loadedRes of
-                        Left err ->
-                          pure (Left err)
-                        Right (loaded', order') ->
-                          go loaded' (accOrder <> order') rest
+              eText <- mlReadFileText loader path
+              case eText of
+                Left ioErr ->
+                  pure (Left (ModuleReadError path ioErr))
+                Right txt ->
+                  case Parser.parseTextBundle path txt of
+                    Left bundle ->
+                      pure (Left (ModuleParseError path (errorBundlePretty bundle)))
+                    Right m -> do
+                      if S.modName m /= modName
+                        then pure (Left (ModuleNameMismatch modName (S.modName m) path))
+                        else do
+                          let modInfo =
+                                LoadedModule
+                                  { lmName = modName
+                                  , lmPath = path
+                                  , lmModule = m
+                                  }
+                          loadedRes <- loadModuleUsing loader entryDir stack accLoaded modInfo
+                          case loadedRes of
+                            Left err ->
+                              pure (Left err)
+                            Right (loaded', order') ->
+                              go loaded' (accOrder <> order') rest
 
 resolveModulePath :: FilePath -> Text -> IO (Either ModuleError FilePath)
 resolveModulePath entryDir modName = do
