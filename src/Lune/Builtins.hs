@@ -9,9 +9,10 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (try, IOException, SomeException)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Control.Monad (replicateM)
+import Control.Monad (replicateM, when)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as BS
 import qualified Data.Char as Char
@@ -773,6 +774,7 @@ builtinEvalPrims =
     , ("prim_tlsClose", BuiltinPrim 1 primTlsClose)
     -- Time primitives
     , ("prim_timeNowMicros", BuiltinPrim 0 primTimeNowMicros)
+    , ("prim_sleepMs", BuiltinPrim 1 primSleepMs)
     ]
 
 builtinEvalEnv :: Map Text Value
@@ -2562,3 +2564,18 @@ primTimeNowMicros [] =
     pure $ Right (world, VInt micros)
 primTimeNowMicros args =
   Left (NotAFunction (VPrim 0 primTimeNowMicros args))
+
+-- | prim_sleepMs : Int -> IO Unit
+-- Sleeps for the given number of milliseconds
+primSleepMs :: [Value] -> Either EvalError Value
+primSleepMs args =
+  case args of
+    [VInt ms] ->
+      Right $ VIO $ \world -> do
+        when (ms > 0) $
+          threadDelay (fromIntegral ms * 1000)  -- threadDelay takes microseconds
+        pure $ Right (world, VCon (preludeCon' "Unit") [])
+    _ ->
+      Left (NotAFunction (VPrim 1 primSleepMs args))
+  where
+    preludeCon' n = "Lune.Prelude." <> n
