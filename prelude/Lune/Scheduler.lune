@@ -1,0 +1,95 @@
+module Lune.Scheduler exposing (
+  Scheduler,
+  JobId(..),
+  Schedule(..),
+  Concurrency(..),
+  JobSpec,
+  SchedulerError(..),
+  new,
+  start,
+  stop,
+  register,
+  unregister,
+  trigger
+)
+
+{-| Job scheduling for Lune.
+
+Provides cron-like scheduling using fibers and STM.
+Jobs can run on intervals, after delays, or be triggered manually.
+
+Example:
+```
+main =
+  do
+    sched <- Scheduler.new
+    _ <- Scheduler.register sched
+      { id = JobId "tick"
+      , schedule = EveryMs 1000
+      , concurrency = OneInstance
+      , action = IO.println "tick"
+      }
+    _ <- Scheduler.start sched
+    _ <- IO.sleepMs 5000
+    Scheduler.stop sched
+```
+-}
+
+import Lune.Prelude exposing (
+  Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit
+)
+
+-- =============================================================================
+-- Public Types
+-- =============================================================================
+
+-- | Unique identifier for a job
+type JobId = JobId String
+
+-- | When a job should run
+type Schedule =
+  Manual
+  | AfterMs Int
+  | EveryMs Int
+
+-- | How concurrent triggers are handled
+type Concurrency =
+  OneInstance
+  | AllowConcurrent
+
+-- | Job specification
+type alias JobSpec =
+  { id : JobId
+  , schedule : Schedule
+  , concurrency : Concurrency
+  , action : Task Unit Unit
+  }
+
+-- | Scheduler errors
+type SchedulerError =
+  JobAlreadyRegistered
+  | JobNotFound
+  | SchedulerNotRunning
+
+-- | The scheduler handle (opaque to users)
+type alias Scheduler =
+  { state : SchedulerState
+  }
+
+-- =============================================================================
+-- Internal Types
+-- =============================================================================
+
+-- Internal state held in STM
+type alias SchedulerState =
+  { running : Shared Bool
+  , jobs : Shared (List JobEntry)
+  , queue : Shared (List JobId)
+  , inFlight : Shared (List JobId)
+  }
+
+-- Job entry with metadata
+type alias JobEntry =
+  { spec : JobSpec
+  , timerFiber : Maybe (Fiber (Result Unit Unit))
+  }
