@@ -36,7 +36,7 @@ main =
 -}
 
 import Lune.Prelude exposing (
-  Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit
+  Bool(..), Int, List(..), Maybe(..), Result(..), Task(..), Unit, Monad(..)
 )
 import Lune.Atomic as Atomic exposing (Atomic, Shared)
 import Lune.Fiber as Fiber exposing (Fiber)
@@ -185,3 +185,66 @@ removeJobId targetId ids =
       case jobIdEq targetId id of
         True -> rest
         False -> Cons id (removeJobId targetId rest)
+
+-- =============================================================================
+-- Job Management
+-- =============================================================================
+
+-- | Register a job with the scheduler
+-- Returns Err if a job with the same ID already exists
+register : Scheduler -> JobSpec -> Task SchedulerError Unit
+register sched spec =
+  do
+    result <- Atomic.commit
+      (do
+        jobs <- Atomic.read sched.state.jobs
+        case findJob spec.id jobs of
+          Just existing -> pure (Err JobAlreadyRegistered)
+          Nothing ->
+            do
+              let entry = { spec = spec, timerFiber = Nothing }
+              Atomic.write sched.state.jobs (Cons entry jobs)
+              pure (Ok Unit)
+      )
+    case result of
+      Err e -> Task.fail e
+      Ok u ->
+        do
+          armSchedule sched spec
+
+-- | Spawn a timer fiber for scheduled jobs
+armSchedule : Scheduler -> JobSpec -> Task e Unit
+armSchedule sched spec =
+  case spec.schedule of
+    Manual ->
+      Task.succeed Unit
+    AfterMs delayMs ->
+      do
+        _ <- Fiber.spawn (afterMsTimer sched spec.id delayMs)
+        Task.succeed Unit
+    EveryMs intervalMs ->
+      do
+        _ <- Fiber.spawn (everyMsTimer sched spec.id intervalMs)
+        Task.succeed Unit
+
+-- | Timer for AfterMs: sleep then trigger once
+afterMsTimer : Scheduler -> JobId -> Int -> Task Unit Unit
+afterMsTimer sched jobId delayMs =
+  do
+    _ <- IO.sleepMs delayMs
+    _ <- triggerInternal sched jobId
+    -- Auto-unregister after running
+    unregisterInternal sched jobId
+
+-- | Timer for EveryMs: loop forever, sleep then trigger
+everyMsTimer : Scheduler -> JobId -> Int -> Task Unit Unit
+everyMsTimer sched jobId intervalMs =
+  do
+    isRunning <- Atomic.commit (Atomic.read sched.state.running)
+    case isRunning of
+      False -> Task.succeed Unit
+      True ->
+        do
+          _ <- IO.sleepMs intervalMs
+          _ <- triggerInternal sched jobId
+          everyMsTimer sched jobId intervalMs
