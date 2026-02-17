@@ -12,6 +12,8 @@ import Control.Exception (SomeException, displayException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (IORef, atomicModifyIORef', readIORef)
 import qualified Data.List.NonEmpty as NE
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -69,9 +71,11 @@ import Lune.LSP.Convert
   )
 import Lune.LSP.State
   ( LspState
+  , OpenDocInfo (..)
   , clearLastDiagnostics
   , lookupLastDiagnostics
   , lookupOpenDoc
+  , lookupOpenDocText
   , removeOpenDoc
   , setLastDiagnostics
   , setOpenDoc
@@ -114,7 +118,13 @@ handleDidOpen stateRef (TNotificationMessage _ _ (DidOpenTextDocumentParams docI
     Nothing ->
       pure ()
     Just path -> do
-      liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path contents st, ()))
+      let (modName, imports) = parseModuleInfo path contents
+          info = OpenDocInfo
+            { odiText = contents
+            , odiModuleName = modName
+            , odiImports = imports
+            }
+      liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
       publishCheckedDiagnostics stateRef path contents
 
 handleDidChange :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidChange -> LspM () ()
@@ -132,7 +142,13 @@ handleDidChange stateRef (TNotificationMessage _ _ (DidChangeTextDocumentParams 
                 case last cs of
                   TextDocumentContentChangeEvent (InR (TextDocumentContentChangeWholeDocument t)) -> t
                   TextDocumentContentChangeEvent (InL (TextDocumentContentChangePartial _ _ t)) -> t
-          liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path newText st, ()))
+              (modName, imports) = parseModuleInfo path newText
+              info = OpenDocInfo
+                { odiText = newText
+                , odiModuleName = modName
+                , odiImports = imports
+                }
+          liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
           publishCheckedDiagnostics stateRef path newText
 
 handleDidClose :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidClose -> LspM () ()
@@ -176,7 +192,7 @@ handleFormatting stateRef (TRequestMessage _ _ _ (DocumentFormattingParams _toke
     Just path -> do
       contentsOrErr <- liftIO $ do
         st <- readIORef stateRef
-        case lookupOpenDoc path st of
+        case lookupOpenDocText path st of
           Just t ->
             pure (Right t)
           Nothing ->
@@ -288,3 +304,11 @@ diagFromParseBundle bundle =
 
 parseModuleFromText :: FilePath -> Text -> Either (ParseErrorBundle Text Void) S.Module
 parseModuleFromText = Parser.parseTextBundle
+
+-- | Parse module to extract just name and imports.
+-- Returns (Nothing, empty) if parsing fails.
+parseModuleInfo :: FilePath -> Text -> (Maybe Text, Set Text)
+parseModuleInfo path contents =
+  case Parser.parseTextBundle path contents of
+    Left _ -> (Nothing, Set.empty)
+    Right m -> (Just (S.modName m), Set.fromList (map S.impName (S.modImports m)))
