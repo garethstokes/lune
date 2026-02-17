@@ -248,3 +248,29 @@ everyMsTimer sched jobId intervalMs =
           _ <- IO.sleepMs intervalMs
           _ <- triggerInternal sched jobId
           everyMsTimer sched jobId intervalMs
+
+-- | Unregister a job (removes it from the scheduler)
+unregister : Scheduler -> JobId -> Task e Unit
+unregister sched jobId =
+  unregisterInternal sched jobId
+
+-- | Internal unregister (doesn't fail if job not found)
+unregisterInternal : Scheduler -> JobId -> Task e Unit
+unregisterInternal sched jobId =
+  do
+    _ <- Atomic.commit
+      (do
+        jobs <- Atomic.read sched.state.jobs
+        Atomic.write sched.state.jobs (removeJob jobId jobs)
+      )
+    _ <- Atomic.commit
+      (do
+        queue <- Atomic.read sched.state.queue
+        Atomic.write sched.state.queue (removeJobId jobId queue)
+      )
+    _ <- Atomic.commit
+      (do
+        inFlight <- Atomic.read sched.state.inFlight
+        Atomic.write sched.state.inFlight (removeJobId jobId inFlight)
+      )
+    Task.succeed Unit
