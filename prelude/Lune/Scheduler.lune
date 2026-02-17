@@ -363,3 +363,20 @@ tryDequeue sched =
                         do
                           Atomic.write sched.state.inFlight (Cons jobId inFlight)
                           pure (Just entry)
+
+-- | Execute a job and clean up inFlight
+executeJob : Scheduler -> JobEntry -> Task Unit Unit
+executeJob sched entry =
+  do
+    _ <- Task.onError entry.spec.action (\err -> Task.succeed Unit)
+    case entry.spec.concurrency of
+      AllowConcurrent ->
+        Task.succeed Unit
+      OneInstance ->
+        do
+          _ <- Atomic.commit
+            (do
+              inFlight <- Atomic.read sched.state.inFlight
+              Atomic.write sched.state.inFlight (removeJobId entry.spec.id inFlight)
+            )
+          Task.succeed Unit
