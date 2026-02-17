@@ -274,3 +274,39 @@ unregisterInternal sched jobId =
         Atomic.write sched.state.inFlight (removeJobId jobId inFlight)
       )
     Task.succeed Unit
+
+-- | Manually trigger a job to run
+-- Returns Err if job doesn't exist or scheduler not running
+trigger : Scheduler -> JobId -> Task SchedulerError Unit
+trigger sched jobId =
+  do
+    isRunning <- Atomic.commit (Atomic.read sched.state.running)
+    case isRunning of
+      False -> Task.fail SchedulerNotRunning
+      True ->
+        do
+          result <- Atomic.commit
+            (do
+              jobs <- Atomic.read sched.state.jobs
+              case findJob jobId jobs of
+                Nothing -> pure (Err JobNotFound)
+                Just entry ->
+                  do
+                    queue <- Atomic.read sched.state.queue
+                    Atomic.write sched.state.queue (Cons jobId queue)
+                    pure (Ok Unit)
+            )
+          case result of
+            Err e -> Task.fail e
+            Ok u -> Task.succeed Unit
+
+-- | Internal trigger (doesn't fail, used by timers)
+triggerInternal : Scheduler -> JobId -> Task e Unit
+triggerInternal sched jobId =
+  do
+    _ <- Atomic.commit
+      (do
+        queue <- Atomic.read sched.state.queue
+        Atomic.write sched.state.queue (Cons jobId queue)
+      )
+    Task.succeed Unit
