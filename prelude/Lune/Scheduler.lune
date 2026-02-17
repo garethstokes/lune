@@ -133,3 +133,55 @@ start sched =
 stop : Scheduler -> Task e Unit
 stop sched =
   Atomic.commit (Atomic.write sched.state.running False)
+
+-- =============================================================================
+-- Internal Helpers
+-- =============================================================================
+
+-- | Check if a JobId matches
+jobIdEq : JobId -> JobId -> Bool
+jobIdEq a b =
+  case a of
+    JobId sa ->
+      case b of
+        JobId sb -> String.eq sa sb
+
+-- | Find a job entry by ID
+findJob : JobId -> List JobEntry -> Maybe JobEntry
+findJob targetId entries =
+  case entries of
+    Nil -> Nothing
+    Cons entry rest ->
+      case jobIdEq targetId entry.spec.id of
+        True -> Just entry
+        False -> findJob targetId rest
+
+-- | Check if a JobId is in a list
+memberJobId : JobId -> List JobId -> Bool
+memberJobId targetId ids =
+  case ids of
+    Nil -> False
+    Cons id rest ->
+      case jobIdEq targetId id of
+        True -> True
+        False -> memberJobId targetId rest
+
+-- | Remove a job entry by ID
+removeJob : JobId -> List JobEntry -> List JobEntry
+removeJob targetId entries =
+  case entries of
+    Nil -> Nil
+    Cons entry rest ->
+      case jobIdEq targetId entry.spec.id of
+        True -> rest
+        False -> Cons entry (removeJob targetId rest)
+
+-- | Remove a JobId from a list
+removeJobId : JobId -> List JobId -> List JobId
+removeJobId targetId ids =
+  case ids of
+    Nil -> Nil
+    Cons id rest ->
+      case jobIdEq targetId id of
+        True -> rest
+        False -> Cons id (removeJobId targetId rest)
