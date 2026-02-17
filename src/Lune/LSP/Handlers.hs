@@ -11,6 +11,7 @@ module Lune.LSP.Handlers
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (IORef, atomicModifyIORef', readIORef)
+import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Set (Set)
 import qualified Data.Set as Set
@@ -74,6 +75,7 @@ import Lune.LSP.State
   ( LspState
   , OpenDocInfo (..)
   , clearLastDiagnostics
+  , getAffectedFiles
   , lookupLastDiagnostics
   , lookupOpenDoc
   , lookupOpenDocText
@@ -126,7 +128,7 @@ handleDidOpen stateRef (TNotificationMessage _ _ (DidOpenTextDocumentParams docI
             , odiImports = imports
             }
       liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
-      publishCheckedDiagnostics stateRef path contents
+      publishWorkspaceDiagnostics stateRef path
 
 handleDidChange :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidChange -> LspM () ()
 handleDidChange stateRef (TNotificationMessage _ _ (DidChangeTextDocumentParams docId changes)) = do
@@ -150,7 +152,7 @@ handleDidChange stateRef (TNotificationMessage _ _ (DidChangeTextDocumentParams 
                 , odiImports = imports
                 }
           liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
-          publishCheckedDiagnostics stateRef path newText
+          publishWorkspaceDiagnostics stateRef path
 
 handleDidClose :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidClose -> LspM () ()
 handleDidClose stateRef (TNotificationMessage _ _ (DidCloseTextDocumentParams (TextDocumentIdentifier uri))) = do
@@ -171,6 +173,27 @@ publishCheckedDiagnostics stateRef path contents = do
   liftIO $
     atomicModifyIORef' stateRef (\st -> (setLastDiagnostics path lspDiags st, ()))
   sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
+
+-- | Publish diagnostics for the changed file and all files that import it.
+publishWorkspaceDiagnostics :: IORef LspState -> FilePath -> LspM () ()
+publishWorkspaceDiagnostics stateRef changedPath = do
+  st <- liftIO (readIORef stateRef)
+  let affected = getAffectedFiles changedPath st
+      loader = mkLspModuleLoader stateRef
+  -- Publish diagnostics for each affected file
+  mapM_ (publishDiagsForFile loader st) (sort affected)
+  where
+    publishDiagsForFile loader st path = do
+      -- Get current text from open docs or skip if not open
+      case lookupOpenDocText path st of
+        Nothing -> pure ()  -- File not open, skip
+        Just contents -> do
+          diags <- liftIO (checkFile loader path contents)
+          let lspDiags = map (toLspDiagnostic contents) diags
+              uri = filePathToUri' path
+          liftIO $
+            atomicModifyIORef' stateRef (\st' -> (setLastDiagnostics path lspDiags st', ()))
+          sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- =============================================================================
 -- Formatting
