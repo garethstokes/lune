@@ -25,7 +25,7 @@ import Data.Char (isSpace, toLower)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import System.Directory (listDirectory)
+import System.Directory (listDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
@@ -64,7 +64,7 @@ main = do
     , testGroup "Fmt" (map fmtGoldenTest fmtCases)
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
     , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
-    , testGroup "LSP" [lspIntegrationTest]
+    , testGroup "LSP" [lspIntegrationTest, vfsImportPropagationTest]
     ]
 
 -- | Discover .lune files in a directory, sorted for determinism.
@@ -579,3 +579,179 @@ waitForExitCode timeoutMicros ph =
               let sleepFor = min step remaining
               threadDelay sleepFor
               go (remaining - sleepFor)
+
+withTempDirectory :: String -> (FilePath -> IO a) -> IO a
+withTempDirectory prefix action = do
+  tmpBase <- getTemporaryDirectory
+  let dir = tmpBase </> prefix
+  bracket
+    (createDirectoryIfMissing True dir >> pure dir)
+    removeDirectoryRecursive
+    action
+
+-- | Test that VFS-aware imports propagate diagnostics across modules.
+-- When module B is changed (without saving), module A (which imports B)
+-- should see updated diagnostics reflecting B's unsaved changes.
+vfsImportPropagationTest :: TestTree
+vfsImportPropagationTest =
+  testCase "VfsImportPropagation" $ do
+    logMsg "starting VFS propagation test"
+    luneBin <- getLuneBin
+
+    -- Create temp directory with two modules: A imports B
+    withTempDirectory "lune-vfs-test" $ \tmpDir -> do
+      let pathA = tmpDir </> "A.lune"
+          pathB = tmpDir </> "B.lune"
+
+      -- Write initial valid modules to disk
+      -- Note: Using simple identity function to avoid needing prelude operators
+      TIO.writeFile pathB $ T.unlines
+        [ "module B exposing (helper)"
+        , ""
+        , "helper : Int -> Int"
+        , "helper x = x"
+        ]
+
+      TIO.writeFile pathA $ T.unlines
+        [ "module A exposing (main)"
+        , ""
+        , "import B"
+        , ""
+        , "main : Int"
+        , "main = B.helper 42"
+        ]
+
+      withLspServer luneBin $ \hin hout _ph -> do
+        -- Initialize
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (1 :: Int)
+          , "method" .= ("initialize" :: T.Text)
+          , "params" .= object
+              [ "processId" .= (Nothing :: Maybe Int)
+              , "rootUri" .= (Nothing :: Maybe T.Text)
+              , "capabilities" .= object []
+              ]
+          ]
+        _ <- waitForResponseId 1 hout
+
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("initialized" :: T.Text)
+          , "params" .= object []
+          ]
+
+        let uriA = fileUri pathA
+            uriB = fileUri pathB
+
+        -- Open both files (should have no errors)
+        -- Note: Using simple identity function to avoid needing prelude operators
+        let textA = T.unlines
+              [ "module A exposing (main)"
+              , ""
+              , "import B"
+              , ""
+              , "main : Int"
+              , "main = B.helper 42"
+              ]
+            textB = T.unlines
+              [ "module B exposing (helper)"
+              , ""
+              , "helper : Int -> Int"
+              , "helper x = x"
+              ]
+
+        -- Open B first
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("textDocument/didOpen" :: T.Text)
+          , "params" .= object
+              [ "textDocument" .= object
+                  [ "uri" .= uriB
+                  , "languageId" .= ("lune" :: T.Text)
+                  , "version" .= (0 :: Int)
+                  , "text" .= textB
+                  ]
+              ]
+          ]
+
+        diagsB1 <- waitForPublishDiagnostics uriB hout
+        logMsg ("B initial diags: " <> show (length diagsB1))
+
+        -- Open A
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("textDocument/didOpen" :: T.Text)
+          , "params" .= object
+              [ "textDocument" .= object
+                  [ "uri" .= uriA
+                  , "languageId" .= ("lune" :: T.Text)
+                  , "version" .= (0 :: Int)
+                  , "text" .= textA
+                  ]
+              ]
+          ]
+
+        diagsA1 <- waitForPublishDiagnostics uriA hout
+        logMsg ("A initial diags: " <> show (length diagsA1))
+
+        -- Both should have no errors initially
+        assertEqual "B has no initial errors" 0 (length diagsB1)
+        assertEqual "A has no initial errors" 0 (length diagsA1)
+
+        -- Now change B in memory to introduce a type error
+        -- Change helper to return String instead of Int
+        let textBBroken = T.unlines
+              [ "module B exposing (helper)"
+              , ""
+              , "helper : Int -> String"
+              , "helper x = \"broken\""
+              ]
+
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("textDocument/didChange" :: T.Text)
+          , "params" .= object
+              [ "textDocument" .= object
+                  [ "uri" .= uriB
+                  , "version" .= (1 :: Int)
+                  ]
+              , "contentChanges" .= [ object [ "text" .= textBBroken ] ]
+              ]
+          ]
+
+        -- We should get diagnostics for B (no error in B itself)
+        diagsB2 <- waitForPublishDiagnostics uriB hout
+        logMsg ("B after change diags: " <> show (length diagsB2))
+
+        -- And we should get diagnostics for A (type mismatch: expects Int, got String)
+        diagsA2 <- waitForPublishDiagnostics uriA hout
+        logMsg ("A after B change diags: " <> show (length diagsA2))
+
+        -- A should have an error because B.helper now returns String, not Int
+        assertEqual "A has type error after B change" True (length diagsA2 > 0)
+
+        -- Fix B again
+        sendLsp hin $ object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("textDocument/didChange" :: T.Text)
+          , "params" .= object
+              [ "textDocument" .= object
+                  [ "uri" .= uriB
+                  , "version" .= (2 :: Int)
+                  ]
+              , "contentChanges" .= [ object [ "text" .= textB ] ]
+              ]
+          ]
+
+        diagsB3 <- waitForPublishDiagnostics uriB hout
+        diagsA3 <- waitForPublishDiagnostics uriA hout
+
+        logMsg ("B after fix diags: " <> show (length diagsB3))
+        logMsg ("A after fix diags: " <> show (length diagsA3))
+
+        -- Both should be clean again
+        assertEqual "B is clean after fix" 0 (length diagsB3)
+        assertEqual "A is clean after fix" 0 (length diagsA3)
+
+        logMsg "VFS propagation test passed"

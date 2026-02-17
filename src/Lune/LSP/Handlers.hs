@@ -175,18 +175,22 @@ publishCheckedDiagnostics stateRef path contents = do
   sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- | Publish diagnostics for the changed file and all files that import it.
+-- Processes the changed file first, then dependents in sorted order.
 publishWorkspaceDiagnostics :: IORef LspState -> FilePath -> LspM () ()
 publishWorkspaceDiagnostics stateRef changedPath = do
   st <- liftIO (readIORef stateRef)
   let affected = getAffectedFiles changedPath st
       loader = mkLspModuleLoader stateRef
+      -- Process changed file first, then others in sorted order
+      others = sort (filter (/= changedPath) affected)
+      ordered = changedPath : others
   -- Publish diagnostics for each affected file
-  mapM_ (publishDiagsForFile loader st) (sort affected)
+  mapM_ (publishDiagsForFile loader st) ordered
   where
-    publishDiagsForFile loader st path = do
+    publishDiagsForFile loader st path =
       -- Get current text from open docs or skip if not open
       case lookupOpenDocText path st of
-        Nothing -> pure ()  -- File not open, skip
+        Nothing -> pure ()
         Just contents -> do
           diags <- liftIO (checkFile loader path contents)
           let lspDiags = map (toLspDiagnostic contents) diags
