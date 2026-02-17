@@ -120,3 +120,16 @@ new =
         , inFlight = inFlightVar
         }
       }
+
+-- | Start the scheduler (spawns the runner fiber)
+start : Scheduler -> Task e Unit
+start sched =
+  do
+    _ <- Atomic.commit (Atomic.write sched.state.running True)
+    _ <- Fiber.spawn (runnerLoop sched)
+    Task.succeed Unit
+
+-- | Stop the scheduler (runner will exit on next iteration)
+stop : Scheduler -> Task e Unit
+stop sched =
+  Atomic.commit (Atomic.write sched.state.running False)
