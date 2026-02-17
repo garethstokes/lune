@@ -2,11 +2,13 @@ module Lune.Eval.Types
   ( Env
   , TVarId
   , FiberId
+  , FiberHandle (..)
   , SocketId
   , ConnId
   , TlsConnId
   , STMAction (..)
   , FiberState (..)
+  , SharedState (..)
   , World (..)
   , Value (..)
   , Template (..)
@@ -17,6 +19,8 @@ module Lune.Eval.Types
   , EvalError (..)
   ) where
 
+import Control.Concurrent.MVar (MVar)
+import Control.Concurrent.STM (TVar)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
@@ -39,6 +43,14 @@ type SocketId = Int
 type ConnId = Int
 type TlsConnId = Int
 
+-- | Handle for a spawned fiber - contains MVar for the result
+data FiberHandle = FiberHandle
+  { fiberResultVar :: MVar (Either EvalError Value)
+  }
+
+instance Show FiberHandle where
+  show _ = "<fiber-handle>"
+
 data FiberState
   = FiberRunning
   | FiberSuspended (World -> IO (Either EvalError (World, Value)))
@@ -50,6 +62,12 @@ instance Show FiberState where
   show (FiberSuspended _) = "FiberSuspended <cont>"
   show (FiberCompleted v) = "FiberCompleted " <> show v
   show (FiberFailed e) = "FiberFailed " <> show e
+
+-- | Thread-safe shared state for concurrent fiber access
+data SharedState = SharedState
+  { sharedTVars :: TVar (IntMap Value)      -- Thread-safe TVar storage
+  , sharedNextTVarId :: TVar TVarId         -- Thread-safe ID allocation
+  }
 
 -- | STM transaction action - builds up reads/writes for atomic commit
 data STMAction
@@ -63,15 +81,15 @@ data STMAction
 
 data World = World
   { worldStdout :: [Text]
-  , worldTVars :: IntMap Value        -- TVar storage
-  , worldNextTVarId :: TVarId         -- Next TVar ID to allocate
-  , worldFibers :: IntMap FiberState  -- Fiber storage
-  , worldNextFiberId :: FiberId       -- Next Fiber ID to allocate
-  , worldReadyQueue :: [FiberId]      -- Fibers ready to run
-  , worldSockets :: IntMap NS.Socket  -- Listening sockets
-  , worldNextSocketId :: SocketId     -- Next Socket ID
-  , worldConns :: IntMap NS.Socket    -- Connections (also sockets)
-  , worldNextConnId :: ConnId         -- Next Connection ID
+  , worldShared :: SharedState          -- Thread-safe shared state (TVars)
+  , worldFibers :: IntMap FiberState    -- Fiber storage (legacy, for compatibility)
+  , worldNextFiberId :: FiberId         -- Next Fiber ID to allocate
+  , worldReadyQueue :: [FiberId]        -- Fibers ready to run (legacy)
+  , worldCurrentFiber :: Maybe FiberId  -- Currently executing fiber (Nothing = main)
+  , worldSockets :: IntMap NS.Socket    -- Listening sockets
+  , worldNextSocketId :: SocketId       -- Next Socket ID
+  , worldConns :: IntMap NS.Socket      -- Connections (also sockets)
+  , worldNextConnId :: ConnId           -- Next Connection ID
   , worldTlsConns :: IntMap NC.Connection  -- TLS connections
   , worldNextTlsConnId :: TlsConnId        -- Next TLS connection ID
   , worldTlsContext :: Maybe NC.ConnectionContext  -- Shared TLS context
@@ -79,8 +97,8 @@ data World = World
 
 instance Show World where
   show w = "World { stdout = " <> show (worldStdout w)
-         <> ", tvars = " <> show (IntMap.size (worldTVars w)) <> " entries"
          <> ", fibers = " <> show (IntMap.size (worldFibers w)) <> " entries"
+         <> ", currentFiber = " <> show (worldCurrentFiber w)
          <> ", sockets = " <> show (IntMap.size (worldSockets w)) <> " entries"
          <> ", conns = " <> show (IntMap.size (worldConns w)) <> " entries"
          <> ", tlsconns = " <> show (IntMap.size (worldTlsConns w)) <> " entries"
@@ -136,7 +154,7 @@ data Value
   | VChar Char
   | VTVar TVarId
   | VSTM STMAction
-  | VFiber FiberId
+  | VFiber FiberHandle           -- Changed: now holds MVar-based handle
   | VSocket SocketId
   | VConn ConnId
   | VBytes BS.ByteString
@@ -203,8 +221,8 @@ instance Show Value where
         "<tvar:" <> show tvid <> ">"
       VSTM _ ->
         "<stm>"
-      VFiber fid ->
-        "<fiber:" <> show fid <> ">"
+      VFiber _ ->
+        "<fiber>"
       VSocket sid ->
         "<socket:" <> show sid <> ">"
       VConn cid ->

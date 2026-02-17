@@ -227,25 +227,41 @@ armSchedule sched spec =
         _ <- Fiber.spawn (everyMsTimer sched spec.id intervalMs)
         Task.succeed unit
 
--- | Timer for AfterMs: sleep then trigger once
+-- | Timer for AfterMs: sleep, check running, execute directly, then unregister
+-- We execute directly rather than using the queue to avoid a race condition
+-- where unregister removes the job before the runner can find it
 afterMsTimer : Scheduler -> JobId -> Int -> Task Unit Unit
 afterMsTimer sched jobId delayMs =
   do
     _ <- IO.sleepMs delayMs
-    _ <- triggerInternal sched jobId
-    -- Auto-unregister after running
-    unregisterInternal sched jobId
+    isRunning <- Atomic.commit (Atomic.read sched.state.running)
+    case isRunning of
+      False -> Task.succeed unit
+      True -> afterMsExecute sched jobId
+
+-- | Helper to execute and unregister an AfterMs job
+afterMsExecute : Scheduler -> JobId -> Task Unit Unit
+afterMsExecute sched jobId =
+  do
+    jobs <- Atomic.commit (Atomic.read sched.state.jobs)
+    case findJob jobId jobs of
+      Nothing -> Task.succeed unit
+      Just entry ->
+        do
+          _ <- Task.onError entry.spec.action (\err -> Task.succeed unit)
+          unregisterInternal sched jobId
 
 -- | Timer for EveryMs: loop forever, sleep then trigger
+-- Sleeps first to allow scheduler to start before checking running flag
 everyMsTimer : Scheduler -> JobId -> Int -> Task Unit Unit
 everyMsTimer sched jobId intervalMs =
   do
+    _ <- IO.sleepMs intervalMs
     isRunning <- Atomic.commit (Atomic.read sched.state.running)
     case isRunning of
       False -> Task.succeed unit
       True ->
         do
-          _ <- IO.sleepMs intervalMs
           _ <- triggerInternal sched jobId
           everyMsTimer sched jobId intervalMs
 

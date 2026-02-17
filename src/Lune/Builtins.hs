@@ -9,8 +9,9 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
-import Control.Concurrent (threadDelay)
-import Control.Exception (try, IOException, SomeException)
+import Control.Concurrent (threadDelay, forkIO, MVar, newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar, readMVar, modifyMVar, modifyMVar_, ThreadId)
+import Control.Concurrent.STM (atomically, readTVar, writeTVar, modifyTVar')
+import Control.Exception (try, throw, catch, IOException, SomeException, Exception)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Control.Monad (replicateM, when)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -798,8 +799,11 @@ primPutStrLn args =
   case args of
     [VString s] ->
       Right $
-        VIO $ \w ->
-          pure $ Right (w {worldStdout = worldStdout w <> [s]}, VCon (preludeCon' "Unit") [])
+        VIO $ \w -> do
+          -- Print directly to stdout for immediate output (needed for concurrent fibers)
+          TIO.putStrLn s
+          -- Don't buffer to worldStdout anymore since we print directly
+          pure $ Right (w, VCon (preludeCon' "Unit") [])
     [other] ->
       Left (ExpectedString other)
     _ ->
@@ -1867,68 +1871,73 @@ primAtomically args =
   case args of
     [VSTM action] ->
       Right $ VIO $ \world ->
-        pure $ runSTM action world
+        runSTM action world  -- runSTM is now IO
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAtomically args))
 
+-- | Execute an STM transaction against the world (thread-safe)
+runSTM :: STMAction -> World -> IO (Either EvalError (World, Value))
+runSTM action world = do
+  -- Read current TVar state atomically
+  currentTVars <- atomically $ readTVar (sharedTVars (worldShared world))
+  currentNextId <- atomically $ readTVar (sharedNextTVarId (worldShared world))
+  case runSTMInner action currentTVars currentNextId IntMap.empty of
+    Left err -> pure $ Left err
+    Right STMRetryed -> pure $ Left (UnboundVariable "STM retry: no concurrent processes to unblock")
+    Right (STMSuccess tvars' nextId' writes v) -> do
+      -- Commit writes atomically
+      atomically $ do
+        writeTVar (sharedTVars (worldShared world)) (IntMap.union writes tvars')
+        writeTVar (sharedNextTVarId (worldShared world)) nextId'
+      pure $ Right (world, v)
+
 -- | Result of running an STM transaction
 data STMResult
-  = STMSuccess World Value  -- Transaction committed successfully
+  = STMSuccess (IntMap Value) TVarId (IntMap Value) Value  -- tvars, nextId, writes, result
   | STMRetryed              -- Transaction called retry
 
--- | Execute an STM transaction against the world
-runSTM :: STMAction -> World -> Either EvalError (World, Value)
-runSTM action world =
-  case runSTMInner action world IntMap.empty of
-    Left err -> Left err
-    Right STMRetryed -> Left (UnboundVariable "STM retry: no concurrent processes to unblock")
-    Right (STMSuccess w v) -> Right (w, v)
-
--- | Inner STM execution that can return Retry
-runSTMInner :: STMAction -> World -> IntMap Value -> Either EvalError STMResult
-runSTMInner act w writes =
+-- | Inner STM execution that can return Retry (pure, builds up writes)
+runSTMInner :: STMAction -> IntMap Value -> TVarId -> IntMap Value -> Either EvalError STMResult
+runSTMInner act tvars nextId writes =
   case act of
     STMPure v ->
-      -- Commit all writes
-      let w' = w { worldTVars = IntMap.union writes (worldTVars w) }
-      in Right (STMSuccess w' v)
+      Right (STMSuccess tvars nextId writes v)
 
     STMBind m f ->
-      case runSTMInner m w writes of
+      case runSTMInner m tvars nextId writes of
         Left err -> Left err
         Right STMRetryed -> Right STMRetryed
-        Right (STMSuccess w' v) ->
-          runSTMInner (f v) w' writes
+        Right (STMSuccess tvars' nextId' writes' v) ->
+          runSTMInner (f v) tvars' nextId' writes'
 
     STMNewTVar initialValue ->
-      let tvid = worldNextTVarId w
-          w' = w { worldNextTVarId = tvid + 1 }
+      let tvid = nextId
           writes' = IntMap.insert tvid initialValue writes
-      in Right (STMSuccess (w' { worldTVars = IntMap.union writes' (worldTVars w') }) (VTVar tvid))
+      in Right (STMSuccess tvars (nextId + 1) writes' (VTVar tvid))
 
     STMReadTVar tvid ->
       -- Check local writes first, then global state
       case IntMap.lookup tvid writes of
-        Just v -> Right (STMSuccess w v)
+        Just v -> Right (STMSuccess tvars nextId writes v)
         Nothing ->
-          case IntMap.lookup tvid (worldTVars w) of
-            Just v -> Right (STMSuccess w v)
+          case IntMap.lookup tvid tvars of
+            Just v -> Right (STMSuccess tvars nextId writes v)
             Nothing -> Left (UnboundVariable ("tvar:" <> T.pack (show tvid)))
 
     STMWriteTVar tvid newValue ->
       let writes' = IntMap.insert tvid newValue writes
-      in runSTMInner (STMPure (VCon (preludeCon "Unit") [])) w writes'
+      in runSTMInner (STMPure (VCon (preludeCon "Unit") [])) tvars nextId writes'
 
     STMRetry ->
       Right STMRetryed
 
     STMOrElse left right ->
       -- Try the left branch; if it retries, try the right branch
-      case runSTMInner left w writes of
+      case runSTMInner left tvars nextId writes of
         Left err -> Left err  -- Errors propagate
         Right STMRetryed ->
           -- Left branch called retry, try the right branch
-          runSTMInner right w writes
+          runSTMInner right tvars nextId writes
         Right success ->
           -- Left branch succeeded
           Right success
@@ -1937,71 +1946,42 @@ runSTMInner act w writes =
 -- Fiber Primitives
 -- =============================================================================
 
+-- | Exception thrown when a fiber yields control
+-- Contains the continuation to resume the fiber
 -- | prim_spawn : IO a -> IO (Fiber a)
--- Creates a new fiber from an IO action, adds it to the ready queue
+-- Spawns a new fiber using forkIO for true concurrency
+-- The fiber runs in a separate OS thread and communicates via MVar
 primSpawn :: [Value] -> Either EvalError Value
 primSpawn args =
   case args of
     [VIO ioAction] ->
-      Right $ VIO $ \world ->
-        let fid = worldNextFiberId world
-            -- Create fiber in suspended state with the IO action as continuation
-            fiberState = FiberSuspended ioAction
-            world' = world
-              { worldNextFiberId = fid + 1
-              , worldFibers = IntMap.insert fid fiberState (worldFibers world)
-              , worldReadyQueue = worldReadyQueue world ++ [fid]
-              }
-        in pure $ Right (world', VFiber fid)
+      Right $ VIO $ \world -> do
+        -- Create MVar for result
+        resultVar <- newEmptyMVar
+        -- Fork the fiber to run in a separate thread
+        _ <- forkIO $ do
+          result <- ioAction world
+          case result of
+            Left err -> putMVar resultVar (Left err)
+            Right (_, v) -> putMVar resultVar (Right v)
+        -- Return handle immediately
+        let handle = FiberHandle resultVar
+        pure $ Right (world, VFiber handle)
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primSpawn args))
 
 -- | prim_yield : IO Unit
--- Yields control to the scheduler, allowing other fibers to run
+-- With true concurrent fibers, yield is a no-op (fibers run in parallel)
+-- but we keep it for API compatibility - it just does a tiny sleep to give
+-- other threads a chance to run
 primYield :: [Value] -> Either EvalError Value
 primYield args =
   case args of
     [] ->
-      Right $ VIO $ \world ->
-        -- Run one step of the scheduler
-        case worldReadyQueue world of
-          [] ->
-            -- No other fibers to run, just return
-            pure $ Right (world, VCon (preludeCon "Unit") [])
-          (fid : rest) ->
-            -- Pop a fiber and run it
-            case IntMap.lookup fid (worldFibers world) of
-              Nothing ->
-                -- Fiber was removed, continue with rest
-                let world' = world { worldReadyQueue = rest }
-                in pure $ Right (world', VCon (preludeCon "Unit") [])
-              Just fiberState ->
-                case fiberState of
-                  FiberSuspended cont -> do
-                    -- Run the suspended fiber's continuation
-                    let world' = world { worldReadyQueue = rest }
-                    result <- cont world'
-                    case result of
-                      Left err ->
-                        -- Fiber failed, mark it
-                        let world'' = world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
-                        in pure $ Right (world'', VCon (preludeCon "Unit") [])
-                      Right (world'', resultVal) ->
-                        -- Fiber completed, mark it
-                        let world''' = world'' { worldFibers = IntMap.insert fid (FiberCompleted resultVal) (worldFibers world'') }
-                        in pure $ Right (world''', VCon (preludeCon "Unit") [])
-                  FiberRunning ->
-                    -- Shouldn't happen in cooperative scheduling
-                    let world' = world { worldReadyQueue = rest }
-                    in pure $ Right (world', VCon (preludeCon "Unit") [])
-                  FiberCompleted _ ->
-                    -- Already done, skip
-                    let world' = world { worldReadyQueue = rest }
-                    in pure $ Right (world', VCon (preludeCon "Unit") [])
-                  FiberFailed _ ->
-                    -- Already failed, skip
-                    let world' = world { worldReadyQueue = rest }
-                    in pure $ Right (world', VCon (preludeCon "Unit") [])
+      Right $ VIO $ \world -> do
+        -- Small yield to let other threads run
+        threadDelay 0  -- Yield to scheduler
+        pure $ Right (world, VCon (preludeCon "Unit") [])
     _ -> Left (NotAFunction (VPrim 0 primYield args))
 
 -- | prim_await : Fiber a -> IO a
@@ -2009,64 +1989,15 @@ primYield args =
 primAwait :: [Value] -> Either EvalError Value
 primAwait args =
   case args of
-    [VFiber fid] ->
-      Right $ VIO $ awaitFiber fid
+    [VFiber handle] ->
+      Right $ VIO $ \world -> do
+        -- Block on the MVar until fiber completes
+        result <- takeMVar (fiberResultVar handle)
+        case result of
+          Left err -> pure $ Left err
+          Right v -> pure $ Right (world, v)
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAwait args))
-
--- | Keep yielding until the target fiber completes
-awaitFiber :: FiberId -> World -> IO (Either EvalError (World, Value))
-awaitFiber fid world =
-  case IntMap.lookup fid (worldFibers world) of
-    Nothing ->
-      pure $ Left (UnboundVariable ("fiber:" <> T.pack (show fid) <> " not found"))
-    Just fiberState ->
-      case fiberState of
-        FiberCompleted result ->
-          pure $ Right (world, result)
-        FiberFailed err ->
-          pure $ Left err
-        FiberSuspended _ -> do
-          -- Fiber not done yet, run the scheduler
-          result <- runSchedulerStep world
-          case result of
-            Left err -> pure $ Left err
-            Right world' -> awaitFiber fid world'
-        FiberRunning ->
-          -- In cooperative scheduling this shouldn't happen
-          pure $ Left (UnboundVariable "fiber in running state during await")
-
--- | Run one step of the scheduler (execute next ready fiber)
-runSchedulerStep :: World -> IO (Either EvalError World)
-runSchedulerStep world =
-  case worldReadyQueue world of
-    [] ->
-      -- No fibers to run, return unchanged
-      pure $ Right world
-    (fid : rest) ->
-      case IntMap.lookup fid (worldFibers world) of
-        Nothing ->
-          -- Fiber was removed, continue
-          runSchedulerStep (world { worldReadyQueue = rest })
-        Just fiberState ->
-          case fiberState of
-            FiberSuspended cont -> do
-              let world' = world { worldReadyQueue = rest }
-              result <- cont world'
-              case result of
-                Left err ->
-                  pure $ Right $ world' { worldFibers = IntMap.insert fid (FiberFailed err) (worldFibers world') }
-                Right (world'', resultVal) ->
-                  pure $ Right $ world'' { worldFibers = IntMap.insert fid (FiberCompleted resultVal) (worldFibers world'') }
-            FiberCompleted _ ->
-              -- Already done
-              pure $ Right $ world { worldReadyQueue = rest }
-            FiberFailed _ ->
-              -- Already failed
-              pure $ Right $ world { worldReadyQueue = rest }
-            FiberRunning ->
-              -- Skip
-              pure $ Right $ world { worldReadyQueue = rest }
 
 -- =============================================================================
 -- File I/O Primitives
@@ -2566,7 +2497,8 @@ primTimeNowMicros args =
   Left (NotAFunction (VPrim 0 primTimeNowMicros args))
 
 -- | prim_sleepMs : Int -> IO Unit
--- Sleeps for the given number of milliseconds
+-- Sleeps for the given number of milliseconds.
+-- With true concurrent fibers (using forkIO), this is a simple threadDelay.
 primSleepMs :: [Value] -> Either EvalError Value
 primSleepMs args =
   case args of

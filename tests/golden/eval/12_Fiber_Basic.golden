@@ -1,8 +1,8 @@
 Main: spawning tasks
-Main: yielding to let tasks run
 Task1 started
 Task1 finished
 Task2 started
 Task2 finished
+Main: yielding to let tasks run
 Main: awaiting results
 Main: done

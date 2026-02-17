@@ -5,6 +5,7 @@ module Lune.Eval.Runtime
   , runIO
   ) where
 
+import Control.Concurrent.STM (newTVarIO)
 import Data.Char (isUpper)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
@@ -25,8 +26,13 @@ runIO v = do
       pure (Left err)
     Right v' ->
       case v' of
-        VIO act ->
-          act (World [] IntMap.empty 0 IntMap.empty 0 [] IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing)
+        VIO act -> do
+          -- Create thread-safe shared state
+          tvarsVar <- newTVarIO IntMap.empty
+          nextIdVar <- newTVarIO 0
+          let shared = SharedState tvarsVar nextIdVar
+          let world = World [] shared IntMap.empty 0 [] Nothing IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing
+          act world
         VCon "Lune.Prelude.Task" [io] ->
           runIO io
         other ->
