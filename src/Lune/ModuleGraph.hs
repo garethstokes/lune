@@ -2,6 +2,7 @@ module Lune.ModuleGraph
   ( ModuleError (..)
   , LoadedModule (..)
   , Program (..)
+  , ModuleLoader (..)   -- NEW
   , loadProgram
   , loadProgramWithEntryModule
   , resolveModulePath
@@ -41,6 +42,12 @@ data Program = Program
   , progOrder :: [Text]
   }
   deriving (Show)
+
+-- | Abstraction for loading module file contents.
+-- Allows injection of VFS (virtual file system) for LSP.
+newtype ModuleLoader = ModuleLoader
+  { mlReadFileText :: FilePath -> IO (Either String Text)
+  }
 
 loadProgram :: FilePath -> IO (Either ModuleError Program)
 loadProgram entryPath = do
