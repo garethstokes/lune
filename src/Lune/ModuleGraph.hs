@@ -2,7 +2,8 @@ module Lune.ModuleGraph
   ( ModuleError (..)
   , LoadedModule (..)
   , Program (..)
-  , ModuleLoader (..)   -- NEW
+  , ModuleLoader (..)
+  , defaultDiskLoader    -- NEW
   , loadProgram
   , loadProgramWithEntryModule
   , resolveModulePath
@@ -12,6 +13,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import Control.Exception (try, SomeException, displayException)
+import qualified Data.Text.IO as TIO
 import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
 import qualified Lune.Derive as Derive
@@ -47,6 +50,16 @@ data Program = Program
 -- Allows injection of VFS (virtual file system) for LSP.
 newtype ModuleLoader = ModuleLoader
   { mlReadFileText :: FilePath -> IO (Either String Text)
+  }
+
+-- | Default loader that reads files from disk.
+defaultDiskLoader :: ModuleLoader
+defaultDiskLoader = ModuleLoader
+  { mlReadFileText = \path -> do
+      result <- try (TIO.readFile path) :: IO (Either SomeException Text)
+      pure $ case result of
+        Left e -> Left (displayException e)
+        Right t -> Right t
   }
 
 loadProgram :: FilePath -> IO (Either ModuleError Program)
