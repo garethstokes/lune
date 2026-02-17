@@ -1,0 +1,123 @@
+================================================================================
+Module declaration with simple exports
+================================================================================
+
+module Main exposing (main)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier)))))
+
+================================================================================
+Module declaration with multiple exports
+================================================================================
+
+module Lune.Prelude exposing (Bool(..), Int, String, Maybe(..))
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier))
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all)))))
+
+================================================================================
+Module with imports
+================================================================================
+
+module Test exposing (test)
+
+import Lune.Prelude exposing (Bool(..), Int)
+import Lune.String as Str
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (import_declaration
+    module: (module_identifier
+      (type_identifier
+        (type_identifier))
+      (type_identifier
+        (type_identifier)))
+    exposing: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (import_declaration
+    module: (module_identifier
+      (type_identifier
+        (type_identifier))
+      (type_identifier
+        (type_identifier)))
+    alias: (type_identifier
+      (type_identifier))))
+
+================================================================================
+Import with alias and exposing
+================================================================================
+
+module Test exposing (test)
+
+import Lune.Http as H exposing (Request, Response)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (import_declaration
+    module: (module_identifier
+      (type_identifier
+        (type_identifier))
+      (type_identifier
+        (type_identifier)))
+    alias: (type_identifier
+      (type_identifier))
+    exposing: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))))))

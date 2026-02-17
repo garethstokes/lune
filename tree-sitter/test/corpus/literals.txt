@@ -1,0 +1,297 @@
+================================================================================
+Integer literals
+================================================================================
+
+module Test exposing (f)
+
+f = 42
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))
+
+================================================================================
+Hexadecimal literal
+================================================================================
+
+module Test exposing (f)
+
+f = 0xFF
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))
+
+================================================================================
+Float literal
+================================================================================
+
+module Test exposing (f)
+
+f = 3.14
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (float_literal)))
+
+================================================================================
+Float literal with exponent
+================================================================================
+
+module Test exposing (f)
+
+f = 1.5e10
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (float_literal)))
+
+================================================================================
+String literal
+================================================================================
+
+module Test exposing (f)
+
+f = "hello world"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (string_literal
+      (string_content))))
+
+================================================================================
+String with escape sequences
+================================================================================
+
+module Test exposing (f)
+
+f = "hello\nworld"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (string_literal
+      (string_content)
+      (escape_sequence)
+      (string_content))))
+
+================================================================================
+Character literal
+================================================================================
+
+module Test exposing (f)
+
+f = 'a'
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (char_literal)))
+
+================================================================================
+Character literal with escape
+================================================================================
+
+module Test exposing (f)
+
+f = '\n'
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (char_literal
+      (escape_sequence))))
+
+================================================================================
+Template string with interpolation
+================================================================================
+
+module Test exposing (f)
+
+f name = "Hello, ${name}!"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (string_literal
+      (string_content)
+      (interpolation
+        expression: (identifier))
+      (string_content))))
+
+================================================================================
+Template string with expression
+================================================================================
+
+module Test exposing (f)
+
+f x y = "Sum: ${x + y}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    parameters: (variable_pattern
+      (identifier))
+    body: (string_literal
+      (string_content)
+      (interpolation
+        expression: (binary_expression
+          left: (identifier)
+          operator: (operator)
+          right: (identifier))))))
+
+================================================================================
+Multiline string
+================================================================================
+
+module Test exposing (f)
+
+f = ''
+  Hello
+  World
+''
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (multiline_string
+      (string_content))))
+
+================================================================================
+Multiline string with interpolation
+================================================================================
+
+module Test exposing (f)
+
+f name = ''
+  Hello, ${name}!
+  Welcome.
+''
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (multiline_string
+      (string_content)
+      (interpolation
+        expression: (identifier))
+      (string_content))))

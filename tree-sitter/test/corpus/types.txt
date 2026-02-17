@@ -1,0 +1,294 @@
+================================================================================
+Simple ADT
+================================================================================
+
+module Test exposing (Bool(..))
+
+type Bool = True | False
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (type_declaration
+    name: (type_identifier
+      (type_identifier))
+    constructors: (constructor_list
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier)))
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier))))))
+
+================================================================================
+ADT with type parameters
+================================================================================
+
+module Test exposing (Maybe(..))
+
+type Maybe a = Just a | Nothing
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (type_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (type_variable)
+    constructors: (constructor_list
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier))
+        parameters: (type_variable))
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier))))))
+
+================================================================================
+ADT with multiple type parameters
+================================================================================
+
+module Test exposing (Either(..))
+
+type Either a b = Left a | Right b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (type_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (type_variable)
+    parameters: (type_variable)
+    constructors: (constructor_list
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier))
+        parameters: (type_variable))
+      (constructor_definition
+        name: (constructor_identifier
+          (constructor_identifier))
+        parameters: (type_variable)))))
+
+================================================================================
+Type alias for record
+================================================================================
+
+module Test exposing (Config)
+
+type alias Config = { port : Int, host : String }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (type_alias_declaration
+    name: (type_identifier
+      (type_identifier))
+    type: (function_type
+      (type_application
+        (record_type
+          (record_type_field
+            name: (identifier)
+            type: (function_type
+              (type_application
+                (type_identifier
+                  (type_identifier)))))
+          (record_type_field
+            name: (identifier)
+            type: (function_type
+              (type_application
+                (type_identifier
+                  (type_identifier))))))))))
+
+================================================================================
+Newtype declaration
+================================================================================
+
+module Test exposing (Parser(..))
+
+newtype Parser a = Parser (String -> Maybe (a, String))
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (newtype_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (type_variable)
+    constructor: (constructor_identifier
+      (constructor_identifier))
+    type: (function_type
+      (type_application
+        (parenthesized_type
+          (function_type
+            (type_application
+              (type_identifier
+                (type_identifier)))
+            (type_application
+              constructor: (type_application
+                (type_identifier
+                  (type_identifier)))
+              argument: (tuple_type
+                (function_type
+                  (type_application
+                    (type_variable)))
+                (function_type
+                  (type_application
+                    (type_identifier
+                      (type_identifier))))))))))))
+
+================================================================================
+Function type signature
+================================================================================
+
+module Test exposing (map)
+
+map : (a -> b) -> List a -> List b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (type_signature
+    name: (identifier)
+    type: (qualified_type
+      (function_type
+        (type_application
+          (parenthesized_type
+            (function_type
+              (type_application
+                (type_variable))
+              (type_application
+                (type_variable)))))
+        (type_application
+          constructor: (type_application
+            (type_identifier
+              (type_identifier)))
+          argument: (type_variable))
+        (type_application
+          constructor: (type_application
+            (type_identifier
+              (type_identifier)))
+          argument: (type_variable))))))
+
+================================================================================
+Qualified type with constraint
+================================================================================
+
+module Test exposing (show)
+
+show : Show a => a -> String
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (type_signature
+    name: (identifier)
+    type: (qualified_type
+      (constraint_list
+        (constraint
+          class: (type_identifier
+            (type_identifier))
+          arguments: (type_variable)))
+      (function_type
+        (type_application
+          (type_variable))
+        (type_application
+          (type_identifier
+            (type_identifier)))))))
+
+================================================================================
+Qualified type with multiple constraints
+================================================================================
+
+module Test exposing (compare)
+
+compare : (Eq a, Ord a) => a -> a -> Ordering
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (type_signature
+    name: (identifier)
+    type: (qualified_type
+      (constraint_list
+        (constraint
+          class: (type_identifier
+            (type_identifier))
+          arguments: (type_variable))
+        (constraint
+          class: (type_identifier
+            (type_identifier))
+          arguments: (type_variable)))
+      (function_type
+        (type_application
+          (type_variable))
+        (type_application
+          (type_variable))
+        (type_application
+          (type_identifier
+            (type_identifier)))))))

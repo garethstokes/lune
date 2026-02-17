@@ -1,0 +1,176 @@
+================================================================================
+Simple class declaration
+================================================================================
+
+module Test exposing (Eq(..))
+
+class Eq a where
+  eq : a -> a -> Bool
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (class_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (class_parameter
+      (type_variable))
+    methods: (method_signature
+      name: (identifier)
+      type: (qualified_type
+        (function_type
+          (type_application
+            (type_variable))
+          (type_application
+            (type_variable))
+          (type_application
+            (type_identifier
+              (type_identifier))))))))
+
+================================================================================
+Class with superclass constraint
+================================================================================
+
+module Test exposing (Ord(..))
+
+class Eq a => Ord a where
+  compare : a -> a -> Ordering
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (class_declaration
+    superclasses: (constraint_list
+      (constraint
+        class: (type_identifier
+          (type_identifier))
+        arguments: (type_variable)))
+    name: (type_identifier
+      (type_identifier))
+    parameters: (class_parameter
+      (type_variable))
+    methods: (method_signature
+      name: (identifier)
+      type: (qualified_type
+        (function_type
+          (type_application
+            (type_variable))
+          (type_application
+            (type_variable))
+          (type_application
+            (type_identifier
+              (type_identifier))))))))
+
+================================================================================
+Instance declaration
+================================================================================
+
+module Test exposing (Eq(..))
+
+class Eq a where
+  eq : a -> a -> Bool
+
+instance Eq Int where
+  eq = prim_intEq
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (class_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (class_parameter
+      (type_variable))
+    methods: (method_signature
+      name: (identifier)
+      type: (qualified_type
+        (function_type
+          (type_application
+            (type_variable))
+          (type_application
+            (type_variable))
+          (type_application
+            (type_identifier
+              (type_identifier)))))))
+  (instance_declaration
+    class: (type_identifier
+      (type_identifier))
+    type: (instance_type
+      (type_identifier
+        (type_identifier)))
+    methods: (method_definition
+      name: (identifier)
+      body: (identifier))))
+
+================================================================================
+Higher-kinded class parameter
+================================================================================
+
+module Test exposing (Functor(..))
+
+class Functor (f : Type -> Type) where
+  fmap : (a -> b) -> f a -> f b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier))
+        (expose_all))))
+  (class_declaration
+    name: (type_identifier
+      (type_identifier))
+    parameters: (class_parameter
+      (type_variable))
+    methods: (method_signature
+      name: (identifier)
+      type: (qualified_type
+        (function_type
+          (type_application
+            (parenthesized_type
+              (function_type
+                (type_application
+                  (type_variable))
+                (type_application
+                  (type_variable)))))
+          (type_application
+            constructor: (type_application
+              (type_variable))
+            argument: (type_variable))
+          (type_application
+            constructor: (type_application
+              (type_variable))
+            argument: (type_variable)))))))

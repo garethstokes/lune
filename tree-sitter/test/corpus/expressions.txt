@@ -1,0 +1,520 @@
+================================================================================
+Simple function declaration
+================================================================================
+
+module Test exposing (id)
+
+id x = x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (identifier)))
+
+================================================================================
+Function with multiple parameters
+================================================================================
+
+module Test exposing (add)
+
+add x y = x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    parameters: (variable_pattern
+      (identifier))
+    body: (identifier)))
+
+================================================================================
+Lambda expression
+================================================================================
+
+module Test exposing (f)
+
+f = \x -> x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (lambda_expression
+      parameters: (variable_pattern
+        (identifier))
+      body: (identifier))))
+
+================================================================================
+Lambda with multiple parameters
+================================================================================
+
+module Test exposing (f)
+
+f = \x y -> x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (lambda_expression
+      parameters: (variable_pattern
+        (identifier))
+      parameters: (variable_pattern
+        (identifier))
+      body: (identifier))))
+
+================================================================================
+Let expression
+================================================================================
+
+module Test exposing (f)
+
+f = let x = 1 in x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (let_expression
+      (let_binding
+        name: (identifier)
+        value: (integer_literal))
+      body: (identifier))))
+
+================================================================================
+If expression
+================================================================================
+
+module Test exposing (f)
+
+f = if True then 1 else 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (if_expression
+      condition: (constructor_identifier
+        (constructor_identifier))
+      consequence: (integer_literal)
+      alternative: (integer_literal))))
+
+================================================================================
+Case expression (single alternative)
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of True -> 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (nullary_constructor_pattern
+          (constructor_identifier
+            (constructor_identifier)))
+        body: (integer_literal)))))
+
+================================================================================
+Function application (parenthesized)
+================================================================================
+
+module Test exposing (f)
+
+f = (foo bar baz)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (parenthesized_expression
+      (function_application
+        function: (identifier)
+        arguments: (identifier)
+        arguments: (identifier)))))
+
+================================================================================
+Binary expression
+================================================================================
+
+module Test exposing (f)
+
+f = 1 + 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (integer_literal)
+      operator: (operator)
+      right: (integer_literal))))
+
+================================================================================
+Field access
+================================================================================
+
+module Test exposing (f)
+
+f = record.field
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (field_access_expression
+      value: (identifier)
+      field: (identifier))))
+
+================================================================================
+Chained field access
+================================================================================
+
+module Test exposing (f)
+
+f = record.field.subfield
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (field_access_expression
+      value: (identifier)
+      field: (identifier)
+      field: (identifier))))
+
+================================================================================
+Do expression
+================================================================================
+
+module Test exposing (main)
+
+main = do
+  x <- getLine
+  putStrLn x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (do_expression
+      statements: (bind_statement
+        pattern: (variable_pattern
+          (identifier))
+        value: (function_application
+          function: (identifier)
+          arguments: (identifier)))
+      statements: (expression_statement
+        (identifier)))))
+
+================================================================================
+Do expression with let
+================================================================================
+
+module Test exposing (main)
+
+main = do
+  let x = 1
+  pure x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (do_expression
+      statements: (let_statement
+        name: (identifier)
+        value: (function_application
+          function: (integer_literal)
+          arguments: (identifier)))
+      statements: (expression_statement
+        (identifier)))))
+
+================================================================================
+Record literal
+================================================================================
+
+module Test exposing (f)
+
+f = { x = 1, y = 2 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (record_expression
+      (record_field
+        name: (identifier)
+        value: (integer_literal))
+      (record_field
+        name: (identifier)
+        value: (integer_literal)))))
+
+================================================================================
+Record update
+================================================================================
+
+module Test exposing (f)
+
+f = { base | x = 1 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (record_update_expression
+      base: (identifier)
+      (record_field
+        name: (identifier)
+        value: (integer_literal)))))
+
+================================================================================
+List expression
+================================================================================
+
+module Test exposing (f)
+
+f = [1, 2, 3]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (list_expression
+      (integer_literal)
+      (integer_literal)
+      (integer_literal))))
+
+================================================================================
+Tuple expression
+================================================================================
+
+module Test exposing (f)
+
+f = (1, "hello")
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (tuple_expression
+      (integer_literal)
+      (string_literal
+        (string_content)))))
+
+================================================================================
+Unit expression
+================================================================================
+
+module Test exposing (f)
+
+f = ()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (unit_expression)))
+
+================================================================================
+Operator section
+================================================================================
+
+module Test exposing (f)
+
+f = (+)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (operator_section
+      (operator))))
+
+================================================================================
+Qualified identifier
+================================================================================
+
+module Test exposing (f)
+
+f = List.map
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (field_access_expression
+      value: (constructor_identifier
+        (constructor_identifier))
+      field: (identifier))))

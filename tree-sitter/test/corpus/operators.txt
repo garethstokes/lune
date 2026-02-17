@@ -1,0 +1,190 @@
+================================================================================
+Operator definition
+================================================================================
+
+module Test exposing ((<>))
+
+(<>) x y = x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (operator_identifier
+          (operator)))))
+  (function_declaration
+    name: (operator_identifier
+      (operator))
+    parameters: (variable_pattern
+      (identifier))
+    parameters: (variable_pattern
+      (identifier))
+    body: (identifier)))
+
+================================================================================
+Pipe operator
+================================================================================
+
+module Test exposing (f)
+
+f x = x |> foo |> bar
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (identifier)))))
+
+================================================================================
+Composition operators
+================================================================================
+
+module Test exposing (f)
+
+f = foo >> bar << baz
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (identifier)))))
+
+================================================================================
+Comparison operators
+================================================================================
+
+module Test exposing (f)
+
+f x y = x == y && x /= y
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    parameters: (variable_pattern
+      (identifier))
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (binary_expression
+          left: (identifier)
+          operator: (operator)
+          right: (identifier))))))
+
+================================================================================
+Arithmetic operators
+================================================================================
+
+module Test exposing (f)
+
+f x y = x + y * 2 - 1 / 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    parameters: (variable_pattern
+      (identifier))
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (binary_expression
+          left: (integer_literal)
+          operator: (operator)
+          right: (binary_expression
+            left: (integer_literal)
+            operator: (operator)
+            right: (integer_literal)))))))
+
+================================================================================
+Dollar operator
+================================================================================
+
+module Test exposing (f)
+
+f x = foo $ bar $ baz x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (function_application
+          function: (identifier)
+          arguments: (identifier))))))

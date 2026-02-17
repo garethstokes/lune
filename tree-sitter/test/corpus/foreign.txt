@@ -1,0 +1,70 @@
+================================================================================
+Foreign import declaration
+================================================================================
+
+module Test exposing (strlen)
+
+foreign import ccall "strlen" strlen : String -> Int
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (foreign_import_declaration
+    (calling_convention)
+    symbol: (string_literal
+      (string_content))
+    name: (identifier)
+    type: (qualified_type
+      (function_type
+        (type_application
+          (type_identifier
+            (type_identifier)))
+        (type_application
+          (type_identifier
+            (type_identifier)))))))
+
+================================================================================
+Foreign import with qualified type
+================================================================================
+
+module Test exposing (malloc)
+
+foreign import ccall "malloc" malloc : Show a => Int -> Ptr a
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (foreign_import_declaration
+    (calling_convention)
+    symbol: (string_literal
+      (string_content))
+    name: (identifier)
+    type: (qualified_type
+      (constraint_list
+        (constraint
+          class: (type_identifier
+            (type_identifier))
+          arguments: (type_variable)))
+      (function_type
+        (type_application
+          (type_identifier
+            (type_identifier)))
+        (type_application
+          constructor: (type_application
+            (type_identifier
+              (type_identifier)))
+          argument: (type_variable))))))

@@ -1,0 +1,162 @@
+================================================================================
+Simple annotation
+================================================================================
+
+module Test exposing (User)
+
+@derive(Table)
+type alias User = { name : String }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (annotated_declaration
+    (annotation
+      name: (identifier)
+      arguments: (constructor_identifier
+        (constructor_identifier)))
+    (type_alias_declaration
+      name: (type_identifier
+        (type_identifier))
+      type: (function_type
+        (type_application
+          (record_type
+            (record_type_field
+              name: (identifier)
+              type: (function_type
+                (type_application
+                  (type_identifier
+                    (type_identifier)))))))))))
+
+================================================================================
+Annotation with string argument
+================================================================================
+
+module Test exposing (User)
+
+@derive(Table "users")
+type alias User = { name : String }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (annotated_declaration
+    (annotation
+      name: (identifier)
+      arguments: (constructor_identifier
+        (constructor_identifier))
+      arguments: (string_literal
+        (string_content)))
+    (type_alias_declaration
+      name: (type_identifier
+        (type_identifier))
+      type: (function_type
+        (type_application
+          (record_type
+            (record_type_field
+              name: (identifier)
+              type: (function_type
+                (type_application
+                  (type_identifier
+                    (type_identifier)))))))))))
+
+================================================================================
+Multiple annotations
+================================================================================
+
+module Test exposing (User)
+
+@derive(Table)
+@primaryKey
+type alias User = { id : Int }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (annotated_declaration
+    (annotation
+      name: (identifier)
+      arguments: (constructor_identifier
+        (constructor_identifier)))
+    (annotation
+      name: (identifier))
+    (type_alias_declaration
+      name: (type_identifier
+        (type_identifier))
+      type: (function_type
+        (type_application
+          (record_type
+            (record_type_field
+              name: (identifier)
+              type: (function_type
+                (type_application
+                  (type_identifier
+                    (type_identifier)))))))))))
+
+================================================================================
+Field annotation
+================================================================================
+
+module Test exposing (User)
+
+type alias User = { id : Int @primaryKey, name : String @column("user_name") }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (type_identifier
+          (type_identifier)))))
+  (type_alias_declaration
+    name: (type_identifier
+      (type_identifier))
+    type: (function_type
+      (type_application
+        (record_type
+          (record_type_field
+            name: (identifier)
+            type: (function_type
+              (type_application
+                (type_identifier
+                  (type_identifier))))
+            (field_annotation
+              name: (identifier)))
+          (record_type_field
+            name: (identifier)
+            type: (function_type
+              (type_application
+                (type_identifier
+                  (type_identifier))))
+            (field_annotation
+              name: (identifier)
+              (string_literal
+                (string_content)))))))))

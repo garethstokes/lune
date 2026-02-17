@@ -1,0 +1,96 @@
+================================================================================
+Line comment
+================================================================================
+
+module Test exposing (f)
+
+-- This is a comment
+f = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (line_comment)
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))
+
+================================================================================
+Block comment
+================================================================================
+
+module Test exposing (f)
+
+{- This is a block comment -}
+f = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (block_comment)
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))
+
+================================================================================
+Nested block comment
+================================================================================
+
+module Test exposing (f)
+
+{- outer {- inner -} outer -}
+f = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (block_comment
+    (block_comment))
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))
+
+================================================================================
+Doc comment style
+================================================================================
+
+module Test exposing (f)
+
+{-| This is documentation -}
+f = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (block_comment)
+  (function_declaration
+    name: (identifier)
+    body: (integer_literal)))

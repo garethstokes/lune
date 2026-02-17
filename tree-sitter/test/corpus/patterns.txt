@@ -1,0 +1,263 @@
+================================================================================
+Variable pattern
+================================================================================
+
+module Test exposing (f)
+
+f x = x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (identifier)))
+
+================================================================================
+Wildcard pattern
+================================================================================
+
+module Test exposing (f)
+
+f _ = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (wildcard_pattern)
+    body: (integer_literal)))
+
+================================================================================
+Constructor pattern in case (single alternative)
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of Just y -> y
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (constructor_pattern
+          constructor: (constructor_identifier
+            (constructor_identifier))
+          arguments: (variable_pattern
+            (identifier)))
+        body: (identifier)))))
+
+================================================================================
+Literal pattern (single alternative)
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of 0 -> "zero"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (literal_pattern
+          (integer_literal))
+        body: (string_literal
+          (string_content))))))
+
+================================================================================
+List pattern (single alternative)
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of [] -> 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (list_pattern)
+        body: (integer_literal)))))
+
+================================================================================
+Tuple pattern
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of
+  (a, b) -> a
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (tuple_pattern
+          (variable_pattern
+            (identifier))
+          (variable_pattern
+            (identifier)))
+        body: (identifier)))))
+
+================================================================================
+Record pattern
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of
+  { name, age } -> name
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (record_pattern
+          (record_pattern_field
+            name: (identifier))
+          (record_pattern_field
+            name: (identifier)))
+        body: (identifier)))))
+
+================================================================================
+Record pattern with binding
+================================================================================
+
+module Test exposing (f)
+
+f x = case x of
+  { name = n } -> n
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (variable_pattern
+      (identifier))
+    body: (case_expression
+      scrutinee: (identifier)
+      alternatives: (case_alternative
+        pattern: (record_pattern
+          (record_pattern_field
+            name: (identifier)
+            pattern: (variable_pattern
+              (identifier))))
+        body: (identifier)))))
+
+================================================================================
+Parenthesized pattern
+================================================================================
+
+module Test exposing (f)
+
+f (Just x) = x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    parameters: (parenthesized_pattern
+      (constructor_pattern
+        constructor: (constructor_identifier
+          (constructor_identifier))
+        arguments: (variable_pattern
+          (identifier))))
+    body: (identifier)))
