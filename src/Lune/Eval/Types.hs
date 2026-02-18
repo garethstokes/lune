@@ -17,6 +17,8 @@ module Lune.Eval.Types
   , TemplateMeta (..)
   , JsonValue (..)
   , EvalError (..)
+  , EvalCont
+  , EvalResult (..)
   ) where
 
 import Control.Concurrent.STM (TVar)
@@ -195,6 +197,19 @@ data EvalError
   | UnexpectedDictWanted Constraint
   | ForeignError Text
   deriving (Show)
+
+-- | Continuation for CPS evaluation
+-- Takes remaining fuel and a value, produces a result
+type EvalCont = Int -> Value -> EvalResult
+
+-- | Result of fuel-based evaluation
+data EvalResult
+  = EvalDone Value
+    -- ^ Evaluation completed with this value
+  | EvalSuspend (Int -> EvalResult)
+    -- ^ Out of fuel; give fresh fuel to resume
+  | EvalError EvalError
+    -- ^ Evaluation failed
 
 instance Show Value where
   show v =
