@@ -45,6 +45,7 @@ library
       Lune.Eval.FFI
       Lune.Eval.Types
       Lune.Eval.Runtime
+      Lune.Eval.Scheduler
 
   hs-source-dirs:   src
   build-depends:

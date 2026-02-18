@@ -9,7 +9,7 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
-import Control.Concurrent (threadDelay, forkIO, MVar, newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar, readMVar, modifyMVar, modifyMVar_, ThreadId)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (atomically, readTVar, writeTVar, modifyTVar')
 import Control.Exception (try, throw, catch, IOException, SomeException, Exception)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -803,7 +803,7 @@ primPutStrLn args =
           -- Print directly to stdout for immediate output (needed for concurrent fibers)
           TIO.putStrLn s
           -- Don't buffer to worldStdout anymore since we print directly
-          pure $ Right (w, VCon (preludeCon' "Unit") [])
+          pure $ Right $ StepDone w (VCon (preludeCon' "Unit") [])
     [other] ->
       Left (ExpectedString other)
     _ ->
@@ -819,11 +819,11 @@ primReadLine [] =
     case result of
       Left (e :: IOException) ->
         if isEOFError e
-          then pure $ Right (world, VString "")
+          then pure $ Right $ StepDone world (VString "")
           else pure $ Left $ ForeignError ("prim_readLine: " <> T.pack (show e))
       Right line ->
         let line' = T.dropWhileEnd (== '\r') line
-        in pure $ Right (world, VString line')
+        in pure $ Right $ StepDone world (VString line')
 primReadLine args =
   Left (NotAFunction (VPrim 0 primReadLine args))
 
@@ -843,7 +843,7 @@ primReadInt [] =
              Nothing ->
                pure $ Left $ ForeignError "prim_readInt: invalid int"
              Just n ->
-               pure $ Right (world, VInt n)
+               pure $ Right $ StepDone world (VInt n)
   where
     parseDecimal :: Text -> Maybe Integer
     parseDecimal t
@@ -1308,7 +1308,7 @@ primIOPure :: [Value] -> Either EvalError Value
 primIOPure args =
   case args of
     [v] ->
-      Right (VIO (\w -> pure (Right (w, v))))
+      Right (VIO (\w -> pure (Right (StepDone w v))))
     _ ->
       Left (NotAFunction (VPrim 1 primIOPure args))
 
@@ -1318,20 +1318,53 @@ primIOBind args =
     [m, k] ->
       case m of
         VIO act1 ->
-          Right $
-            VIO $ \w0 -> do
-              result1 <- act1 w0
-              case result1 of
-                Left err -> pure (Left err)
-                Right (w1, a) ->
-                  case ER.apply k a >>= ER.force of
-                    Left err -> pure (Left err)
-                    Right (VIO act2) -> act2 w1
-                    Right other -> pure (Left (NotAnIO other))
+          Right $ VIO $ \w0 -> do
+            result1 <- act1 w0
+            case result1 of
+              Left err -> pure (Left err)
+              Right step -> chainStep step k
         other ->
           Left (NotAnIO other)
     _ ->
       Left (NotAFunction (VPrim 2 primIOBind args))
+
+-- | Chain a continuation after a step
+chainStep :: IOStep -> Value -> IO (Either EvalError IOStep)
+chainStep step k =
+  case step of
+    StepDone w a ->
+      case ER.apply k a >>= ER.force of
+        Left err -> pure (Left err)
+        Right (VIO act2) -> act2 w
+        Right other -> pure (Left (NotAnIO other))
+
+    StepYield w cont ->
+      pure $ Right $ StepYield w $ \w' -> do
+        result <- cont w'
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStep step' k
+
+    StepSleep w ms cont ->
+      pure $ Right $ StepSleep w ms $ \w' -> do
+        result <- cont w'
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStep step' k
+
+    StepAwait w fid cont ->
+      pure $ Right $ StepAwait w fid $ \w' v -> do
+        result <- cont w' v
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStep step' k
+
+    StepSpawn w newCont resumeCont ->
+      pure $ Right $ StepSpawn w newCont $ \w' fid -> do
+        result <- resumeCont w' fid
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStep step' k
 
 primIOThen :: [Value] -> Either EvalError Value
 primIOThen args =
@@ -1339,16 +1372,46 @@ primIOThen args =
     [m, next] ->
       case (m, next) of
         (VIO act1, VIO act2) ->
-          Right $
-            VIO $ \w0 -> do
-              result1 <- act1 w0
-              case result1 of
-                Left err -> pure (Left err)
-                Right (w1, _) -> act2 w1
+          Right $ VIO $ \w0 -> do
+            result1 <- act1 w0
+            case result1 of
+              Left err -> pure (Left err)
+              Right step -> chainStepThen step act2
+        (VIO _, other) ->
+          Left (NotAnIO other)
         (other, _) ->
           Left (NotAnIO other)
     _ ->
       Left (NotAFunction (VPrim 2 primIOThen args))
+
+chainStepThen :: IOStep -> (World -> IO (Either EvalError IOStep)) -> IO (Either EvalError IOStep)
+chainStepThen step act2 =
+  case step of
+    StepDone w _ -> act2 w
+    StepYield w cont ->
+      pure $ Right $ StepYield w $ \w' -> do
+        result <- cont w'
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStepThen step' act2
+    StepSleep w ms cont ->
+      pure $ Right $ StepSleep w ms $ \w' -> do
+        result <- cont w'
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStepThen step' act2
+    StepAwait w fid cont ->
+      pure $ Right $ StepAwait w fid $ \w' v -> do
+        result <- cont w' v
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStepThen step' act2
+    StepSpawn w newCont resumeCont ->
+      pure $ Right $ StepSpawn w newCont $ \w' fid -> do
+        result <- resumeCont w' fid
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStepThen step' act2
 
 -- =============================================================================
 -- JSON Primitives
@@ -1876,7 +1939,7 @@ primAtomically args =
     _ -> Left (NotAFunction (VPrim 1 primAtomically args))
 
 -- | Execute an STM transaction against the world (thread-safe)
-runSTM :: STMAction -> World -> IO (Either EvalError (World, Value))
+runSTM :: STMAction -> World -> IO (Either EvalError IOStep)
 runSTM action world = do
   -- Read current TVar state atomically
   currentTVars <- atomically $ readTVar (sharedTVars (worldShared world))
@@ -1889,7 +1952,7 @@ runSTM action world = do
       atomically $ do
         writeTVar (sharedTVars (worldShared world)) (IntMap.union writes tvars')
         writeTVar (sharedNextTVarId (worldShared world)) nextId'
-      pure $ Right (world, v)
+      pure $ Right $ StepDone world v
 
 -- | Result of running an STM transaction
 data STMResult
@@ -1946,56 +2009,38 @@ runSTMInner act tvars nextId writes =
 -- Fiber Primitives
 -- =============================================================================
 
--- | Exception thrown when a fiber yields control
--- Contains the continuation to resume the fiber
 -- | prim_spawn : IO a -> IO (Fiber a)
--- Spawns a new fiber using forkIO for true concurrency
--- The fiber runs in a separate OS thread and communicates via MVar
+-- Spawns a new fiber via StepSpawn (handled by the scheduler)
 primSpawn :: [Value] -> Either EvalError Value
 primSpawn args =
   case args of
     [VIO ioAction] ->
-      Right $ VIO $ \world -> do
-        -- Create MVar for result
-        resultVar <- newEmptyMVar
-        -- Fork the fiber to run in a separate thread
-        _ <- forkIO $ do
-          result <- ioAction world
-          case result of
-            Left err -> putMVar resultVar (Left err)
-            Right (_, v) -> putMVar resultVar (Right v)
-        -- Return handle immediately
-        let handle = FiberHandle resultVar
-        pure $ Right (world, VFiber handle)
+      Right $ VIO $ \world ->
+        pure $ Right $ StepSpawn world ioAction $ \w fid ->
+          pure $ Right $ StepDone w (VFiber fid)
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primSpawn args))
 
 -- | prim_yield : IO Unit
--- With true concurrent fibers, yield is a no-op (fibers run in parallel)
--- but we keep it for API compatibility - it just does a tiny sleep to give
--- other threads a chance to run
+-- Yields control to the scheduler via StepYield
 primYield :: [Value] -> Either EvalError Value
 primYield args =
   case args of
     [] ->
-      Right $ VIO $ \world -> do
-        -- Small yield to let other threads run
-        threadDelay 0  -- Yield to scheduler
-        pure $ Right (world, VCon (preludeCon "Unit") [])
+      Right $ VIO $ \world ->
+        pure $ Right $ StepYield world $ \w ->
+          pure $ Right $ StepDone w (VCon (preludeCon "Unit") [])
     _ -> Left (NotAFunction (VPrim 0 primYield args))
 
 -- | prim_await : Fiber a -> IO a
--- Blocks until the fiber completes and returns its result
+-- Awaits a fiber result via StepAwait (handled by the scheduler)
 primAwait :: [Value] -> Either EvalError Value
 primAwait args =
   case args of
-    [VFiber handle] ->
-      Right $ VIO $ \world -> do
-        -- Block on the MVar until fiber completes
-        result <- takeMVar (fiberResultVar handle)
-        case result of
-          Left err -> pure $ Left err
-          Right v -> pure $ Right (world, v)
+    [VFiber fid] ->
+      Right $ VIO $ \world ->
+        pure $ Right $ StepAwait world fid $ \w v ->
+          pure $ Right $ StepDone w v
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAwait args))
 
@@ -2012,9 +2057,9 @@ primReadFile args =
         result <- try (TIO.readFile (T.unpack path))
         case result of
           Left (e :: IOException) ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
           Right contents ->
-            pure $ Right (world, VCon (preludeCon "Ok") [VString contents])
+            pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VString contents])
     [other] ->
       Left (ExpectedString other)
     _ ->
@@ -2029,9 +2074,9 @@ primWriteFile args =
         result <- try (TIO.writeFile (T.unpack path) contents)
         case result of
           Left (e :: IOException) ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
           Right () ->
-            pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+            pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     [other, _] | not (isVString other) ->
       Left (ExpectedString other)
     [_, other] ->
@@ -2061,14 +2106,14 @@ primTcpListen args =
           pure sock
         case result of
           Left (e :: IOException) ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
           Right sock ->
             let sid = worldNextSocketId world
                 world' = world
                   { worldSockets = IntMap.insert sid sock (worldSockets world)
                   , worldNextSocketId = sid + 1
                   }
-            in pure $ Right (world', VCon (preludeCon "Ok") [VSocket sid])
+            in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VSocket sid])
     _ ->
       Left (NotAFunction (VPrim 1 primTcpListen args))
 
@@ -2080,19 +2125,19 @@ primTcpAccept args =
       Right $ VIO $ \world ->
         case IntMap.lookup sid (worldSockets world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid socket"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid socket"])
           Just sock -> do
             result <- try (NS.accept sock)
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right (conn, _addr) ->
                 let cid = worldNextConnId world
                     world' = world
                       { worldConns = IntMap.insert cid conn (worldConns world)
                       , worldNextConnId = cid + 1
                       }
-                in pure $ Right (world', VCon (preludeCon "Ok") [VConn cid])
+                in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VConn cid])
     _ ->
       Left (NotAFunction (VPrim 1 primTcpAccept args))
 
@@ -2113,14 +2158,14 @@ primTcpConnect args =
               pure sock
         case result of
           Left (e :: IOException) ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
           Right conn ->
             let cid = worldNextConnId world
                 world' = world
                   { worldConns = IntMap.insert cid conn (worldConns world)
                   , worldNextConnId = cid + 1
                   }
-            in pure $ Right (world', VCon (preludeCon "Ok") [VConn cid])
+            in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VConn cid])
     _ ->
       Left (NotAFunction (VPrim 2 primTcpConnect args))
 
@@ -2132,15 +2177,15 @@ primConnRecv args =
       Right $ VIO $ \world ->
         case IntMap.lookup cid (worldConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid connection"])
           Just conn -> do
             result <- try (NSB.recv conn 4096)
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right bytes ->
                 let text = TE.decodeUtf8Lenient bytes
-                in pure $ Right (world, VCon (preludeCon "Ok") [VString text])
+                in pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VString text])
     _ ->
       Left (NotAFunction (VPrim 1 primConnRecv args))
 
@@ -2152,14 +2197,14 @@ primConnSend args =
       Right $ VIO $ \world ->
         case IntMap.lookup cid (worldConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid connection"])
           Just conn -> do
             result <- try (NSB.sendAll conn (TE.encodeUtf8 msg))
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
-                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 2 primConnSend args))
 
@@ -2171,15 +2216,15 @@ primConnClose args =
       Right $ VIO $ \world ->
         case IntMap.lookup cid (worldConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid connection"])
           Just conn -> do
             result <- try (NS.close conn)
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
                 let world' = world { worldConns = IntMap.delete cid (worldConns world) }
-                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primConnClose args))
 
@@ -2191,14 +2236,14 @@ primConnSendBytes args =
       Right $ VIO $ \world ->
         case IntMap.lookup cid (worldConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid connection"])
           Just conn -> do
             result <- try (NSB.sendAll conn bytes)
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
-                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 2 primConnSendBytes args))
 
@@ -2210,14 +2255,14 @@ primConnRecvBytes args =
       Right $ VIO $ \world ->
         case IntMap.lookup cid (worldConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid connection"])
           Just conn -> do
             result <- try (NSB.recv conn (fromIntegral maxBytes))
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right bytes ->
-                pure $ Right (world, VCon (preludeCon "Ok") [VBytes bytes])
+                pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VBytes bytes])
     _ ->
       Left (NotAFunction (VPrim 2 primConnRecvBytes args))
 
@@ -2229,15 +2274,15 @@ primSocketClose args =
       Right $ VIO $ \world ->
         case IntMap.lookup sid (worldSockets world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid socket"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid socket"])
           Just sock -> do
             result <- try (NS.close sock)
             case result of
               Left (e :: IOException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
                 let world' = world { worldSockets = IntMap.delete sid (worldSockets world) }
-                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primSocketClose args))
 
@@ -2410,7 +2455,7 @@ primTlsConnect args =
         result <- try (NC.connectTo ctx params)
         case result of
           Left (e :: SomeException) ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
           Right conn ->
             let connId = worldNextTlsConnId world
                 world' = world
@@ -2418,7 +2463,7 @@ primTlsConnect args =
                   , worldNextTlsConnId = connId + 1
                   , worldTlsContext = Just ctx
                   }
-            in pure $ Right (world', VCon (preludeCon "Ok") [VTlsConn connId])
+            in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VTlsConn connId])
     _ ->
       Left (NotAFunction (VPrim 2 primTlsConnect args))
 
@@ -2430,14 +2475,14 @@ primTlsSendBytes args =
       Right $ VIO $ \world ->
         case IntMap.lookup connId (worldTlsConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid TLS connection"])
           Just conn -> do
             result <- try (NC.connectionPut conn bs)
             case result of
               Left (e :: SomeException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
-                pure $ Right (world, VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 2 primTlsSendBytes args))
 
@@ -2450,14 +2495,14 @@ primTlsRecvBytes args =
       Right $ VIO $ \world ->
         case IntMap.lookup connId (worldTlsConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid TLS connection"])
           Just conn -> do
             result <- try (NC.connectionGet conn (fromIntegral maxLen))
             case result of
               Left (e :: SomeException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right bs ->
-                pure $ Right (world, VCon (preludeCon "Ok") [VBytes bs])
+                pure $ Right $ StepDone world (VCon (preludeCon "Ok") [VBytes bs])
     _ ->
       Left (NotAFunction (VPrim 2 primTlsRecvBytes args))
 
@@ -2469,15 +2514,15 @@ primTlsClose args =
       Right $ VIO $ \world ->
         case IntMap.lookup connId (worldTlsConns world) of
           Nothing ->
-            pure $ Right (world, VCon (preludeCon "Err") [VString "invalid TLS connection"])
+            pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString "invalid TLS connection"])
           Just conn -> do
             result <- try (NC.connectionClose conn)
             case result of
               Left (e :: SomeException) ->
-                pure $ Right (world, VCon (preludeCon "Err") [VString (T.pack (show e))])
+                pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
               Right () ->
                 let world' = world { worldTlsConns = IntMap.delete connId (worldTlsConns world) }
-                in pure $ Right (world', VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
+                in pure $ Right $ StepDone world' (VCon (preludeCon "Ok") [VCon (preludeCon "Unit") []])
     _ ->
       Left (NotAFunction (VPrim 1 primTlsClose args))
 
@@ -2492,21 +2537,21 @@ primTimeNowMicros [] =
   Right $ VIO $ \world -> do
     posixTime <- getPOSIXTime
     let micros = truncate (posixTime * 1000000) :: Integer
-    pure $ Right (world, VInt micros)
+    pure $ Right $ StepDone world (VInt micros)
 primTimeNowMicros args =
   Left (NotAFunction (VPrim 0 primTimeNowMicros args))
 
 -- | prim_sleepMs : Int -> IO Unit
--- Sleeps for the given number of milliseconds.
--- With true concurrent fibers (using forkIO), this is a simple threadDelay.
+-- Returns a StepSleep for the scheduler to handle, or StepDone if ms <= 0.
 primSleepMs :: [Value] -> Either EvalError Value
 primSleepMs args =
   case args of
     [VInt ms] ->
-      Right $ VIO $ \world -> do
-        when (ms > 0) $
-          threadDelay (fromIntegral ms * 1000)  -- threadDelay takes microseconds
-        pure $ Right (world, VCon (preludeCon' "Unit") [])
+      Right $ VIO $ \world ->
+        if ms <= 0
+          then pure $ Right $ StepDone world (VCon (preludeCon' "Unit") [])
+          else pure $ Right $ StepSleep world (fromIntegral ms) $ \w ->
+            pure $ Right $ StepDone w (VCon (preludeCon' "Unit") [])
     _ ->
       Left (NotAFunction (VPrim 1 primSleepMs args))
   where

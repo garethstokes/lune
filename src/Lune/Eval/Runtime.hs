@@ -15,6 +15,7 @@ import qualified Data.Text as T
 import qualified Lune.Core as C
 import qualified Lune.Syntax as S
 import qualified Lune.Eval.FFI as FFI
+import qualified Lune.Eval.Scheduler as Sched
 import qualified Lune.Template as Template
 import Lune.Eval.Types
 import Lune.Type (Type (..))
@@ -27,12 +28,19 @@ runIO v = do
     Right v' ->
       case v' of
         VIO act -> do
-          -- Create thread-safe shared state
+          -- Create shared state for TVars
           tvarsVar <- newTVarIO IntMap.empty
           nextIdVar <- newTVarIO 0
           let shared = SharedState tvarsVar nextIdVar
           let world = World [] shared IntMap.empty 0 [] Nothing IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing
-          act world
+
+          -- Create scheduler and spawn main fiber
+          sched <- Sched.newScheduler
+          _ <- Sched.spawnFiber sched act
+
+          -- Run scheduler
+          Sched.runScheduler sched world
+
         VCon "Lune.Prelude.Task" [io] ->
           runIO io
         other ->
@@ -122,7 +130,7 @@ foreignCall symbol args =
     result <- FFI.ffiCall symbol args
     case result of
       Left err -> pure $ Left err
-      Right val -> pure $ Right (world, val)
+      Right val -> pure $ Right $ StepDone world val
 
 
 force :: Value -> Either EvalError Value

@@ -2,12 +2,12 @@ module Lune.Eval.Types
   ( Env
   , TVarId
   , FiberId
-  , FiberHandle (..)
   , SocketId
   , ConnId
   , TlsConnId
   , STMAction (..)
   , FiberState (..)
+  , IOStep (..)
   , SharedState (..)
   , World (..)
   , Value (..)
@@ -19,7 +19,6 @@ module Lune.Eval.Types
   , EvalError (..)
   ) where
 
-import Control.Concurrent.MVar (MVar)
 import Control.Concurrent.STM (TVar)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
@@ -43,17 +42,9 @@ type SocketId = Int
 type ConnId = Int
 type TlsConnId = Int
 
--- | Handle for a spawned fiber - contains MVar for the result
-data FiberHandle = FiberHandle
-  { fiberResultVar :: MVar (Either EvalError Value)
-  }
-
-instance Show FiberHandle where
-  show _ = "<fiber-handle>"
-
 data FiberState
   = FiberRunning
-  | FiberSuspended (World -> IO (Either EvalError (World, Value)))
+  | FiberSuspended (World -> IO (Either EvalError IOStep))
   | FiberCompleted Value
   | FiberFailed EvalError
 
@@ -62,6 +53,27 @@ instance Show FiberState where
   show (FiberSuspended _) = "FiberSuspended <cont>"
   show (FiberCompleted v) = "FiberCompleted " <> show v
   show (FiberFailed e) = "FiberFailed " <> show e
+
+-- | Result of running one step of a fiber
+-- Either completes or suspends with a continuation
+data IOStep
+  = StepDone World Value
+    -- ^ Fiber completed with final value
+  | StepYield World (World -> IO (Either EvalError IOStep))
+    -- ^ Fiber yielded, continuation to resume
+  | StepSleep World Int (World -> IO (Either EvalError IOStep))
+    -- ^ Fiber sleeping for N ms, continuation to resume
+  | StepAwait World FiberId (World -> Value -> IO (Either EvalError IOStep))
+    -- ^ Fiber waiting for another fiber's result
+  | StepSpawn World (World -> IO (Either EvalError IOStep)) (World -> FiberId -> IO (Either EvalError IOStep))
+    -- ^ Spawn new fiber (its action, continuation with fiber id)
+
+instance Show IOStep where
+  show (StepDone _ _) = "StepDone"
+  show (StepYield _ _) = "StepYield"
+  show (StepSleep _ ms _) = "StepSleep " <> show ms
+  show (StepAwait _ fid _) = "StepAwait " <> show fid
+  show (StepSpawn _ _ _) = "StepSpawn"
 
 -- | Thread-safe shared state for concurrent fiber access
 data SharedState = SharedState
@@ -154,7 +166,7 @@ data Value
   | VChar Char
   | VTVar TVarId
   | VSTM STMAction
-  | VFiber FiberHandle           -- Changed: now holds MVar-based handle
+  | VFiber FiberId
   | VSocket SocketId
   | VConn ConnId
   | VBytes BS.ByteString
@@ -165,7 +177,7 @@ data Value
   | VRecord (Map Text Value)
   | VThunk Env C.CoreExpr
   | VPrim Int ([Value] -> Either EvalError Value) [Value]
-  | VIO (World -> IO (Either EvalError (World, Value)))
+  | VIO (World -> IO (Either EvalError IOStep))
 
 data EvalError
   = UnboundVariable Text
