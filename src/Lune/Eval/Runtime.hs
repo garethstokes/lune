@@ -3,6 +3,7 @@ module Lune.Eval.Runtime
   , force
   , apply
   , runIO
+  , runIOParallel
   , defaultEvalFuel
   , evalExprCPS
   , forceCPS
@@ -53,6 +54,33 @@ runIO v = do
 
         VCon "Lune.Prelude.Task" [io] ->
           runIO io
+        other ->
+          pure (Left (NotAnIO other))
+
+-- | Run IO action with parallel scheduler (M:N threading)
+runIOParallel :: Value -> IO (Either EvalError (World, Value))
+runIOParallel v = do
+  case force v of
+    Left err ->
+      pure (Left err)
+    Right v' ->
+      case v' of
+        VIO act -> do
+          -- Create shared state for TVars
+          tvarsVar <- newTVarIO IntMap.empty
+          nextIdVar <- newTVarIO 0
+          let shared = SharedState tvarsVar nextIdVar
+          let world = World [] shared IntMap.empty 0 [] Nothing IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing 0
+
+          -- Create parallel scheduler and spawn main fiber
+          sched <- Sched.newParScheduler
+          _ <- Sched.spawnFiberPar sched act
+
+          -- Run parallel scheduler
+          Sched.runParScheduler sched world
+
+        VCon "Lune.Prelude.Task" [io] ->
+          runIOParallel io
         other ->
           pure (Left (NotAnIO other))
 

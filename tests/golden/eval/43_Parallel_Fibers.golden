@@ -1,0 +1,15 @@
+Spawning 4 CPU-bound fibers...
+A: starting
+B: starting
+C: starting
+D: starting
+Awaiting results...
+A: fib result = 6765
+A: done
+B: fib result = 6765
+B: done
+C: fib result = 6765
+C: done
+D: fib result = 6765
+D: done
+All done!

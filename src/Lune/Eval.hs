@@ -6,12 +6,13 @@ module Lune.Eval
   , evalExpr
   , evalModule
   , runIO
+  , runIOParallel
   ) where
 
 import qualified Data.Map.Strict as Map
 import qualified Lune.Builtins as Builtins
 import qualified Lune.Core as C
-import Lune.Eval.Runtime (evalExpr, runIO)
+import Lune.Eval.Runtime (evalExpr, runIO, runIOParallel)
 import Lune.Eval.Types (Env, EvalError, Value (..), World (..))
 
 evalModule :: C.CoreModule -> Either EvalError Env

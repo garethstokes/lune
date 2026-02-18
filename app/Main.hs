@@ -204,13 +204,14 @@ data Options = Options
   , optAnf :: Bool
   , optEval :: Bool
   , optRun :: Bool
+  , optParallel :: Bool
   }
 
 parseArgs :: [String] -> Either String Options
 parseArgs args =
   case args of
     [path] ->
-      Right Options {optPath = path, optDesugar = False, optValidate = False, optTypecheck = False, optCore = False, optAnf = False, optEval = False, optRun = False}
+      Right Options {optPath = path, optDesugar = False, optValidate = False, optTypecheck = False, optCore = False, optAnf = False, optEval = False, optRun = False, optParallel = False}
     _ ->
       case reverse args of
         path : flagsRev
@@ -225,16 +226,17 @@ parseArgs args =
                   anf = "--anf" `elem` flags
                   evalFlag = "--eval" `elem` flags
                   runFlag = "--run" `elem` flags
-                  unknown = filter (`notElem` ["--parse", "--desugar", "--validate", "--typecheck", "--core", "--anf", "--eval", "--run"]) flags
+                  parallelFlag = "--parallel" `elem` flags
+                  unknown = filter (`notElem` ["--parse", "--desugar", "--validate", "--typecheck", "--core", "--anf", "--eval", "--run", "--parallel"]) flags
                in if null unknown
                     then
                       let coreOut = core || anf
-                       in Right Options {optPath = path, optDesugar = desugar, optValidate = validate, optTypecheck = typecheck, optCore = coreOut, optAnf = anf, optEval = evalFlag, optRun = runFlag}
+                       in Right Options {optPath = path, optDesugar = desugar, optValidate = validate, optTypecheck = typecheck, optCore = coreOut, optAnf = anf, optEval = evalFlag, optRun = runFlag, optParallel = parallelFlag}
                     else Left usage
         _ ->
           Left usage
   where
-    usage = "Usage: lune [--parse|--desugar] [--validate] [--typecheck] [--core] [--anf] [--eval] [--run] <file.lune>"
+    usage = "Usage: lune [--parse|--desugar] [--validate] [--typecheck] [--core] [--anf] [--eval] [--run] [--parallel] <file.lune>"
     isPrefixOf prefix str = take (length prefix) str == prefix
 
 run :: Options -> IO ()
@@ -303,7 +305,8 @@ runProgramPipeline opts = do
                     putStrLn (show err)
                     exitFailure
                   Right v -> do
-                    result <- Eval.runIO v
+                    let runner = if optParallel opts then Eval.runIOParallel else Eval.runIO
+                    result <- runner v
                     case result of
                       Left err -> do
                         putStrLn (show err)
@@ -342,7 +345,8 @@ runProgramPipeline opts = do
                                   putStrLn (show err)
                                   exitFailure
                                 Right v -> do
-                                  result <- Eval.runIO v
+                                  let runner = if optParallel opts then Eval.runIOParallel else Eval.runIO
+                                  result <- runner v
                                   case result of
                                     Left _ ->
                                       print v

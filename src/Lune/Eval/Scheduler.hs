@@ -4,17 +4,27 @@ module Lune.Eval.Scheduler
   , newScheduler
   , spawnFiber
   , runScheduler
+  , ParSchedulerState (..)
+  , newParScheduler
+  , spawnFiberPar
+  , handleStepPar
+  , tryDequeue
+  , workerThreadWithWorld
+  , sleepManager
+  , wakeSleptPar
+  , runParScheduler
   ) where
 
+import Control.Concurrent (forkIO, getNumCapabilities, threadDelay)
+import Control.Concurrent.STM
+import Control.Monad (forM_, replicateM_, forever, void, when)
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
-import Lune.Eval.Types
-import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, when)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Lune.Eval.Types
 
 -- | Entry for a fiber in the scheduler
 data FiberEntry = FiberEntry
@@ -39,6 +49,80 @@ data SchedulerState = SchedulerState
   , schedAwaitConts :: IORef (IntMap (World -> Value -> IO (Either EvalError IOStep)))
     -- ^ Stored await continuations by waiter fiber ID
   }
+
+{-| M:N Scheduler Architecture
+
+The parallel scheduler runs M Lune fibers on N OS threads:
+
+World State Handling:
+- Each fiber step receives a copy of the initial World
+- SharedState (TVars) is thread-safe via STM - fibers share this
+- Stdout uses direct IO (TIO.putStrLn) which is thread-safe
+- Socket/TLS maps are not shared; each fiber step operates atomically
+
+Thread Model:
+- Global ready queue (TVar (Seq FiberId))
+- N-1 worker threads dequeue and run fibers
+- 1 sleep manager thread handles timed wakeups
+- Shutdown signaled via TVar Bool
+
+Future Enhancements:
+- Per-worker local queues for cache locality
+- Work-stealing when local queue empty
+- Fiber affinity for socket operations
+-}
+
+-- | Thread-safe scheduler state for M:N scheduling
+data ParSchedulerState = ParSchedulerState
+  { parFibers :: TVar (IntMap FiberEntry)
+    -- ^ All fiber entries by ID (thread-safe)
+  , parReadyQueue :: TVar (Seq FiberId)
+    -- ^ Global ready queue (work-stealing source)
+  , parSleeping :: TVar [(Int, FiberId, World -> IO (Either EvalError IOStep))]
+    -- ^ Sleeping fibers (one thread manages this)
+  , parNextId :: TVar FiberId
+    -- ^ Next fiber ID to allocate
+  , parResults :: TVar (IntMap Value)
+    -- ^ Completed fiber results
+  , parAwaitConts :: TVar (IntMap (World -> Value -> IO (Either EvalError IOStep)))
+    -- ^ Stored await continuations
+  , parShutdown :: TVar Bool
+    -- ^ Signal to stop worker threads
+  , parMainDone :: TMVar (Either EvalError (World, Value))
+    -- ^ Result of main fiber (fiber 0)
+  }
+
+-- | Create a new parallel scheduler
+newParScheduler :: IO ParSchedulerState
+newParScheduler = atomically $ do
+  fibers <- newTVar IntMap.empty
+  ready <- newTVar Seq.empty
+  sleeping <- newTVar []
+  nextId <- newTVar 0
+  results <- newTVar IntMap.empty
+  awaitConts <- newTVar IntMap.empty
+  shutdown <- newTVar False
+  mainDone <- newEmptyTMVar
+  pure ParSchedulerState
+    { parFibers = fibers
+    , parReadyQueue = ready
+    , parSleeping = sleeping
+    , parNextId = nextId
+    , parResults = results
+    , parAwaitConts = awaitConts
+    , parShutdown = shutdown
+    , parMainDone = mainDone
+    }
+
+-- | Spawn a fiber in the parallel scheduler
+spawnFiberPar :: ParSchedulerState -> (World -> IO (Either EvalError IOStep)) -> IO FiberId
+spawnFiberPar sched cont = atomically $ do
+  fid <- readTVar (parNextId sched)
+  writeTVar (parNextId sched) (fid + 1)
+  let entry = FiberEntry cont []
+  modifyTVar' (parFibers sched) (IntMap.insert fid entry)
+  modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+  pure fid
 
 -- | Create a new scheduler
 newScheduler :: IO SchedulerState
@@ -197,6 +281,186 @@ handleStep sched fid step =
       modifyIORef' (schedFibers sched) (IntMap.adjust (\e -> e { fiberCont = \w -> resumeCont w newFid }) fid)
       modifyIORef' (schedReadyQueue sched) (Seq.|> fid)
       pure world
+
+-- | Handle a step result in parallel scheduler
+--
+-- NOTE: Socket/TLS operations complete within a single step, so thread
+-- affinity is not an issue. Each socket accept/read/write returns StepDone
+-- atomically. Fibers can migrate between OS threads between steps safely.
+handleStepPar :: ParSchedulerState -> FiberId -> IOStep -> IO ()
+handleStepPar sched fid step =
+  case step of
+    StepDone world value -> do
+      -- Fiber completed
+      atomically $ do
+        -- Store result
+        modifyTVar' (parResults sched) (IntMap.insert fid value)
+        -- Get waiters
+        fibers <- readTVar (parFibers sched)
+        case IntMap.lookup fid fibers of
+          Nothing -> pure ()
+          Just entry -> do
+            -- Wake all waiters
+            forM_ (fiberWaiters entry) $ \waiterId -> do
+              awaitConts <- readTVar (parAwaitConts sched)
+              case IntMap.lookup waiterId awaitConts of
+                Just cont -> do
+                  modifyTVar' (parFibers sched) $
+                    IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) waiterId
+                  modifyTVar' (parAwaitConts sched) (IntMap.delete waiterId)
+                Nothing -> pure ()
+              modifyTVar' (parReadyQueue sched) (Seq.|> waiterId)
+        -- Remove completed fiber
+        modifyTVar' (parFibers sched) (IntMap.delete fid)
+        -- If main fiber, signal completion
+        when (fid == 0) $
+          void $ tryPutTMVar (parMainDone sched) (Right (world, value))
+
+    StepYield _world cont -> do
+      atomically $ do
+        modifyTVar' (parFibers sched) $
+          IntMap.adjust (\e -> e { fiberCont = cont }) fid
+        modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+
+    StepSleep _world ms cont -> do
+      now <- nowMs
+      let wakeAt = now + ms
+      atomically $ do
+        modifyTVar' (parSleeping sched) $
+          insertSorted wakeAt fid cont
+        modifyTVar' (parFibers sched) $
+          IntMap.adjust (\e -> e { fiberCont = cont }) fid
+
+    StepAwait _world targetFid cont -> do
+      atomically $ do
+        results <- readTVar (parResults sched)
+        case IntMap.lookup targetFid results of
+          Just value -> do
+            -- Already done
+            modifyTVar' (parFibers sched) $
+              IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) fid
+            modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+          Nothing -> do
+            -- Add to waiters
+            modifyTVar' (parFibers sched) $
+              IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetFid
+            modifyTVar' (parAwaitConts sched) (IntMap.insert fid cont)
+
+    StepSpawn _world newCont resumeCont -> do
+      atomically $ do
+        -- Spawn new fiber atomically with parent update
+        newFid <- readTVar (parNextId sched)
+        writeTVar (parNextId sched) (newFid + 1)
+        let entry = FiberEntry newCont []
+        modifyTVar' (parFibers sched) (IntMap.insert newFid entry)
+        modifyTVar' (parReadyQueue sched) (Seq.|> newFid)
+        -- Update parent
+        modifyTVar' (parFibers sched) $
+          IntMap.adjust (\e -> e { fiberCont = \w -> resumeCont w newFid }) fid
+        modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+
+-- | Try to dequeue a ready fiber (STM transaction)
+tryDequeue :: ParSchedulerState -> STM (Maybe FiberId)
+tryDequeue sched = do
+  q <- readTVar (parReadyQueue sched)
+  case Seq.viewl q of
+    Seq.EmptyL -> pure Nothing
+    fid Seq.:< rest -> do
+      writeTVar (parReadyQueue sched) rest
+      pure (Just fid)
+
+-- | Sleep manager thread - wakes sleeping fibers at their scheduled time
+sleepManager :: ParSchedulerState -> IO ()
+sleepManager sched = loop
+  where
+    loop = do
+      shouldStop <- atomically $ readTVar (parShutdown sched)
+      if shouldStop
+        then pure ()
+        else do
+          wakeSleptPar sched
+          -- Sleep until next scheduled wakeup or 10ms
+          nextWake <- atomically $ do
+            sleeping <- readTVar (parSleeping sched)
+            case sleeping of
+              [] -> pure Nothing
+              ((wake, _, _) : _) -> pure (Just wake)
+          now <- nowMs
+          case nextWake of
+            Nothing -> threadDelay 10000  -- 10ms if no sleepers
+            Just wake -> do
+              let delay = max 0 (wake - now)
+              threadDelay (delay * 1000)
+          loop
+
+-- | Wake sleeping fibers that are due (parallel version)
+wakeSleptPar :: ParSchedulerState -> IO ()
+wakeSleptPar sched = do
+  now <- nowMs
+  atomically $ do
+    sleeping <- readTVar (parSleeping sched)
+    let (due, remaining) = span (\(wake, _, _) -> wake <= now) sleeping
+    writeTVar (parSleeping sched) remaining
+    forM_ due $ \(_, fid, cont) -> do
+      modifyTVar' (parFibers sched) $
+        IntMap.adjust (\e -> e { fiberCont = cont }) fid
+      modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+
+-- | Run the parallel scheduler with N worker threads
+-- N is determined by GHC runtime capabilities
+runParScheduler :: ParSchedulerState -> World -> IO (Either EvalError (World, Value))
+runParScheduler sched world0 = do
+  -- Get number of capabilities (OS threads GHC can use)
+  numCaps <- getNumCapabilities
+  let numWorkers = max 1 (numCaps - 1)  -- Reserve one for sleep manager
+
+  -- Store initial World in a TVar for workers to clone
+  -- (Each fiber step gets a fresh copy)
+  worldVar <- newTVarIO world0
+
+  -- Start sleep manager
+  _ <- forkIO $ sleepManager sched
+
+  -- Start worker threads
+  replicateM_ numWorkers $ forkIO $ workerThreadWithWorld sched worldVar
+
+  -- Wait for main fiber to complete
+  atomically $ do
+    result <- takeTMVar (parMainDone sched)
+    -- Signal shutdown
+    writeTVar (parShutdown sched) True
+    pure result
+
+-- | Worker thread with access to World template
+workerThreadWithWorld :: ParSchedulerState -> TVar World -> IO ()
+workerThreadWithWorld sched worldVar = loop
+  where
+    loop = do
+      shouldStop <- atomically $ readTVar (parShutdown sched)
+      if shouldStop
+        then pure ()
+        else do
+          mFid <- atomically $ tryDequeue sched
+          case mFid of
+            Nothing -> do
+              threadDelay 1000
+              loop
+            Just fid -> do
+              mEntry <- atomically $ IntMap.lookup fid <$> readTVar (parFibers sched)
+              case mEntry of
+                Nothing -> loop
+                Just entry -> do
+                  -- Get a copy of World for this fiber step
+                  world <- readTVarIO worldVar
+                  result <- fiberCont entry world
+                  case result of
+                    Left err -> do
+                      when (fid == 0) $
+                        atomically $ void $ tryPutTMVar (parMainDone sched) (Left err)
+                      loop
+                    Right step -> do
+                      handleStepPar sched fid step
+                      loop
 
 -- Helper to insert into sorted sleeping list
 insertSorted :: Int -> FiberId -> (World -> IO (Either EvalError IOStep)) -> [(Int, FiberId, World -> IO (Either EvalError IOStep))] -> [(Int, FiberId, World -> IO (Either EvalError IOStep))]

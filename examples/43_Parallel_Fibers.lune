@@ -1,0 +1,42 @@
+module ParallelFibers exposing (main)
+
+{-| Tests M:N parallel scheduling.
+    Multiple CPU-bound fibers should run concurrently on multiple cores.
+
+    Run with: lune --parallel --run examples/43_Parallel_Fibers.lune
+-}
+
+import Lune.Prelude exposing (Task, Unit, unit, Int, Bool(..), Applicative(..), Monad(..))
+import Lune.IO as IO
+import Lune.Fiber as Fiber
+import Lune.Int as Int
+import Lune.String as String
+
+main : Task Unit Unit
+main =
+  do
+    _ <- IO.println "Spawning 4 CPU-bound fibers..."
+    f1 <- Fiber.spawn (cpuWork "A" 20)
+    f2 <- Fiber.spawn (cpuWork "B" 20)
+    f3 <- Fiber.spawn (cpuWork "C" 20)
+    f4 <- Fiber.spawn (cpuWork "D" 20)
+    _ <- IO.println "Awaiting results..."
+    _ <- Fiber.await f1
+    _ <- Fiber.await f2
+    _ <- Fiber.await f3
+    _ <- Fiber.await f4
+    IO.println "All done!"
+
+cpuWork : String -> Int -> Task Unit Unit
+cpuWork name n =
+  do
+    _ <- IO.println (String.append name ": starting")
+    let result = fib n
+    _ <- IO.println (String.append name (String.append ": fib result = " (String.fromInt result)))
+    IO.println (String.append name ": done")
+
+fib : Int -> Int
+fib n =
+  case Int.lte n 1 of
+    True -> n
+    False -> Int.add (fib (Int.sub n 1)) (fib (Int.sub n 2))
