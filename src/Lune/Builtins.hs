@@ -44,6 +44,10 @@ instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
   "$dict" <> cls <> "_" <> headCon
 
+-- | Max IO steps before auto-yield for fair scheduling
+maxStepsBeforeYield :: Int
+maxStepsBeforeYield = 100
+
 builtinSchemes :: Map Text Scheme
 builtinSchemes =
   Map.fromList
@@ -1333,10 +1337,23 @@ chainStep :: IOStep -> Value -> IO (Either EvalError IOStep)
 chainStep step k =
   case step of
     StepDone w a ->
-      case ER.apply k a >>= ER.force of
-        Left err -> pure (Left err)
-        Right (VIO act2) -> act2 w
-        Right other -> pure (Left (NotAnIO other))
+      let steps = worldStepCount w
+      in if steps >= maxStepsBeforeYield
+        then do
+          -- Auto-yield: reset counter and yield, then continue
+          let w' = w { worldStepCount = 0 }
+          pure $ Right $ StepYield w' $ \w'' ->
+            case ER.apply k a >>= ER.force of
+              Left err -> pure (Left err)
+              Right (VIO act2) -> act2 w''
+              Right other -> pure (Left (NotAnIO other))
+        else
+          -- Continue normally, increment counter
+          let w' = w { worldStepCount = steps + 1 }
+          in case ER.apply k a >>= ER.force of
+            Left err -> pure (Left err)
+            Right (VIO act2) -> act2 w'
+            Right other -> pure (Left (NotAnIO other))
 
     StepYield w cont ->
       pure $ Right $ StepYield w $ \w' -> do
@@ -2028,7 +2045,8 @@ primYield args =
   case args of
     [] ->
       Right $ VIO $ \world ->
-        pure $ Right $ StepYield world $ \w ->
+        let world' = world { worldStepCount = 0 }
+        in pure $ Right $ StepYield world' $ \w ->
           pure $ Right $ StepDone w (VCon (preludeCon "Unit") [])
     _ -> Left (NotAFunction (VPrim 0 primYield args))
 

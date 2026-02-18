@@ -105,6 +105,7 @@ data World = World
   , worldTlsConns :: IntMap NC.Connection  -- TLS connections
   , worldNextTlsConnId :: TlsConnId        -- Next TLS connection ID
   , worldTlsContext :: Maybe NC.ConnectionContext  -- Shared TLS context
+  , worldStepCount :: Int  -- Steps since last yield (for preemption)
   }
 
 instance Show World where

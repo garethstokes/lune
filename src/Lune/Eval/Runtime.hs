@@ -32,7 +32,7 @@ runIO v = do
           tvarsVar <- newTVarIO IntMap.empty
           nextIdVar <- newTVarIO 0
           let shared = SharedState tvarsVar nextIdVar
-          let world = World [] shared IntMap.empty 0 [] Nothing IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing
+          let world = World [] shared IntMap.empty 0 [] Nothing IntMap.empty 0 IntMap.empty 0 IntMap.empty 0 Nothing 0
 
           -- Create scheduler and spawn main fiber
           sched <- Sched.newScheduler
