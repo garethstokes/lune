@@ -1332,6 +1332,18 @@ primIOBind args =
     _ ->
       Left (NotAFunction (VPrim 2 primIOBind args))
 
+-- | Run pure evaluation result, converting suspensions to StepYield
+runPureToIO :: World -> EvalResult -> IO (Either EvalError IOStep)
+runPureToIO w result =
+  case result of
+    EvalDone (VIO act) -> act w
+    EvalDone other -> pure (Left (NotAnIO other))
+    EvalError err -> pure (Left err)
+    EvalSuspend resume ->
+      -- Pure computation needs more fuel - yield to scheduler
+      pure $ Right $ StepYield w $ \w' ->
+        runPureToIO w' (resume ER.defaultEvalFuel)
+
 -- | Chain a continuation after a step
 chainStep :: IOStep -> Value -> IO (Either EvalError IOStep)
 chainStep step k =
@@ -1343,17 +1355,11 @@ chainStep step k =
           -- Auto-yield: reset counter and yield, then continue
           let w' = w { worldStepCount = 0 }
           pure $ Right $ StepYield w' $ \w'' ->
-            case ER.apply k a >>= ER.force of
-              Left err -> pure (Left err)
-              Right (VIO act2) -> act2 w''
-              Right other -> pure (Left (NotAnIO other))
-        else
+            runPureToIO w'' (ER.applyCPS ER.defaultEvalFuel k a ER.doneK)
+        else do
           -- Continue normally, increment counter
           let w' = w { worldStepCount = steps + 1 }
-          in case ER.apply k a >>= ER.force of
-            Left err -> pure (Left err)
-            Right (VIO act2) -> act2 w'
-            Right other -> pure (Left (NotAnIO other))
+          runPureToIO w' (ER.applyCPS ER.defaultEvalFuel k a ER.doneK)
 
     StepYield w cont ->
       pure $ Right $ StepYield w $ \w' -> do
