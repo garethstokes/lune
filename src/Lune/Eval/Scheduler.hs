@@ -36,6 +36,8 @@ data SchedulerState = SchedulerState
     -- ^ Next fiber ID to allocate
   , schedResults :: IORef (IntMap Value)
     -- ^ Completed fiber results (for await)
+  , schedAwaitConts :: IORef (IntMap (World -> Value -> IO (Either EvalError IOStep)))
+    -- ^ Stored await continuations by waiter fiber ID
   }
 
 -- | Create a new scheduler
@@ -46,12 +48,14 @@ newScheduler = do
   sleeping <- newIORef []
   nextId <- newIORef 0
   results <- newIORef IntMap.empty
+  awaitConts <- newIORef IntMap.empty
   pure SchedulerState
     { schedFibers = fibers
     , schedReadyQueue = ready
     , schedSleeping = sleeping
     , schedNextId = nextId
     , schedResults = results
+    , schedAwaitConts = awaitConts
     }
 
 -- | Spawn a new fiber, returns its ID
@@ -139,8 +143,15 @@ handleStep sched fid step =
       case IntMap.lookup fid fibers of
         Nothing -> pure ()
         Just entry -> do
-          -- Wake all waiters
+          -- Wake all waiters, updating their continuation with the result
           forM_ (fiberWaiters entry) $ \waiterId -> do
+            waitConts <- readIORef (schedAwaitConts sched)
+            case IntMap.lookup waiterId waitConts of
+              Just cont -> do
+                -- Update waiter's continuation with the actual result value
+                modifyIORef' (schedFibers sched) (IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) waiterId)
+                modifyIORef' (schedAwaitConts sched) (IntMap.delete waiterId)
+              Nothing -> pure ()  -- No stored continuation
             modifyIORef' (schedReadyQueue sched) (Seq.|> waiterId)
       -- Remove completed fiber
       modifyIORef' (schedFibers sched) (IntMap.delete fid)
@@ -172,10 +183,10 @@ handleStep sched fid step =
           modifyIORef' (schedReadyQueue sched) (Seq.|> fid)
           pure world
         Nothing -> do
-          -- Add self to target's waiters list
+          -- Add self to target's waiters list and store the await continuation
           modifyIORef' (schedFibers sched) $ \fibers ->
-            IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetFid $
-            IntMap.adjust (\e -> e { fiberCont = \w -> cont w (error "await placeholder") }) fid fibers
+            IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetFid fibers
+          modifyIORef' (schedAwaitConts sched) (IntMap.insert fid cont)
           -- Fiber stays out of ready queue until target completes
           pure world
 

@@ -108,6 +108,11 @@ andThen :: Expr -> Expr -> Expr
 andThen m k =
   App (App (Var "andThen") m) k
 
+-- NOTE: We wrap `next` in a lambda to delay its evaluation until the IO runs.
+-- This is critical for pure computation preemption. Without the lambda,
+-- expressions like `_ <- action1; let x = expensive; action2` would evaluate
+-- `expensive` immediately during Task construction, not during fiber execution.
+-- With the lambda, `expensive` is only evaluated when the continuation runs.
 thenDo :: Expr -> Expr -> Expr
 thenDo m next =
-  App (App (Var "then") m) next
+  App (App (Var "andThen") m) (Lam [PWildcard] next)

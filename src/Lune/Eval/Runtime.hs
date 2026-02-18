@@ -28,7 +28,7 @@ import Lune.Type (Type (..))
 
 -- | Default fuel for pure evaluation before yielding
 defaultEvalFuel :: Int
-defaultEvalFuel = 1000
+defaultEvalFuel = 100
 
 runIO :: Value -> IO (Either EvalError (World, Value))
 runIO v = do

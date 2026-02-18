@@ -469,6 +469,14 @@ builtinCoreDecls =
                 ]
             )
 
+        -- NOTE: We delay the pattern match on tb until inside the IO action
+        -- This is critical for proper preemption of pure computations!
+        -- If we pattern-matched tb eagerly, expressions like:
+        --   do _ <- action1
+        --      let x = expensive_pure_computation
+        --      action2
+        -- would evaluate expensive_pure_computation during Task construction,
+        -- not during fiber execution.
         monadThenTask =
           C.CLam
             [S.PVar "ta", S.PVar "tb"]
@@ -476,33 +484,34 @@ builtinCoreDecls =
                 (C.CVar "ta")
                 [ C.CoreAlt
                     (S.PCon conTask [S.PVar "ioA"])
-                    ( C.CCase
-                        (C.CVar "tb")
-                        [ C.CoreAlt
-                            (S.PCon conTask [S.PVar "ioB"])
-                            ( C.CApp
-                                (C.CVar conTask)
-                                ( C.CApp
-                                    (C.CApp (C.CVar "$primIOBind") (C.CVar "ioA"))
-                                    ( C.CLam
-                                        [S.PVar "r"]
+                    ( C.CApp
+                        (C.CVar conTask)
+                        ( C.CApp
+                            (C.CApp (C.CVar "$primIOBind") (C.CVar "ioA"))
+                            ( C.CLam
+                                [S.PVar "r"]
+                                ( C.CCase
+                                    (C.CVar "r")
+                                    [ C.CoreAlt
+                                        (S.PCon conErr [S.PVar "e"])
+                                        ( C.CApp
+                                            (C.CVar "$primIOPure")
+                                            (C.CApp (C.CVar conErr) (C.CVar "e"))
+                                        )
+                                    , C.CoreAlt
+                                        (S.PCon conOk [S.PWildcard])
+                                        -- Delay pattern match on tb until here!
                                         ( C.CCase
-                                            (C.CVar "r")
+                                            (C.CVar "tb")
                                             [ C.CoreAlt
-                                                (S.PCon conErr [S.PVar "e"])
-                                                ( C.CApp
-                                                    (C.CVar "$primIOPure")
-                                                    (C.CApp (C.CVar conErr) (C.CVar "e"))
-                                                )
-                                            , C.CoreAlt
-                                                (S.PCon conOk [S.PWildcard])
+                                                (S.PCon conTask [S.PVar "ioB"])
                                                 (C.CVar "ioB")
                                             ]
                                         )
-                                    )
+                                    ]
                                 )
                             )
-                        ]
+                        )
                     )
                 ]
             )
