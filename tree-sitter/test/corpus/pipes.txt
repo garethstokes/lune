@@ -1,0 +1,105 @@
+================================================================================
+Forward pipe basic
+================================================================================
+
+module Test exposing (x)
+
+x = 1 |> f
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (integer_literal)
+      operator: (operator)
+      right: (identifier))))
+
+================================================================================
+Backward pipe basic
+================================================================================
+
+module Test exposing (x)
+
+x = f <| 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (integer_literal))))
+
+================================================================================
+Forward pipe chain
+================================================================================
+
+module Test exposing (x)
+
+x = 1 |> f |> g
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (integer_literal)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (identifier)))))
+
+================================================================================
+Backward pipe chain
+================================================================================
+
+module Test exposing (x)
+
+x = f <| g <| 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (module_declaration
+    name: (module_identifier
+      (type_identifier
+        (type_identifier)))
+    exports: (exposing_list
+      (exposing_item
+        name: (identifier))))
+  (function_declaration
+    name: (identifier)
+    body: (binary_expression
+      left: (identifier)
+      operator: (operator)
+      right: (binary_expression
+        left: (identifier)
+        operator: (operator)
+        right: (integer_literal)))))
