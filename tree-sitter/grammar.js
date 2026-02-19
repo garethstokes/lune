@@ -18,7 +18,9 @@
 const PREC = {
   COMMENT: 0,
   ASSIGN: 1,
-  ARROW: 2,
+  BACKWARD_PIPE: 2,
+  FORWARD_PIPE: 3,
+  ARROW: 4,
   CONCAT: 6,
   COMPARE: 5,
   ADD: 7,
@@ -377,6 +379,8 @@ module.exports = grammar({
     ),
 
     _binary_expression: $ => choice(
+      $.backward_pipe_expression,
+      $.forward_pipe_expression,
       $.binary_expression,
       $._application_expression,
     ),
@@ -384,6 +388,18 @@ module.exports = grammar({
     binary_expression: $ => prec.left(PREC.CONCAT, seq(
       field('left', $._application_expression),
       field('operator', $.operator),
+      field('right', $._binary_expression),
+    )),
+
+    backward_pipe_expression: $ => prec.right(PREC.BACKWARD_PIPE, seq(
+      field('function', $._binary_expression),
+      '<|',
+      field('argument', $._binary_expression),
+    )),
+
+    forward_pipe_expression: $ => prec.left(PREC.FORWARD_PIPE, seq(
+      field('left', $._binary_expression),
+      '|>',
       field('right', $._binary_expression),
     )),
 
