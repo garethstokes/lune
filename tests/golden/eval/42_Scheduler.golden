@@ -6,6 +6,7 @@ Starting scheduler...
   tick!
   tick!
   oneshot fired!
+  tick!
 Triggering manual job...
   manual job executed!
   tick!

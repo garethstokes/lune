@@ -3,7 +3,6 @@
     - Backward pipe (<|): passes right value to left function
 -}
 module Pipes exposing (main)
-
 import Lune.IO as IO
 import Lune.Prelude exposing (Task, Unit, Int)
 import Lune.Int as Int

@@ -1,9 +1,88 @@
 module Lune.Desugar
   ( desugarModule
   , desugarExpr
+  , desugarPipesModule
   ) where
 
 import Lune.Syntax
+
+-- | Desugar only pipe operators. This must run before resolution since
+-- |> and <| are not resolved names - they're syntactic sugar.
+desugarPipesModule :: Module -> Module
+desugarPipesModule m =
+  m {modDecls = map desugarPipesDecl (modDecls m)}
+
+desugarPipesDecl :: Decl -> Decl
+desugarPipesDecl decl =
+  case decl of
+    DeclValue name args expr ->
+      DeclValue name args (desugarPipesExpr expr)
+    DeclInstance cls headTy methods ->
+      DeclInstance cls headTy [InstanceMethodDef name (desugarPipesExpr expr) | InstanceMethodDef name expr <- methods]
+    _ ->
+      decl
+
+desugarPipesExpr :: Expr -> Expr
+desugarPipesExpr expr =
+  case expr of
+    -- Forward pipe: x |> f  =>  f x
+    App (App (Var "|>") x) f ->
+      desugarPipesExpr (App f x)
+    -- Backward pipe: f <| x  =>  f x
+    App (App (Var "<|") f) x ->
+      desugarPipesExpr (App f x)
+    Var _ ->
+      expr
+    StringLit _ ->
+      expr
+    TemplateLit flavor parts ->
+      TemplateLit flavor (map desugarPipesTemplatePart parts)
+    IntLit _ ->
+      expr
+    FloatLit _ ->
+      expr
+    CharLit _ ->
+      expr
+    App f x ->
+      App (desugarPipesExpr f) (desugarPipesExpr x)
+    Lam args body ->
+      Lam args (desugarPipesExpr body)
+    LetIn name bound body ->
+      LetIn name (desugarPipesExpr bound) (desugarPipesExpr body)
+    Case scrut alts ->
+      Case (desugarPipesExpr scrut) (map desugarPipesAlt alts)
+    DoBlock stmts ->
+      DoBlock (map desugarPipesStmt stmts)
+    RecordLiteral fields ->
+      RecordLiteral [(name, desugarPipesExpr value) | (name, value) <- fields]
+    RecordUpdate base fields ->
+      RecordUpdate (desugarPipesExpr base) [(name, desugarPipesExpr value) | (name, value) <- fields]
+    FieldAccess base field ->
+      FieldAccess (desugarPipesExpr base) field
+
+desugarPipesTemplatePart :: TemplatePart -> TemplatePart
+desugarPipesTemplatePart part =
+  case part of
+    TemplateText _ ->
+      part
+    TemplateHole e ->
+      TemplateHole (desugarPipesExpr e)
+
+desugarPipesAlt :: Alt -> Alt
+desugarPipesAlt (Alt pat expr) =
+  Alt pat (desugarPipesExpr expr)
+
+desugarPipesStmt :: Stmt -> Stmt
+desugarPipesStmt stmt =
+  case stmt of
+    ExprStmt e ->
+      ExprStmt (desugarPipesExpr e)
+    BindStmt pat e ->
+      BindStmt pat (desugarPipesExpr e)
+    DiscardBindStmt e ->
+      DiscardBindStmt (desugarPipesExpr e)
+    LetStmt name e ->
+      LetStmt name (desugarPipesExpr e)
 
 desugarModule :: Module -> Module
 desugarModule m =
@@ -22,6 +101,8 @@ desugarDecl decl =
 desugarExpr :: Expr -> Expr
 desugarExpr expr =
   case expr of
+    -- Note: Pipe operators (|> and <|) are desugared by desugarPipesModule
+    -- which runs before resolution. At this point, pipes should already be gone.
     Var _ ->
       expr
     StringLit _ ->

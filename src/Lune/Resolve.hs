@@ -14,6 +14,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Builtins as Builtins
+import qualified Lune.Desugar as Desugar
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Syntax as S
 
@@ -47,8 +48,10 @@ data ModuleExports = ModuleExports
 resolveProgram :: MG.Program -> Either ResolveError S.Module
 resolveProgram prog = do
   checkProgramCoherence prog
-  exportTable <- buildExportTable (MG.progModules prog)
-  decls <- concat <$> mapM (resolveOne exportTable) (MG.progOrder prog)
+  -- Desugar pipe operators before resolution since |> and <| are syntactic sugar
+  let progWithDesugar = prog { MG.progModules = Map.map desugarPipesLM (MG.progModules prog) }
+  exportTable <- buildExportTable (MG.progModules progWithDesugar)
+  decls <- concat <$> mapM (resolveOne exportTable progWithDesugar) (MG.progOrder progWithDesugar)
   pure
     S.Module
       { S.modName = MG.progEntryName prog
@@ -57,8 +60,10 @@ resolveProgram prog = do
       , S.modDecls = decls
       }
   where
-    resolveOne exportTable modName =
-      case Map.lookup modName (MG.progModules prog) of
+    desugarPipesLM lm = lm { MG.lmModule = Desugar.desugarPipesModule (MG.lmModule lm) }
+
+    resolveOne exportTable prog' modName =
+      case Map.lookup modName (MG.progModules prog') of
         Nothing ->
           Left (UnboundName modName modName)
         Just m ->

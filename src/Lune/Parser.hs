@@ -436,26 +436,26 @@ parseExpr =
       ]
 
 -- | Parse backward pipe operator (<|), right-associative, lowest precedence.
--- f <| g <| x  parses as  f (g x)
+-- f <| g <| x  parses as  App (App (Var "<|") f) (App (App (Var "<|") g) x)
 parseBackwardPipe :: Parser Expr
 parseBackwardPipe = do
   first <- parseForwardPipe
   rest <- many (try (infixOp "<|" *> parseForwardPipe))
-  -- Right-associative: f <| g <| x becomes App f (App g x)
+  -- Right-associative: f <| x becomes App (App (Var "<|") f) x
   case rest of
     [] -> pure first
-    _  -> pure (foldr1 (\f x -> App f x) (first : rest))
+    _  -> pure (foldr1 (\f x -> App (App (Var "<|") f) x) (first : rest))
   where
     infixOp op = scnOptional *> symbol op *> scnOptional
 
 -- | Parse forward pipe operator (|>), left-associative.
--- x |> f |> g  parses as  g (f x)
+-- x |> f |> g  parses as  App (App (Var "|>") (App (App (Var "|>") x) f)) g
 parseForwardPipe :: Parser Expr
 parseForwardPipe = do
   first <- parseAppendExpr
   rest <- many (try (infixOp "|>" *> parseAppendExpr))
-  -- Left-associative: x |> f becomes App f x
-  pure (foldl (\acc f -> App f acc) first rest)
+  -- Left-associative: x |> f becomes App (App (Var "|>") x) f
+  pure (foldl (\acc f -> App (App (Var "|>") acc) f) first rest)
   where
     infixOp op = scnOptional *> symbol op *> scnOptional
 

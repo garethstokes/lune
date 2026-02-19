@@ -607,11 +607,33 @@ formatAppLike prec expr =
               )
        in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
     Nothing ->
-      let (h, args) = collectApps expr
-          headDoc = formatExpr PrecExprApp h
-          argDocs = map (formatExpr PrecExprAtom) args
-          doc = group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
-       in parenthesizeIf (prec == PrecExprAtom) doc
+      case collectInfixBackwardPipe expr of
+        Just parts ->
+          let first : rest = map (formatExpr PrecExprInfix) parts
+              doc =
+                group
+                  ( first
+                      <> nest indentSize
+                        (mconcat (map (\x -> line <> text "<|" <+> x) rest))
+                  )
+           in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
+        Nothing ->
+          case collectInfixForwardPipe expr of
+            Just parts ->
+              let first : rest = map (formatExpr PrecExprInfix) parts
+                  doc =
+                    group
+                      ( first
+                          <> nest indentSize
+                            (mconcat (map (\x -> line <> text "|>" <+> x) rest))
+                      )
+               in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
+            Nothing ->
+              let (h, args) = collectApps expr
+                  headDoc = formatExpr PrecExprApp h
+                  argDocs = map (formatExpr PrecExprAtom) args
+                  doc = group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
+               in parenthesizeIf (prec == PrecExprAtom) doc
 
 collectApps :: S.Expr -> (S.Expr, [S.Expr])
 collectApps =
@@ -632,6 +654,36 @@ collectInfixAppend expr =
   where
     collectAppendChain e =
       case collectInfixAppend e of
+        Just xs -> xs
+        Nothing -> [e]
+
+-- | Collect backward pipe chain: f <| g <| x
+-- Right-associative: f <| (g <| x) represented as App (App (Var "<|") f) (App (App (Var "<|") g) x)
+collectInfixBackwardPipe :: S.Expr -> Maybe [S.Expr]
+collectInfixBackwardPipe expr =
+  case expr of
+    S.App (S.App (S.Var "<|") f) x ->
+      Just (f : collectBackwardPipeChain x)
+    _ ->
+      Nothing
+  where
+    collectBackwardPipeChain e =
+      case collectInfixBackwardPipe e of
+        Just xs -> xs
+        Nothing -> [e]
+
+-- | Collect forward pipe chain: x |> f |> g
+-- Left-associative: (x |> f) |> g represented as App (App (Var "|>") (App (App (Var "|>") x) f)) g
+collectInfixForwardPipe :: S.Expr -> Maybe [S.Expr]
+collectInfixForwardPipe expr =
+  case expr of
+    S.App (S.App (S.Var "|>") x) f ->
+      Just (collectForwardPipeChain x ++ [f])
+    _ ->
+      Nothing
+  where
+    collectForwardPipeChain e =
+      case collectInfixForwardPipe e of
         Just xs -> xs
         Nothing -> [e]
 
