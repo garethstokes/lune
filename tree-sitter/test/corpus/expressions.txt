@@ -147,8 +147,7 @@ f = if True then 1 else 2
   (function_declaration
     name: (identifier)
     body: (if_expression
-      condition: (constructor_identifier
-        (constructor_identifier))
+      condition: (constructor_identifier)
       consequence: (integer_literal)
       alternative: (integer_literal))))
 
@@ -308,11 +307,11 @@ main = do
       statements: (bind_statement
         pattern: (variable_pattern
           (identifier))
-        value: (function_application
-          function: (identifier)
-          arguments: (identifier)))
+        value: (identifier))
       statements: (expression_statement
-        (identifier)))))
+        (function_application
+          function: (identifier)
+          arguments: (identifier))))))
 
 ================================================================================
 Do expression with let
@@ -339,11 +338,11 @@ main = do
     body: (do_expression
       statements: (let_statement
         name: (identifier)
-        value: (function_application
-          function: (integer_literal)
-          arguments: (identifier)))
+        value: (integer_literal))
       statements: (expression_statement
-        (identifier)))))
+        (function_application
+          function: (identifier)
+          arguments: (identifier))))))
 
 ================================================================================
 Record literal
@@ -515,6 +514,5 @@ f = List.map
   (function_declaration
     name: (identifier)
     body: (field_access_expression
-      value: (constructor_identifier
-        (constructor_identifier))
+      value: (constructor_identifier)
       field: (identifier))))

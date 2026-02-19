@@ -30,6 +30,16 @@ const PREC = {
 module.exports = grammar({
   name: "lune",
 
+  // External tokens - order MUST match enum in scanner.c
+  externals: $ => [
+    $._virtual_end_decl,    // Separates items at same indent level
+    $._virtual_open_section, // Opens a layout block
+    $._virtual_end_section,  // Closes a layout block
+    $._identifier_ext,       // Identifier via external scanner
+    $._constructor_ext,      // Constructor via external scanner
+    $._type_variable_ext,    // Type variable via external scanner
+  ],
+
   extras: $ => [
     /\s/,
     $.line_comment,
@@ -352,8 +362,8 @@ module.exports = grammar({
     // Both share the same token - they're semantically distinguished by context
     _upper_identifier: $ => /[A-Z][a-zA-Z0-9_#]*/,
     type_identifier: $ => alias($._upper_identifier, $.type_identifier),
-    // Type variables use the same token as identifiers so keywords are handled
-    type_variable: $ => $._identifier_token,
+    // Type variables use external scanner to avoid consuming function declarations
+    type_variable: $ => $._type_variable_ext,
     constructor_identifier: $ => alias($._upper_identifier, $.constructor_identifier),
 
     // ========== EXPRESSIONS ==========
@@ -398,9 +408,9 @@ module.exports = grammar({
     )),
 
     _primary_expression: $ => choice(
-      $.identifier,
+      $._expr_identifier,
       $.qualified_identifier,
-      $.constructor_identifier,
+      $._expr_constructor,
       $.integer_literal,
       $.float_literal,
       $.char_literal,
@@ -414,6 +424,13 @@ module.exports = grammar({
       $.unit_expression,
       $.operator_section,
     ),
+
+    // Identifier in expression context (via external scanner)
+    // Alias to 'identifier' so it shows as a named node in the parse tree
+    _expr_identifier: $ => alias($._identifier_ext, $.identifier),
+
+    // Constructor in expression context (via external scanner)
+    _expr_constructor: $ => alias($._constructor_ext, $.constructor_identifier),
 
     qualified_identifier: $ => seq(
       field('module', alias($.module_identifier, $.module_path)),
@@ -452,12 +469,15 @@ module.exports = grammar({
       field('value', $._expression),
     ),
 
-    // Case expression - right assoc to consume all alternatives
+    // Case expression - uses virtual tokens to separate alternatives
     case_expression: $ => prec.right(seq(
       'case',
       field('scrutinee', $._expression),
       'of',
-      field('alternatives', repeat1($.case_alternative)),
+      $._virtual_open_section,  // Opens layout block
+      field('alternatives', $.case_alternative),
+      field('alternatives', repeat(seq($._virtual_end_decl, $.case_alternative))),
+      optional($._virtual_end_section),
     )),
 
     case_alternative: $ => seq(
@@ -474,10 +494,13 @@ module.exports = grammar({
       field('body', $._expression),
     ),
 
-    // Do expression - use right associativity to consume all statements
+    // Do expression - uses virtual tokens to separate statements
     do_expression: $ => prec.right(seq(
       'do',
-      field('statements', repeat1($._statement)),
+      $._virtual_open_section,  // Opens layout block
+      field('statements', $._statement),
+      field('statements', repeat(seq($._virtual_end_decl, $._statement))),
+      optional($._virtual_end_section),
     )),
 
     _statement: $ => choice(
@@ -570,8 +593,9 @@ module.exports = grammar({
 
     wildcard_pattern: $ => '_',
 
+    // Use external scanner identifier for patterns too (same as expressions)
     // Lower precedence than expressions
-    variable_pattern: $ => prec(-2, $.identifier),
+    variable_pattern: $ => prec(-2, alias($._identifier_ext, $.identifier)),
 
     // Lower precedence than expressions so they win in ambiguous contexts
     literal_pattern: $ => prec(-1, choice(
@@ -608,8 +632,10 @@ module.exports = grammar({
     ),
 
     // ========== LITERALS ==========
+    // Internal identifier token for non-expression contexts
     identifier: $ => $._identifier_token,
 
+    // The word token - this must be an internal regex for tree-sitter keyword handling
     _identifier_token: $ => /[a-z_][a-zA-Z0-9_]*/,
 
     integer_literal: $ => choice(
