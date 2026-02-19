@@ -432,15 +432,36 @@ parseExpr =
       [ try parseLetIn
       , try parseCase
       , try parseLambda
-      , parseInfixExpr
+      , parseBackwardPipe
       ]
 
--- | Parse low-precedence infix operators.
---
--- Currently this is intentionally minimal: we only support the Semigroup
--- append operator @<>@ as required by the Template feature.
-parseInfixExpr :: Parser Expr
-parseInfixExpr = do
+-- | Parse backward pipe operator (<|), right-associative, lowest precedence.
+-- f <| g <| x  parses as  f (g x)
+parseBackwardPipe :: Parser Expr
+parseBackwardPipe = do
+  first <- parseForwardPipe
+  rest <- many (try (infixOp "<|" *> parseForwardPipe))
+  -- Right-associative: f <| g <| x becomes App f (App g x)
+  case rest of
+    [] -> pure first
+    _  -> pure (foldr1 (\f x -> App f x) (first : rest))
+  where
+    infixOp op = scnOptional *> symbol op *> scnOptional
+
+-- | Parse forward pipe operator (|>), left-associative.
+-- x |> f |> g  parses as  g (f x)
+parseForwardPipe :: Parser Expr
+parseForwardPipe = do
+  first <- parseAppendExpr
+  rest <- many (try (infixOp "|>" *> parseAppendExpr))
+  -- Left-associative: x |> f becomes App f x
+  pure (foldl (\acc f -> App f acc) first rest)
+  where
+    infixOp op = scnOptional *> symbol op *> scnOptional
+
+-- | Parse semigroup append operator (<>), left-associative.
+parseAppendExpr :: Parser Expr
+parseAppendExpr = do
   first <- parseAppExpr
   rest <- many (try (infixOp "<>" *> parseAppExpr))
   pure (foldl (\acc x -> App (App (Var "<>") acc) x) first rest)
