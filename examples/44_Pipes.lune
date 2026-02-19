@@ -1,0 +1,29 @@
+{-| Demonstrates Lune's pipe operators for function composition:
+    - Forward pipe (|>): passes left value to right function
+    - Backward pipe (<|): passes right value to left function
+-}
+module Pipes exposing (main)
+
+import Lune.IO as IO
+import Lune.Prelude exposing (Task, Unit, Int)
+import Lune.Int as Int
+import Lune.String as String
+
+double : Int -> Int
+double x = Int.mul x 2
+
+triple : Int -> Int
+triple x = Int.mul x 3
+
+addTen : Int -> Int
+addTen x = Int.add x 10
+
+main : Task Unit Unit
+main =
+  do
+    _ <- IO.println "=== Forward Pipe |> ==="
+    _ <- IO.println (String.fromInt (5 |> double |> triple))
+    _ <- IO.println "=== Backward Pipe <| ==="
+    _ <- IO.println <| String.fromInt <| Int.add 1 2
+    _ <- IO.println "=== Another Forward Pipe ==="
+    IO.println (String.fromInt (1 |> addTen |> double))
