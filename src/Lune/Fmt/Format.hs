@@ -563,14 +563,38 @@ formatRecordLiteral :: [(Text, S.Expr)] -> Doc
 formatRecordLiteral fields =
   case fields of
     [] -> text "{}"
-    (f : fs) ->
-      group $
-        text "{"
-          <> space
-          <> formatRecordField f
-          <> mconcat (map (\x -> lineBreak <> text "," <+> formatRecordField x) fs)
-          <> line
-          <> text "}"
+    (f : fs)
+      -- If any field has multi-line content, use hardLine for all fields
+      | any hasMultiLineContent (map snd fields) ->
+          text "{"
+            <> space
+            <> formatRecordField f
+            <> mconcat (map (\x -> hardLine <> text "," <+> formatRecordField x) fs)
+            <> hardLine
+            <> text "}"
+      | otherwise ->
+          group $
+            text "{"
+              <> space
+              <> formatRecordField f
+              <> mconcat (map (\x -> lineBreak <> text "," <+> formatRecordField x) fs)
+              <> line
+              <> text "}"
+
+-- | Check if an expression contains multi-line content (template literals, etc.)
+hasMultiLineContent :: S.Expr -> Bool
+hasMultiLineContent expr =
+  case expr of
+    S.TemplateLit S.TemplateBlock _ -> True
+    S.App f x -> hasMultiLineContent f || hasMultiLineContent x
+    S.Lam _ body -> hasMultiLineContent body
+    S.LetIn _ bound body -> hasMultiLineContent bound || hasMultiLineContent body
+    S.Case scrut alts -> hasMultiLineContent scrut || any (hasMultiLineContent . altBody) alts
+    S.RecordLiteral fields -> any (hasMultiLineContent . snd) fields
+    S.RecordUpdate base fields -> hasMultiLineContent base || any (hasMultiLineContent . snd) fields
+    _ -> False
+  where
+    altBody (S.Alt _ e) = e
 
 formatRecordUpdate :: S.Expr -> [(Text, S.Expr)] -> Doc
 formatRecordUpdate base fields =
@@ -631,8 +655,20 @@ formatAppLike prec expr =
             Nothing ->
               let (h, args) = collectApps expr
                   headDoc = formatExpr PrecExprApp h
-                  argDocs = map (formatExpr PrecExprAtom) args
-                  doc = group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
+                  doc = case args of
+                    -- Special case: last argument is a record literal - use hardLine before it
+                    -- This gives: func arg1 arg2\n    { field = value }
+                    _ | not (null args) && isRecordLiteral (last args) ->
+                      let initArgs = init args
+                          lastArg = last args
+                          initDocs = map (formatExpr PrecExprAtom) initArgs
+                          lastDoc = formatExpr PrecExprAtom lastArg
+                       in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) initDocs)))
+                            <> nest indentSize (hardLine <> lastDoc)
+                    -- Normal case
+                    _ ->
+                      let argDocs = map (formatExpr PrecExprAtom) args
+                       in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
                in parenthesizeIf (prec == PrecExprAtom) doc
 
 collectApps :: S.Expr -> (S.Expr, [S.Expr])
@@ -643,6 +679,10 @@ collectApps =
       case e of
         S.App f x -> go (x : acc) f
         _ -> (e, acc)
+
+isRecordLiteral :: S.Expr -> Bool
+isRecordLiteral (S.RecordLiteral _) = True
+isRecordLiteral _ = False
 
 collectInfixAppend :: S.Expr -> Maybe [S.Expr]
 collectInfixAppend expr =
