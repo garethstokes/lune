@@ -203,7 +203,7 @@ module.exports = grammar({
         field('superclasses', $.constraint_list),
         '=>',
       )),
-      field('name', $.type_identifier),
+      field('name', choice($.type_identifier, $.qualified_type_identifier)),
       field('parameters', repeat1($.class_parameter)),
       'where',
       field('methods', repeat1($.method_signature)),
@@ -230,7 +230,7 @@ module.exports = grammar({
     // Instance declaration - right assoc to consume all methods
     instance_declaration: $ => prec.right(seq(
       'instance',
-      field('class', $.type_identifier),
+      field('class', choice($.type_identifier, $.qualified_type_identifier)),
       field('type', $.instance_type),
       'where',
       field('methods', repeat1($.method_definition)),
@@ -299,7 +299,7 @@ module.exports = grammar({
     // A constraint is a class applied to type arguments
     // e.g. "Show a" or "Functor f"
     constraint: $ => prec(3, seq(
-      field('class', $.type_identifier),
+      field('class', choice($.type_identifier, $.qualified_type_identifier)),
       field('arguments', repeat1($.type_variable)),
     )),
 
@@ -318,6 +318,7 @@ module.exports = grammar({
     ),
 
     _type_atom: $ => choice(
+      $.qualified_type_identifier,
       $.type_identifier,
       $.type_variable,
       $.record_type,
@@ -325,6 +326,12 @@ module.exports = grammar({
       $.tuple_type,
       $.unit_type,
     ),
+
+    qualified_type_identifier: $ => prec.left(seq(
+      field('module', choice($.type_identifier, $.qualified_type_identifier)),
+      '.',
+      field('name', $.type_identifier),
+    )),
 
     parenthesized_type: $ => seq('(', $._type, ')'),
 
@@ -408,9 +415,12 @@ module.exports = grammar({
       $._accessor_expression,
     ),
 
+    // Function application is left-associative: `f x y` parses as `((f x) y)`.
+    // Using left recursion avoids reducing too early on `(`, which would
+    // otherwise be misinterpreted as starting a new top-level declaration.
     function_application: $ => prec.left(PREC.CALL, seq(
-      field('function', $._accessor_expression),
-      field('arguments', repeat1($._accessor_expression)),
+      field('function', $._application_expression),
+      field('arguments', $._accessor_expression),
     )),
 
     _accessor_expression: $ => choice(

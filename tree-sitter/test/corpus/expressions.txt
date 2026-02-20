@@ -203,8 +203,9 @@ f = (foo bar baz)
     name: (identifier)
     body: (parenthesized_expression
       (function_application
-        function: (identifier)
-        arguments: (identifier)
+        function: (function_application
+          function: (identifier)
+          arguments: (identifier))
         arguments: (identifier)))))
 
 ================================================================================
