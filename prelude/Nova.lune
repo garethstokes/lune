@@ -67,7 +67,8 @@ Internals are layered into:
 - Streaming is simulated via chunking (no HTTP streaming yet).
 -}
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Unit, unit, Applicative(..), Monad(..))
+import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Unit, unit, Task(..), Applicative(..), Monad(..))
+import Lune.Task as Task
 import Lune.Int as Int
 import Lune.String as Str
 import Lune.Json as RawJson exposing (Json)
@@ -151,20 +152,20 @@ type alias NovaHooks =
       { request : Request
       , response : Response
       }
-      -> IO Unit
+      -> Task Unit Unit
 
   , onToolStart :
       { tool : ToolId
       , input : Json
       }
-      -> IO Unit
+      -> Task Unit Unit
 
   , onToolFinish :
       { tool : ToolId
       , output : Json
       , durationMs : Int
       }
-      -> IO Unit
+      -> Task Unit Unit
   }
 
 --------------------------------------------------------------------------------
@@ -307,85 +308,54 @@ composeToolPrompt =
 -- Public API
 --------------------------------------------------------------------------------
 
-askRaw : Client -> String -> IO (Result Error Response)
+askRaw : Client -> String -> Task Error Response
 askRaw client prompt =
-  let request =
-    { provider = client.provider
-    , model = client.model
-    , prompt = prompt
-    } in
-  prim_ioBind
-    (Core.callProvider client.providers client.providerConfig client.provider client.model prompt)
-    (\r ->
-      case r of
-        Err e ->
-          prim_ioPure (Err e)
+  let request = { provider = client.provider, model = client.model, prompt = prompt } in
+  Task.andThen (liftResult (Core.callProvider client.providers client.providerConfig client.provider client.model prompt)) (\response ->
+    case client.hooks of
+      Nothing ->
+        Task.succeed response
 
-        Ok response ->
-          case client.hooks of
-            Nothing ->
-              prim_ioPure (Ok response)
-
-            Just hooks ->
-              prim_ioBind (hooks.onTurn { request = request, response = response }) (\_ ->
-                prim_ioPure (Ok response)
-              )
-    )
-
-ask : Client -> String -> IO (Result Error String)
-ask client prompt =
-  prim_ioBind (askRaw client prompt) (\r ->
-    case r of
-      Err e ->
-        prim_ioPure (Err e)
-
-      Ok response ->
-        prim_ioPure (Ok response.text)
+      Just hooks ->
+        Task.andThen (Task.mapError (\_ -> Core.ProviderError "hook failed") (hooks.onTurn { request = request, response = response })) (\_ ->
+          Task.succeed response
+        )
   )
 
-json : Json.Decode a => Client -> String -> IO (Result Error a)
-json client prompt =
-  prim_ioBind (askRaw client prompt) (\r ->
-    case r of
-      Err e ->
-        prim_ioPure (Err e)
+liftResult : IO (Result e a) -> Task e a
+liftResult io =
+  Task (io)
 
-      Ok response ->
-        case Json.decodeDetailed response.text of
+ask : Client -> String -> Task Error String
+ask client prompt =
+  Task.map (\response -> response.text) (askRaw client prompt)
+
+json : Json.Decode a => Client -> String -> Task Error a
+json client prompt =
+  Task.andThen (askRaw client prompt) (\response ->
+    case Json.decodeDetailed response.text of
+      Ok a ->
+        Task.succeed a
+
+      Err decodeErr ->
+        Task.fail (Core.DecodeError (formatDecodeError decodeErr))
+  )
+
+tool : Json.Decode a => Client -> String -> Task Error a
+tool client prompt =
+  let wrapped = Str.unlines [toolPreamble, "", prompt, "", toolPostamble] in
+  Task.andThen (askRaw client wrapped) (\response ->
+    case extractJson response.text of
+      Err e ->
+        Task.fail e
+
+      Ok rawJson ->
+        case Json.decodeDetailed rawJson of
           Ok a ->
-            prim_ioPure (Ok a)
+            Task.succeed a
 
           Err decodeErr ->
-            prim_ioPure (Err (Core.DecodeError (formatDecodeError decodeErr)))
-  )
-
-tool : Json.Decode a => Client -> String -> IO (Result Error a)
-tool client prompt =
-  let wrapped =
-    Str.unlines
-      [ toolPreamble
-      , ""
-      , prompt
-      , ""
-      , toolPostamble
-      ] in
-  prim_ioBind (askRaw client wrapped) (\r ->
-    case r of
-      Err e ->
-        prim_ioPure (Err e)
-
-      Ok response ->
-        case extractJson response.text of
-          Err e ->
-            prim_ioPure (Err e)
-
-          Ok rawJson ->
-            case Json.decodeDetailed rawJson of
-              Ok a ->
-                prim_ioPure (Ok a)
-
-              Err decodeErr ->
-                prim_ioPure (Err (Core.DecodeError (formatDecodeError decodeErr)))
+            Task.fail (Core.DecodeError (formatDecodeError decodeErr))
   )
 
 formatDecodeError : DecodeError -> String
@@ -495,7 +465,7 @@ showStreamResult showE showA r =
 askStream : Client -> String -> Stream NovaEvent
 askStream client prompt =
   Stream
-    ( prim_ioBind (askRaw client prompt) (\r ->
+    ( prim_ioBind (Task.attempt (askRaw client prompt)) (\r ->
         case r of
           Err e ->
             prim_ioPure (Err e)
@@ -562,22 +532,22 @@ executeTool :
   -> ToolSpec a
   -> (a -> Json)
   -> (b -> Json)
-  -> (a -> IO (Result ToolExecError b))
+  -> (a -> Task ToolExecError b)
   -> a
-  -> IO (Result ToolExecError b)
+  -> Task ToolExecError b
 executeTool client runtimeConfig spec encodeInput encodeOutput exec input =
   do
     let inputJson = encodeInput input
     case client.hooks of
       Nothing ->
-        pure unit
+        Task.succeed unit
 
       Just hooks ->
-        hooks.onToolStart { tool = spec.id, input = inputJson }
+        Task.mapError (\_ -> ToolFailed "hook failed") (hooks.onToolStart { tool = spec.id, input = inputJson })
 
-    t0 <- prim_timeNowMicros
-    result <- Runtime.executeWithGuardsUsing runtimeConfig spec exec input
-    t1 <- prim_timeNowMicros
+    t0 <- Task.fromIO prim_timeNowMicros
+    result <- Task.fromIO (Task.attempt (Runtime.executeWithGuardsUsing runtimeConfig spec exec input))
+    t1 <- Task.fromIO prim_timeNowMicros
     let durationMs = Int.div (Int.sub t1 t0) 1000
     let outputJson =
       case result of
@@ -589,16 +559,17 @@ executeTool client runtimeConfig spec encodeInput encodeOutput exec input =
 
     case client.hooks of
       Nothing ->
-        pure unit
+        Task.succeed unit
 
       Just hooks ->
-        hooks.onToolFinish
-          { tool = spec.id
-          , output = outputJson
-          , durationMs = durationMs
-          }
+        Task.mapError (\_ -> ToolFailed "hook failed") (hooks.onToolFinish { tool = spec.id, output = outputJson, durationMs = durationMs })
 
-    pure result
+    case result of
+      Ok b ->
+        Task.succeed b
+
+      Err e ->
+        Task.fail e
 
 encodeToolExecError : ToolExecError -> Json
 encodeToolExecError e =

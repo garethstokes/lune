@@ -58,15 +58,15 @@ mockProviderImpl =
 
 hooks : Nova.NovaHooks
 hooks =
-  { onTurn = \_ -> prim_putStrLn "hook:onTurn"
+  { onTurn = \_ -> IO.println "hook:onTurn"
   , onToolStart =
     \ctx ->
       Str.append "hook:onToolStart " (Tool.toolIdToString ctx.tool)
-        |> prim_putStrLn
+        |> IO.println
   , onToolFinish =
     \ctx ->
       Str.append "hook:onToolFinish " (Tool.toolIdToString ctx.tool)
-        |> prim_putStrLn
+        |> IO.println
   }
 
 type alias AddArgs =
@@ -100,8 +100,8 @@ runtimeAllow =
 runtimeDeny : RuntimeConfig
 runtimeDeny = { runtimeAllow | allowedTools = Core.setEmpty }
 
-runAdd : AddArgs -> IO (Result ToolExecError Int)
-runAdd args = prim_ioPure (Ok (Int.add args.a args.b))
+runAdd : AddArgs -> Task ToolExecError Int
+runAdd args = Task.succeed (Int.add args.a args.b)
 
 encodeAddArgs : AddArgs -> Json
 encodeAddArgs args =
@@ -116,13 +116,13 @@ main =
     let providers = Core.dictInsert Nova.providerEq mockProvider mockProviderImpl Core.defaultProviderRegistry
     let client = withHooks hooks (newClient providers mockProvider "echo")
     IO.println "ask:"
-    a <- Task.fromIO <| ask client "Hello from Nova v2"
+    a <- Task.fromIO (Task.attempt (ask client "Hello from Nova v2"))
     IO.println <| Nova.showAskResult a
     IO.println "json:"
-    j <- Task.fromIO <| json (withModel "json" client) "ignored"
+    j <- Task.fromIO (Task.attempt (json (withModel "json" client) "ignored"))
     IO.println <| Nova.showJsonResult j
     IO.println "tool:"
-    t <- Task.fromIO <| tool (withModel "tool" client) "ignored"
+    t <- Task.fromIO (Task.attempt (tool (withModel "tool" client) "ignored"))
     IO.println <| Nova.showJsonResult t
     IO.println "askStream:"
     let stream = askStream client "This is a longer string to demonstrate simulated streaming."
@@ -131,20 +131,22 @@ main =
     case s1 of
       Err _ ->
         Task.succeed unit
-      Ok step ->
-        case step of
-          StreamEnd ->
-            Task.succeed unit
-          StreamYield _ rest ->
-            do
-              s2 <- Task.fromIO <| next rest
-              IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s2
-              Task.succeed unit
+      Ok StreamEnd ->
+        Task.succeed unit
+      Ok StreamYield _ rest ->
+        do
+          s2 <- Task.fromIO <| next rest
+          IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s2
+          Task.succeed unit
     IO.println "executeTool_allow:"
-    x1 <- Task.fromIO <| executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
-          { a = 1, b = 2 }
-    IO.println <| Nova.showToolExecResult x1
+    r1 <- toResult (executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
+          { a = 1, b = 2 })
+    IO.println <| Nova.showToolExecResult r1
     IO.println "executeTool_deny:"
-    x2 <- Task.fromIO <| executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
-          { a = 1, b = 2 }
-    IO.println <| Nova.showToolExecResult x2
+    r2 <- toResult (executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
+          { a = 1, b = 2 })
+    IO.println <| Nova.showToolExecResult r2
+-- | Convert a Task's success/failure into a Result value (never fails)
+
+toResult : Task e a -> Task x (Result e a)
+toResult task = Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))

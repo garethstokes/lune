@@ -32,26 +32,25 @@ executeWithGuards :
   RuntimeConfig
   -> ToolSpec a
   -> a
-  -> IO (Result ToolExecError b)
+  -> Task ToolExecError b
 executeWithGuards cfg spec input =
-  executeWithGuardsUsing cfg spec (\_ -> prim_ioPure (Err (ToolNotImplemented spec.id))) input
+  executeWithGuardsUsing cfg spec (\_ -> Task.fail (ToolNotImplemented spec.id)) input
 
 -- | Execute a tool via an explicit executor, enforcing allow/deny, approval,
 -- and timeout guards. This is the hook point for real tool execution.
 executeWithGuardsUsing :
   RuntimeConfig
   -> ToolSpec a
-  -> (a -> IO (Result ToolExecError b))
+  -> (a -> Task ToolExecError b)
   -> a
-  -> IO (Result ToolExecError b)
+  -> Task ToolExecError b
 executeWithGuardsUsing cfg spec exec input =
   case guardTool cfg spec.id of
     Err e ->
-      prim_ioPure (Err e)
+      Task.fail e
 
     Ok _ ->
-      Task.attempt <|
-        withTimeout cfg.toolTimeoutMs spec.id (Task (exec input))
+      withTimeout cfg.toolTimeoutMs spec.id (exec input)
 
 guardTool : RuntimeConfig -> ToolId -> Result ToolExecError Unit
 guardTool cfg toolId =
@@ -89,15 +88,13 @@ writeToolResult : Atomic.Shared (Maybe (Result ToolExecError a)) -> Task ToolExe
 writeToolResult resultVar task =
   do
     r <- Task.fromIO (Task.attempt task)
-    _ <- Atomic.commit (writeIfNothing resultVar r)
-    Task.succeed unit
+    Atomic.commit (writeIfNothing resultVar r)
 
 writeTimeoutResult : Atomic.Shared (Maybe (Result ToolExecError a)) -> Int -> ToolId -> Task e Unit
 writeTimeoutResult resultVar timeoutMs toolId =
   do
-    _ <- IO.sleepMs timeoutMs
-    _ <- Atomic.commit (writeIfNothing resultVar (Err (ToolTimedOut toolId)))
-    Task.succeed unit
+    IO.sleepMs timeoutMs
+    Atomic.commit (writeIfNothing resultVar (Err (ToolTimedOut toolId)))
 
 writeIfNothing : Atomic.Shared (Maybe a) -> a -> Atomic.Atomic Unit
 writeIfNothing var value =
