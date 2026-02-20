@@ -3,8 +3,11 @@ module Nova exposing (
   ollama,
   provider,
   providerId,
+  providerEq,
   showProvider,
   showError,
+  showAskResult,
+  showJsonResult,
 
   -- Hooks
   NovaHooks,
@@ -45,6 +48,7 @@ module Nova exposing (
 
   -- Tool execution (guarded + auditable)
   executeTool,
+  showToolExecResult,
   showToolExecError
 )
 
@@ -91,6 +95,10 @@ providerId : Provider -> String
 providerId =
   Core.providerId
 
+providerEq : Provider -> Provider -> Bool
+providerEq =
+  eqProvider
+
 showProvider : Provider -> String
 showProvider =
   providerId
@@ -115,6 +123,24 @@ showError e =
 
     DecodeError msg ->
       Str.append "DecodeError " msg
+
+showAskResult : Result Error String -> String
+showAskResult r =
+  case r of
+    Err e ->
+      showError e
+
+    Ok s ->
+      s
+
+showJsonResult : Result Error Json -> String
+showJsonResult r =
+  case r of
+    Err e ->
+      showError e
+
+    Ok j ->
+      RawJson.stringify j
 
 --------------------------------------------------------------------------------
 -- Hooks
@@ -602,6 +628,15 @@ toolExecErrorToString e =
 
     ToolFailed msg ->
       Str.append "ToolFailed " msg
+
+showToolExecResult : Result ToolExecError Int -> String
+showToolExecResult r =
+  case r of
+    Ok n ->
+      Str.append "Ok " (Str.fromInt n)
+
+    Err e ->
+      Str.append "Err " (showToolExecError e)
 
 showToolExecError : ToolExecError -> String
 showToolExecError =

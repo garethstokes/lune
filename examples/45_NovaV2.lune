@@ -1,5 +1,4 @@
 module NovaV2Demo exposing (main)
-
 import Lune.IO as IO
 import Lune.Task as Task
 import Lune.String as Str
@@ -21,91 +20,74 @@ import Nova exposing (
   , NovaEvent(..)
   , executeTool
 )
-import Nova.Core as Core exposing (Error(..), Provider, ProviderConfig, Response, ProviderImpl, Capability(..), Set, Usage)
+import Nova.Core as Core exposing (
+  Error(..)
+  , Provider
+  , ProviderConfig
+  , Response
+  , ProviderImpl
+  , Capability(..)
+  , Set
+  , Usage
+)
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 
-showAskResult : Result Error String -> String
-showAskResult r =
-  case r of
-    Err e ->
-      Nova.showError e
-    Ok s ->
-      s
-
-showJsonResult : Result Error RawJson.Json -> String
-showJsonResult r =
-  case r of
-    Err e ->
-      Nova.showError e
-    Ok j ->
-      RawJson.stringify j
-
-showToolExecResult : Result ToolExecError Int -> String
-showToolExecResult r =
-  case r of
-    Ok n ->
-      Str.append "Ok " (Str.fromInt n)
-    Err e ->
-      Str.append "Err " (Nova.showToolExecError e)
-
-providerEq : Provider -> Provider -> Bool
-providerEq a b =
-  Str.eq (Nova.providerId a) (Nova.providerId b)
-
 mockProvider : Provider
-mockProvider =
-  provider "mock"
+mockProvider = provider "mock"
 
 mockCall _ model prompt =
-  case Str.eq model "echo" of
-    True ->
-      prim_ioPure (Ok { text = prompt, usage = Just { inputTokens = 0, outputTokens = 0, totalTokens = 0 } })
-    False ->
-      case Str.eq model "json" of
-        True ->
-          prim_ioPure (Ok { text = "{\"n\":1}", usage = Just { inputTokens = 0, outputTokens = 0, totalTokens = 0 } })
-        False ->
-          case Str.eq model "tool" of
-            True ->
-              prim_ioPure (Ok { text = "ok\n{\"n\":2}\nbye", usage = Just { inputTokens = 0, outputTokens = 0, totalTokens = 0 } })
-            False ->
-              prim_ioPure (Err (ProviderError "Unknown model"))
+  case model of
+    "echo" ->
+      prim_ioPure <| Ok
+          { text = prompt, usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+    "json" ->
+      prim_ioPure <| Ok
+          { text = "{\"n\":1}", usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+    "tool" ->
+      prim_ioPure <| Ok
+          { text = "ok\n{\"n\":2}\nbye", usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+    _ ->
+      prim_ioPure (Err (ProviderError "Unknown model"))
 
 mockProviderImpl =
-  { id = mockProvider
-  , call = mockCall
-  , capabilities = Core.setEmpty
-  }
+  { id = mockProvider, call = mockCall, capabilities = Core.setEmpty }
 
 hooks : Nova.NovaHooks
 hooks =
   { onTurn = \_ -> prim_putStrLn "hook:onTurn"
-  , onToolStart = \ctx -> prim_putStrLn (Str.append "hook:onToolStart " (Tool.toolIdToString ctx.tool))
-  , onToolFinish = \ctx -> prim_putStrLn (Str.append "hook:onToolFinish " (Tool.toolIdToString ctx.tool))
+  , onToolStart =
+    \ctx ->
+      Str.append "hook:onToolStart " (Tool.toolIdToString ctx.tool)
+        |> prim_putStrLn
+  , onToolFinish =
+    \ctx ->
+      Str.append "hook:onToolFinish " (Tool.toolIdToString ctx.tool)
+        |> prim_putStrLn
   }
 
 type alias AddArgs =
-  { a : Int
-  , b : Int
-  }
+  { a : Int, b : Int }
 
 addSpec : Tool.ToolSpec AddArgs
 addSpec =
   { id = Tool.toolId "add" "1"
   , description = "Add two integers."
   , schema =
-      Encode.object
-        [ { key = "type", value = Encode.string "object" }
+    Encode.object
+      [
+        { key = "type", value = Encode.string "object" }
         , { key = "required", value = Encode.list Encode.string ["a", "b"] }
-        ]
+      ]
   , decoder =
-      Tool.decodeJsonString
-        ( Decode.map2
-            (\a b -> { a = a, b = b })
-            (Decode.field "a" Decode.int)
-            (Decode.field "b" Decode.int)
-        )
+    Tool.decodeJsonString
+      (Decode.map2
+        (\a b -> { a = a, b = b })
+        (Decode.field "a" Decode.int)
+        (Decode.field "b" Decode.int))
   }
 
 runtimeAllow : RuntimeConfig
@@ -117,45 +99,33 @@ runtimeAllow =
   }
 
 runtimeDeny : RuntimeConfig
-runtimeDeny =
-  { runtimeAllow | allowedTools = Core.setEmpty }
+runtimeDeny = { runtimeAllow | allowedTools = Core.setEmpty }
 
 runAdd : AddArgs -> IO (Result ToolExecError Int)
-runAdd args =
-  prim_ioPure (Ok (Int.add args.a args.b))
+runAdd args = prim_ioPure (Ok (Int.add args.a args.b))
 
 encodeAddArgs : AddArgs -> Json
 encodeAddArgs args =
   Encode.object
-    [ { key = "a", value = Encode.int args.a }
-    , { key = "b", value = Encode.int args.b }
+    [
+      { key = "a", value = Encode.int args.a }
+      , { key = "b", value = Encode.int args.b }
     ]
-
-encodeInt : Int -> Json
-encodeInt n =
-  Encode.int n
 
 main : Task Unit Unit
 main =
   do
-    let providers =
-      Core.dictInsert providerEq mockProvider mockProviderImpl Core.defaultProviderRegistry
-
-    let client =
-      withHooks hooks (newClient providers mockProvider "echo")
-
+    let providers = Core.dictInsert Nova.providerEq mockProvider mockProviderImpl Core.defaultProviderRegistry
+    let client = withHooks hooks (newClient providers mockProvider "echo")
     IO.println "ask:"
     a <- Task.fromIO <| ask client "Hello from Nova v2"
-    IO.println <| showAskResult a
-
+    IO.println <| Nova.showAskResult a
     IO.println "json:"
     j <- Task.fromIO <| json (withModel "json" client) "ignored"
-    IO.println <| showJsonResult j
-
+    IO.println <| Nova.showJsonResult j
     IO.println "tool:"
     t <- Task.fromIO <| tool (withModel "tool" client) "ignored"
-    IO.println <| showJsonResult t
-
+    IO.println <| Nova.showJsonResult t
     IO.println "askStream:"
     let stream = askStream client "This is a longer string to demonstrate simulated streaming."
     s1 <- Task.fromIO <| next stream
@@ -172,11 +142,11 @@ main =
               s2 <- Task.fromIO <| next rest
               IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s2
               Task.succeed unit
-
     IO.println "executeTool_allow:"
-    x1 <- Task.fromIO <| executeTool client runtimeAllow addSpec encodeAddArgs encodeInt runAdd { a = 1, b = 2 }
-    IO.println <| showToolExecResult x1
-
+    x1 <- Task.fromIO <| executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
+          { a = 1, b = 2 }
+    IO.println <| Nova.showToolExecResult x1
     IO.println "executeTool_deny:"
-    x2 <- Task.fromIO <| executeTool client runtimeDeny addSpec encodeAddArgs encodeInt runAdd { a = 1, b = 2 }
-    IO.println <| showToolExecResult x2
+    x2 <- Task.fromIO <| executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
+          { a = 1, b = 2 }
+    IO.println <| Nova.showToolExecResult x2
