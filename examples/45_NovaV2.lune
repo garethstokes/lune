@@ -78,9 +78,8 @@ addSpec =
   , description = "Add two integers."
   , schema =
     Encode.object
-      [
-        { key = "type", value = Encode.string "object" }
-        , { key = "required", value = Encode.list Encode.string ["a", "b"] }
+      [ { key = "type", value = Encode.string "object" }
+      , { key = "required", value = Encode.list Encode.string ["a", "b"] }
       ]
   , decoder =
     Tool.decodeJsonString
@@ -107,9 +106,8 @@ runAdd args = prim_ioPure (Ok (Int.add args.a args.b))
 encodeAddArgs : AddArgs -> Json
 encodeAddArgs args =
   Encode.object
-    [
-      { key = "a", value = Encode.int args.a }
-      , { key = "b", value = Encode.int args.b }
+    [ { key = "a", value = Encode.int args.a }
+    , { key = "b", value = Encode.int args.b }
     ]
 
 main : Task Unit Unit

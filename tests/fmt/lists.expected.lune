@@ -1,0 +1,10 @@
+module FmtLists exposing (main)
+import Lune.Json.Encode as Encode
+
+main =
+  Encode.object
+    [ { key = "type", value = Encode.string "object" }
+    , { key = "required", value = Encode.list Encode.string ["a", "b"] }
+    ]
+
+xs = ["a", "b"]

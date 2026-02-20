@@ -26,6 +26,7 @@ import Lune.Fmt.Doc
   , render
   , sep
   , space
+  , softSpace
   , text
   , vsep
   , (<+>)
@@ -281,7 +282,7 @@ formatConstraint :: S.Constraint -> Doc
 formatConstraint (S.Constraint cls args) =
   case args of
     [] -> text cls
-    _ -> hsep (text cls : map (formatType PrecTypeApp) args)
+    _ -> hsep (text cls : map (formatType PrecArrow) args)
 
 formatType :: TypePrec -> S.Type -> Doc
 formatType prec ty =
@@ -307,7 +308,7 @@ formatType prec ty =
 
         S.TypeApp _ _ ->
           let (h, args) = collectTypeApps ty
-              doc = group (formatType PrecTypeApp h <> nest indentSize (mconcat (map (\x -> line <> formatType PrecTypeApp x) args)))
+              doc = group (formatType PrecTypeApp h <> nest indentSize (mconcat (map (\x -> line <> formatType PrecArrow x) args)))
            in case prec of
                 PrecTypeApp -> doc
                 PrecTop -> doc
@@ -834,7 +835,9 @@ formatList elems =
     first : rest ->
       group $
         text "["
-          <> nest indentSize (lineBreak <> first <> mconcat (map (\d -> lineBreak <> text "," <+> d) rest))
+          <> softSpace
+          <> first
+          <> mconcat (map (\d -> lineBreak <> text "," <+> d) rest)
           <> lineBreak
           <> text "]"
 

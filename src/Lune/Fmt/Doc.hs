@@ -8,6 +8,7 @@ module Lune.Fmt.Doc
   , lineBreak
   , hardLine
   , space
+  , softSpace
   , (<+>)
   , nest
   , group
@@ -31,6 +32,7 @@ data Doc
   | Line
   | LineBreak
   | HardLine
+  | SoftSpace
   | Concat Doc Doc
   | Nest Int Doc
   | Group Doc
@@ -60,6 +62,11 @@ hardLine = HardLine
 
 space :: Doc
 space = Text " "
+
+-- | A space when rendered in expanded (multi-line) form, but empty when a group
+-- is flattened.
+softSpace :: Doc
+softSpace = SoftSpace
 
 (<+>) :: Doc -> Doc -> Doc
 a <+> b =
@@ -114,6 +121,8 @@ render width doc =
           B.singleton '\n' <> indent i <> best i zs
         HardLine ->
           B.singleton '\n' <> indent i <> best i zs
+        SoftSpace ->
+          B.singleton ' ' <> best (col + 1) zs
         Concat a b ->
           best col ((i, a) : (i, b) : zs)
         Nest j a ->
@@ -135,6 +144,7 @@ render width doc =
         Line -> Text " "
         LineBreak -> Empty
         HardLine -> HardLine
+        SoftSpace -> Empty
         Concat a b -> Concat (flatten a) (flatten b)
         Nest j a -> Nest j (flatten a)
         Group a -> flatten a
@@ -156,6 +166,8 @@ render width doc =
           True
         HardLine ->
           True
+        SoftSpace ->
+          fits (w - 1) zs
         Concat a b ->
           fits w ((i, a) : (i, b) : zs)
         Nest j a ->
