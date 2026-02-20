@@ -27,12 +27,12 @@ main =
     _ <- IO.println "Starting scheduler..."
     _ <- Scheduler.start sched
 
-    _ <- IO.sleepMs 3000
+    _ <- IO.sleepMs 2700
 
     _ <- IO.println "Triggering manual job..."
     _ <- Task.onError (Scheduler.trigger sched (JobId "manual")) (\e -> Task.succeed unit)
 
-    _ <- IO.sleepMs 2000
+    _ <- IO.sleepMs 1800
 
     _ <- IO.println "Stopping scheduler..."
     _ <- Scheduler.stop sched
