@@ -799,20 +799,46 @@ parseCase = do
   pure (Case scrut alts)
 
 parseCaseAltIndented :: P.Pos -> Parser Alt
-parseCaseAltIndented ref =
-  L.indentGuard scIndent GT ref *> parseCaseAlt
+parseCaseAltIndented ref = do
+  _ <- L.indentGuard scIndent GT ref
+  altRef0 <- L.indentLevel
+  let altRef = mkPos (unPos altRef0)
+  parseCaseAltFrom altRef
 
-parseCaseAlt :: Parser Alt
-parseCaseAlt = do
+parseCaseAltFrom :: P.Pos -> Parser Alt
+parseCaseAltFrom altRef = do
   pat <- parsePattern
   symbol "->"
-  scnOptional
-  Alt pat <$> parseExpr
+  Alt pat <$> parseCaseRhs altRef
+
+parseCaseRhs :: P.Pos -> Parser Expr
+parseCaseRhs altRef =
+  choice
+    [ try (parseInlineDo altRef)
+    , scnOptional *> parseExpr
+    ]
+
+parseInlineDo :: P.Pos -> Parser Expr
+parseInlineDo altRef = do
+  startLine <- P.sourceLine <$> P.getSourcePos
+  sc
+  afterLine <- P.sourceLine <$> P.getSourcePos
+  if startLine == afterLine
+    then parseDoFrom altRef
+    else empty
 
 parseDo :: Parser Expr
 parseDo = do
   ref0 <- L.indentLevel
   let ref = mkPos (unPos ref0)
+  keyword "do"
+  skipNewlines
+  firstStmt <- parseIndentedStmt ref
+  restStmts <- many (try (skipNewlines *> parseIndentedStmt ref))
+  pure (DoBlock (firstStmt : restStmts))
+
+parseDoFrom :: P.Pos -> Parser Expr
+parseDoFrom ref = do
   keyword "do"
   skipNewlines
   firstStmt <- parseIndentedStmt ref

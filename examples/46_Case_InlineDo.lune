@@ -1,0 +1,24 @@
+module CaseInlineDo exposing (main)
+
+import Lune.IO as IO
+import Lune.Prelude exposing (Task, Unit, Result(..))
+
+type Step =
+  StreamEnd
+  | StreamYield Int
+
+main : Task Unit Unit
+main =
+  do
+    let s1 = Ok (StreamYield 1)
+
+    case s1 of
+      Err _ ->
+        IO.println "err"
+
+      Ok StreamEnd ->
+        IO.println "end"
+
+      Ok (StreamYield n) -> do
+        let x = 1
+        IO.println "yield"
