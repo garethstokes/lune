@@ -1,0 +1,20 @@
+module CaseString exposing (main)
+
+import Lune.IO as IO
+import Lune.Prelude exposing (Task, Unit)
+
+main : Task Unit Unit
+main =
+  do
+    let model = "echo"
+
+    case model of
+      "echo" ->
+        IO.println "matched echo"
+
+      "gpt4" ->
+        IO.println "matched gpt4"
+
+      _ ->
+        IO.println "fallback"
+

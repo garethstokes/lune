@@ -124,6 +124,7 @@ data Pattern
   = PVar Text
   | PWildcard
   | PCon Text [Pattern]
+  | PString Text
   deriving (Show)
 
 data Stmt

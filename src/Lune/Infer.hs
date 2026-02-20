@@ -279,6 +279,9 @@ inferPattern env pat =
       tv <- freshTypeVar
       pure (Map.empty, [], tv)
 
+    S.PString _ ->
+      pure (Map.empty, [], TCon "String")
+
     S.PCon conName subpats -> do
       scheme <-
         case Map.lookup conName env of

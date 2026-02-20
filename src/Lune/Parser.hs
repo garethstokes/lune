@@ -853,6 +853,7 @@ patternAtom :: Parser Pattern
 patternAtom =
   choice
     [ symbol "_" $> PWildcard
+    , PString . T.pack <$> lexeme stringLiteral
     , parseListPattern
     , try conPattern
     , PVar <$> identifier

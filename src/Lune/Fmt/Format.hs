@@ -801,6 +801,7 @@ formatPattern pat =
           case pat of
             S.PVar name -> text name
             S.PWildcard -> text "_"
+            S.PString s -> formatStringLiteral s
             S.PCon name args ->
               case args of
                 [] -> text name

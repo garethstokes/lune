@@ -391,6 +391,13 @@ matchPattern pat v =
       Just (Map.singleton name v)
     S.PWildcard ->
       Just Map.empty
+    S.PString s1 ->
+      case v of
+        VString s2
+          | s1 == s2 ->
+              Just Map.empty
+        _ ->
+          Nothing
     S.PCon name ps ->
       case v of
         VCon name' args

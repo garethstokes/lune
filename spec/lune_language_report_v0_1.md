@@ -305,6 +305,7 @@ Allowed forms:
 - constructor patterns: `Just x`, `Cons h t`
 - variable patterns: `x`
 - wildcard: `_`
+- string literal patterns: `"echo"`
 - list patterns: `[]`, `[x]`, `[a, b, c]`
 - tuple patterns: `(x, y)`, `(a, _, c)`
 

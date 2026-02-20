@@ -615,6 +615,8 @@ resolvePatternHead scope pat =
       Right pat
     S.PWildcard ->
       Right pat
+    S.PString _ ->
+      Right pat
     S.PCon name ps -> do
       name' <- resolveCtorName scope name
       ps' <- mapM (resolvePatternHead scope) ps
@@ -639,6 +641,7 @@ patVars =
       case pat of
         S.PVar name -> [name]
         S.PWildcard -> []
+        S.PString _ -> []
         S.PCon _ ps -> concatMap go ps
 
 resolveDo :: Scope -> [S.Stmt] -> Either ResolveError [S.Stmt]

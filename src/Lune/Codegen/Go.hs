@@ -179,6 +179,8 @@ patternBinds pat =
       Set.singleton name
     S.PWildcard ->
       Set.empty
+    S.PString _ ->
+      Set.empty
     S.PCon _ ps ->
       Set.unions (map patternBinds ps)
 
@@ -286,11 +288,9 @@ codegenLamN argIx declMap env pats body =
           pure (renderReturn nextExpr)
 
       let bodyLines' =
-            case p of
-              S.PCon {} ->
-                bodyLines <> ["panic(\"pattern match failure\")"]
-              _ ->
-                bodyLines
+            if patternAlwaysMatches p
+              then bodyLines
+              else bodyLines <> ["panic(\"pattern match failure\")"]
 
       pure (renderFunc argName bodyLines')
 
@@ -306,6 +306,21 @@ emitMatch scrutExpr pat env k =
       k (Map.insert name scrutExpr env)
     S.PWildcard ->
       k env
+    S.PString s -> do
+      tmpName <- freshTemp "_s"
+      inner <- k env
+      let header =
+            "if "
+              <> tmpName
+              <> ", ok := "
+              <> scrutExpr
+              <> ".(string); ok && "
+              <> tmpName
+              <> " == "
+              <> renderGoString s
+              <> " {"
+          footer = "}"
+      pure ([header] <> indentLines 2 (("_ = " <> tmpName) : inner) <> [footer])
     S.PCon conName ps -> do
       argsName <- freshTemp "_args"
       inner <- emitMatches argsName ps 0 env k
@@ -359,6 +374,7 @@ patternAlwaysMatches pat =
   case pat of
     S.PVar {} -> True
     S.PWildcard -> True
+    S.PString {} -> False
     S.PCon {} -> False
 
 codegenRecord :: Map Text C.CoreExpr -> Map Text Text -> [(Text, C.CoreExpr)] -> CG Text

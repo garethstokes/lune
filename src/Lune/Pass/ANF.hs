@@ -204,5 +204,7 @@ collectNamesPat pat =
       Set.singleton name
     S.PWildcard ->
       Set.empty
+    S.PString _ ->
+      Set.empty
     S.PCon conName ps ->
       Set.insert conName (Set.unions (map collectNamesPat ps))
