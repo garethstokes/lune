@@ -1,0 +1,21 @@
+ask:
+hook:onTurn
+Hello from Nova v2
+json:
+hook:onTurn
+{"n":1}
+tool:
+hook:onTurn
+{"n":2}
+askStream:
+hook:onTurn
+StreamYield TextDelta This is a longer string
+StreamYield TextDelta to demonstrate simulated
+executeTool_allow:
+hook:onToolStart add@1
+hook:onToolFinish add@1
+Ok 3
+executeTool_deny:
+hook:onToolStart add@1
+hook:onToolFinish add@1
+Err ToolNotAllowed add@1

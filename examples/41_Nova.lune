@@ -4,29 +4,17 @@ import Lune.Task as Task
 import Lune.String as Str
 import Lune.Json as RawJson
 import Nova exposing (
-  Provider(..)
-  , Model
-  , Response
-  , Error(..)
-  , defaultClient
+  defaultClient
   , withOllamaBaseUrl
-  , openrouterModel
-  , ollamaModel
+  , withProvider
+  , withModel
+  , openrouter
+  , ollama
   , ask
   , json
   , tool
 )
-
-showProvider : Provider -> String
-showProvider p =
-  case p of
-    OpenRouter ->
-      "openrouter"
-    Ollama ->
-      "ollama"
-
-showModel : Model -> String
-showModel m = Str.append (showProvider m.provider) (Str.append ":" m.id)
+import Nova.Core exposing (Error(..))
 
 showError : Error -> String
 showError e =
@@ -44,13 +32,13 @@ showError e =
     DecodeError msg ->
       Str.append "DecodeError " msg
 
-showAskResult : Result Error Response -> String
+showAskResult : Result Error String -> String
 showAskResult r =
   case r of
     Err e ->
       showError e
-    Ok resp ->
-      resp.text
+    Ok s ->
+      s
 
 showJsonResult : Result Error RawJson.Json -> String
 showJsonResult r =
@@ -63,109 +51,44 @@ showJsonResult r =
 main : Task Unit Unit
 main =
   do
-    let client = withOllamaBaseUrl "mock://" defaultClient
-    IO.println "model_builders_openrouter:"
-    let m1 = openrouterModel "x"
-    IO.println (showModel m1)
-    IO.println "model_builders_ollama:"
-    let m2 = ollamaModel "y"
-    IO.println (showModel m2)
+    let baseClient = withOllamaBaseUrl "mock://" defaultClient
     IO.println "routing_openrouter_missing_key:"
-    r1 <- Task.fromIO <| ask client
-          { model = m1
-          , prompt =
-            ''
-              hi
-            ''
-          }
+    let openrouterClient = withModel "x" (withProvider openrouter baseClient)
+    r1 <- Task.fromIO <| ask openrouterClient "hi"
     IO.println <| showAskResult r1
     IO.println "routing_ollama_mock:"
-    r2 <- Task.fromIO <| ask client
-          { model = ollamaModel "mock-pure"
-          , prompt =
-            ''
-              hi
-            ''
-          }
+    let pureClient = withModel "mock-pure" (withProvider ollama baseClient)
+    r2 <- Task.fromIO <| ask pureClient "hi"
     IO.println <| showAskResult r2
     IO.println "tool_wrapper_counts:"
-    countsR <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-tool-wrapper"
-          , prompt =
-            ''
-              user
-            ''
-          }
+    let toolWrapperClient = withModel "mock-tool-wrapper" (withProvider ollama baseClient)
+    countsR <- Task.fromIO <| tool toolWrapperClient "user"
     IO.println <| showJsonResult countsR
     IO.println "json_pure:"
-    jp <- Task.fromIO <| json client
-          { model = ollamaModel "mock-pure"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    jp <- Task.fromIO <| json pureClient "p"
     IO.println <| showJsonResult jp
     IO.println "tool_pure:"
-    tp <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-pure"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    tp <- Task.fromIO <| tool pureClient "p"
     IO.println <| showJsonResult tp
     IO.println "json_prose_prefix:"
-    jpp <- Task.fromIO <| json client
-          { model = ollamaModel "mock-prose-prefix"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    let prosePrefixClient = withModel "mock-prose-prefix" (withProvider ollama baseClient)
+    jpp <- Task.fromIO <| json prosePrefixClient "p"
     IO.println <| showJsonResult jpp
     IO.println "tool_prose_prefix:"
-    tpp <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-prose-prefix"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    tpp <- Task.fromIO <| tool prosePrefixClient "p"
     IO.println <| showJsonResult tpp
     IO.println "json_prose_suffix:"
-    jps <- Task.fromIO <| json client
-          { model = ollamaModel "mock-prose-suffix"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    let proseSuffixClient = withModel "mock-prose-suffix" (withProvider ollama baseClient)
+    jps <- Task.fromIO <| json proseSuffixClient "p"
     IO.println <| showJsonResult jps
     IO.println "tool_prose_suffix:"
-    tps <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-prose-suffix"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    tps <- Task.fromIO <| tool proseSuffixClient "p"
     IO.println <| showJsonResult tps
     IO.println "tool_invalid:"
-    ti <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-invalid"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    let invalidClient = withModel "mock-invalid" (withProvider ollama baseClient)
+    ti <- Task.fromIO <| tool invalidClient "p"
     IO.println <| showJsonResult ti
     IO.println "tool_no_json:"
-    tn <- Task.fromIO <| tool client
-          { model = ollamaModel "mock-no-json"
-          , prompt =
-            ''
-              p
-            ''
-          }
+    let noJsonClient = withModel "mock-no-json" (withProvider ollama baseClient)
+    tn <- Task.fromIO <| tool noJsonClient "p"
     IO.println <| showJsonResult tn

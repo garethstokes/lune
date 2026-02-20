@@ -1,0 +1,187 @@
+module Nova.Prompt exposing (
+  toolPreamble,
+  toolPostamble,
+  extractJson,
+  composeToolPrompt
+)
+
+import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..))
+import Lune.Int as Int
+import Lune.String as Str
+import Lune.Json as RawJson
+import Nova.Core exposing (Error(..))
+import Nova.Tool exposing (ToolSpec, toolIdToString)
+
+--------------------------------------------------------------------------------
+-- Prompt helpers
+--------------------------------------------------------------------------------
+
+toolPreamble : String
+toolPreamble =
+  Str.unlines
+    [ "You must output exactly one JSON value and nothing else."
+    , ""
+    , "Rules:"
+    , "- Output ONLY valid JSON."
+    , "- No markdown."
+    , "- No code fences."
+    , "- No prose or explanations."
+    , "- No leading or trailing text."
+    , "- Do not add extra keys beyond the requested schema."
+    ]
+
+toolPostamble : String
+toolPostamble =
+  Str.unlines
+    [ "Output ONLY JSON now."
+    ]
+
+composeToolPrompt : ToolSpec a -> String -> String
+composeToolPrompt spec userPrompt =
+  Str.unlines
+    [ toolPreamble
+    , ""
+    , Str.append "Tool: " (toolIdToString spec.id)
+    , Str.append "Description: " spec.description
+    , Str.append "Schema: " (RawJson.stringify spec.schema)
+    , ""
+    , "User:"
+    , userPrompt
+    , ""
+    , toolPostamble
+    ]
+
+--------------------------------------------------------------------------------
+-- JSON extraction (total; never throws)
+--------------------------------------------------------------------------------
+
+extractJson : String -> Result Error String
+extractJson s =
+  case extractJsonTrimmed (Str.trim s) of
+    Ok raw ->
+      Ok raw
+    Err msg ->
+      Err (DecodeError msg)
+
+extractJsonTrimmed : String -> Result String String
+extractJsonTrimmed t =
+  case startsLikeJsonContainer t of
+    True ->
+      case validateJson t of
+        Ok _ ->
+          Ok t
+        Err _ ->
+          extractViaSlice t
+
+    False ->
+      extractViaSlice t
+
+startsLikeJsonContainer : String -> Bool
+startsLikeJsonContainer t =
+  case Str.startsWith "{" t of
+    True -> True
+    False -> Str.startsWith "[" t
+
+extractViaSlice : String -> Result String String
+extractViaSlice t =
+  case findJsonSlice t of
+    Err _ ->
+      Err (Str.append "Could not find JSON in response: " (snippet 240 t))
+    Ok raw ->
+      case validateJson raw of
+        Ok _ -> Ok raw
+        Err _ -> Err (Str.append "Could not parse JSON in response: " (snippet 240 raw))
+
+validateJson : String -> Result String RawJson.Json
+validateJson raw =
+  RawJson.parse raw
+
+findJsonSlice : String -> Result String String
+findJsonSlice t =
+  case firstJsonStart t of
+    Nothing ->
+      Err "no start"
+    Just start ->
+      case lastJsonEnd t of
+        Nothing ->
+          Err "no end"
+        Just end ->
+          case ltInt start end of
+            True ->
+              Ok (sliceInclusive start end t)
+            False ->
+              Err "invalid slice"
+
+firstJsonStart : String -> Maybe Int
+firstJsonStart t =
+  minMaybe (Str.indexOf "{" t) (Str.indexOf "[" t)
+
+lastJsonEnd : String -> Maybe Int
+lastJsonEnd t =
+  maxMaybe
+    (lastIndexOfChar (prim_intToChar 125) t)  -- '}'
+    (lastIndexOfChar (prim_intToChar 93) t)   -- ']'
+
+lastIndexOfChar : Char -> String -> Maybe Int
+lastIndexOfChar c s =
+  lastIndexOfCharGo c (Str.toChars s) 0 Nothing
+
+lastIndexOfCharGo : Char -> List Char -> Int -> Maybe Int -> Maybe Int
+lastIndexOfCharGo c chars idx last =
+  case chars of
+    [] ->
+      last
+    Cons x xs ->
+      case prim_eqInt (prim_charToInt x) (prim_charToInt c) of
+        True ->
+          lastIndexOfCharGo c xs (Int.add idx 1) (Just idx)
+        False ->
+          lastIndexOfCharGo c xs (Int.add idx 1) last
+
+minMaybe : Maybe Int -> Maybe Int -> Maybe Int
+minMaybe a b =
+  case a of
+    Nothing -> b
+    Just x ->
+      case b of
+        Nothing -> a
+        Just y ->
+          case prim_leInt x y of
+            True -> Just x
+            False -> Just y
+
+maxMaybe : Maybe Int -> Maybe Int -> Maybe Int
+maxMaybe a b =
+  case a of
+    Nothing -> b
+    Just x ->
+      case b of
+        Nothing -> a
+        Just y ->
+          case prim_leInt x y of
+            True -> Just y
+            False -> Just x
+
+sliceInclusive : Int -> Int -> String -> String
+sliceInclusive start end s =
+  let len = Int.add (Int.sub end start) 1 in
+  Str.take len (Str.drop start s)
+
+ltInt : Int -> Int -> Bool
+ltInt a b =
+  case prim_leInt a b of
+    True ->
+      case prim_eqInt a b of
+        True -> False
+        False -> True
+    False ->
+      False
+
+snippet : Int -> String -> String
+snippet n s =
+  case prim_leInt (Str.length s) n of
+    True ->
+      s
+    False ->
+      Str.append (Str.take n s) "…"
+

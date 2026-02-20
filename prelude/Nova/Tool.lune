@@ -1,0 +1,52 @@
+module Nova.Tool exposing (
+  ToolId,
+  ToolSpec,
+  toolId,
+  eqToolId,
+  toolIdToString,
+  decodeJsonString
+)
+
+import Lune.Prelude exposing (Bool(..), String, Result(..), List(..))
+import Lune.String as Str
+import Lune.Json as RawJson exposing (Json)
+import Lune.Json.Decode as Decode exposing (Decoder, DecodeError)
+
+type alias ToolId =
+  { name : String
+  , version : String
+  }
+
+toolId : String -> String -> ToolId
+toolId name version =
+  { name = name
+  , version = version
+  }
+
+eqToolId : ToolId -> ToolId -> Bool
+eqToolId a b =
+  case Str.eq a.name b.name of
+    False ->
+      False
+    True ->
+      Str.eq a.version b.version
+
+toolIdToString : ToolId -> String
+toolIdToString id =
+  Str.append id.name (Str.append "@" id.version)
+
+type alias ToolSpec a =
+  { id : ToolId
+  , description : String
+  , schema : Json
+  , decoder : String -> Result DecodeError a
+  }
+
+decodeJsonString : Decoder a -> String -> Result DecodeError a
+decodeJsonString decoder raw =
+  case RawJson.parse raw of
+    Err msg ->
+      Err { message = msg, path = [] }
+
+    Ok json ->
+      Decode.decodeValue decoder json

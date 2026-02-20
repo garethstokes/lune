@@ -1,0 +1,369 @@
+module Nova.Core exposing (
+  -- Collections
+  Dict,
+  Set,
+  dictEmpty,
+  dictFromList,
+  dictGet,
+  dictInsert,
+  setEmpty,
+  setFromList,
+  setMember,
+  setInsert,
+
+  -- Core types
+  Provider(..),
+  openrouter,
+  ollama,
+  providerId,
+  Usage,
+  Response,
+  Error(..),
+  Request,
+  ProviderSettings,
+  ProviderConfig,
+  Capability(..),
+  ProviderImpl,
+  ProviderRegistry,
+  defaultProviderConfig,
+  defaultProviderRegistry,
+  callProvider
+)
+
+import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Pair(..))
+import Lune.Int as Int
+import Lune.String as Str
+
+--------------------------------------------------------------------------------
+-- Collections (minimal, deterministic)
+--------------------------------------------------------------------------------
+
+type alias Dict k v =
+  List { key : k, value : v }
+
+dictEmpty : Dict k v
+dictEmpty =
+  []
+
+dictFromList : List { key : k, value : v } -> Dict k v
+dictFromList pairs =
+  pairs
+
+dictGet : (k -> k -> Bool) -> k -> Dict k v -> Maybe v
+dictGet eq key dict =
+  case dict of
+    [] ->
+      Nothing
+
+    Cons entry rest ->
+      case eq key entry.key of
+        True ->
+          Just entry.value
+
+        False ->
+          dictGet eq key rest
+
+dictInsert : (k -> k -> Bool) -> k -> v -> Dict k v -> Dict k v
+dictInsert eq key value dict =
+  case dict of
+    [] ->
+      Cons { key = key, value = value } []
+
+    Cons entry rest ->
+      case eq key entry.key of
+        True ->
+          Cons { key = key, value = value } rest
+
+        False ->
+          Cons entry (dictInsert eq key value rest)
+
+type alias Set a =
+  List a
+
+setEmpty : Set a
+setEmpty =
+  []
+
+setFromList : (a -> a -> Bool) -> List a -> Set a
+setFromList eq xs =
+  setFromListGo eq xs []
+
+setFromListGo : (a -> a -> Bool) -> List a -> Set a -> Set a
+setFromListGo eq xs acc =
+  case xs of
+    [] ->
+      acc
+
+    Cons x rest ->
+      case setMember eq x acc of
+        True ->
+          setFromListGo eq rest acc
+
+        False ->
+          setFromListGo eq rest (setInsert eq x acc)
+
+setMember : (a -> a -> Bool) -> a -> Set a -> Bool
+setMember eq x xs =
+  case xs of
+    [] ->
+      False
+
+    Cons y rest ->
+      case eq x y of
+        True ->
+          True
+
+        False ->
+          setMember eq x rest
+
+setInsert : (a -> a -> Bool) -> a -> Set a -> Set a
+setInsert eq x xs =
+  case setMember eq x xs of
+    True -> xs
+    False -> Cons x xs
+
+--------------------------------------------------------------------------------
+-- Core types
+--------------------------------------------------------------------------------
+
+type Provider =
+  Provider String
+
+providerId : Provider -> String
+providerId p =
+  case p of
+    Provider s -> s
+
+eqProvider : Provider -> Provider -> Bool
+eqProvider a b =
+  Str.eq (providerId a) (providerId b)
+
+-- Convenience values matching spec naming.
+openrouter : Provider
+openrouter =
+  Provider "openrouter"
+
+ollama : Provider
+ollama =
+  Provider "ollama"
+
+type alias Usage =
+  { inputTokens : Int
+  , outputTokens : Int
+  , totalTokens : Int
+  }
+
+type alias Response =
+  { text : String
+  , usage : Maybe Usage
+  }
+
+type Error =
+  NetworkError String
+  | RateLimited
+  | Unauthorized
+  | BadRequest String
+  | ProviderError String
+  | DecodeError String
+
+type alias Request =
+  { provider : Provider
+  , model : String
+  , prompt : String
+  }
+
+-- Provider configuration is a provider-keyed dictionary of settings.
+type alias ProviderSettings =
+  { baseUrl : String
+  , apiKey : Maybe String
+  , appName : Maybe String
+  }
+
+type alias ProviderConfig =
+  Dict Provider ProviderSettings
+
+defaultProviderConfig : ProviderConfig
+defaultProviderConfig =
+  dictFromList
+    [ { key = openrouter
+      , value =
+          { baseUrl = "https://openrouter.ai/api/v1"
+          , apiKey = Nothing
+          , appName = Nothing
+          }
+      }
+    , { key = ollama
+      , value =
+          { baseUrl = "http://localhost:11434"
+          , apiKey = Nothing
+          , appName = Nothing
+          }
+      }
+    ]
+
+type Capability =
+  SupportsTools
+  | SupportsStreaming
+  | SupportsJsonMode
+
+eqCapability : Capability -> Capability -> Bool
+eqCapability a b =
+  case a of
+    SupportsTools ->
+      case b of
+        SupportsTools -> True
+        _ -> False
+    SupportsStreaming ->
+      case b of
+        SupportsStreaming -> True
+        _ -> False
+    SupportsJsonMode ->
+      case b of
+        SupportsJsonMode -> True
+        _ -> False
+
+type alias ProviderImpl =
+  { id : Provider
+  , call :
+      ProviderConfig
+      -> String  -- model
+      -> String  -- prompt
+      -> IO (Result Error Response)
+  , capabilities : Set Capability
+  }
+
+type alias ProviderRegistry =
+  Dict Provider ProviderImpl
+
+defaultProviderRegistry : ProviderRegistry
+defaultProviderRegistry =
+  dictFromList
+    [ { key = openrouter, value = openrouterImpl }
+    , { key = ollama, value = ollamaImpl }
+    ]
+
+callProvider :
+  ProviderRegistry
+  -> ProviderConfig
+  -> Provider
+  -> String
+  -> String
+  -> IO (Result Error Response)
+callProvider registry cfg provider model prompt =
+  case dictGet eqProvider provider registry of
+    Nothing ->
+      prim_ioPure (Err (ProviderError (Str.append "Unknown provider: " (providerId provider))))
+
+    Just impl ->
+      impl.call cfg model prompt
+
+--------------------------------------------------------------------------------
+-- Provider implementations (v2 stubs; deterministic)
+--------------------------------------------------------------------------------
+
+getSettings : Provider -> ProviderConfig -> ProviderSettings
+getSettings provider cfg =
+  case dictGet eqProvider provider cfg of
+    Just s ->
+      s
+    Nothing ->
+      -- Missing config should not crash; use a safe default.
+      { baseUrl = ""
+      , apiKey = Nothing
+      , appName = Nothing
+      }
+
+openrouterImpl : ProviderImpl
+openrouterImpl =
+  { id = openrouter
+  , call = callOpenRouter
+  , capabilities = setFromList eqCapability [SupportsJsonMode]
+  }
+
+ollamaImpl : ProviderImpl
+ollamaImpl =
+  { id = ollama
+  , call = callOllama
+  , capabilities = setEmpty
+  }
+
+callOpenRouter : ProviderConfig -> String -> String -> IO (Result Error Response)
+callOpenRouter cfg _ _ =
+  let settings = getSettings openrouter cfg in
+  case settings.apiKey of
+    Nothing ->
+      prim_ioPure (Err Unauthorized)
+
+    Just _ ->
+      prim_ioPure (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
+
+callOllama : ProviderConfig -> String -> String -> IO (Result Error Response)
+callOllama cfg modelId prompt =
+  let settings = getSettings ollama cfg in
+  case Str.startsWith "mock://" settings.baseUrl of
+    True ->
+      prim_ioPure (mockOllama modelId prompt)
+
+    False ->
+      prim_ioPure (Err (ProviderError "Ollama: HTTP client not implemented (v2)."))
+
+mockOllama : String -> String -> Result Error Response
+mockOllama modelId prompt =
+  case Str.eq modelId "mock-tool-wrapper" of
+    True ->
+      let pre = countOccurrences "You must output exactly one JSON value and nothing else." prompt in
+      let post = countOccurrences "Output ONLY JSON now." prompt in
+      Ok
+        { text =
+            Str.append
+              (Str.append "[" (Str.fromInt pre))
+              (Str.append (Str.append "," (Str.fromInt post)) "]")
+        , usage = Nothing
+        }
+
+    False ->
+      case Str.eq modelId "mock-pure" of
+        True ->
+          Ok { text = "{\"n\":1}", usage = Nothing }
+
+        False ->
+          case Str.eq modelId "mock-prose-prefix" of
+            True ->
+              Ok { text = "Sure.\n{\"n\":1}", usage = Nothing }
+
+            False ->
+              case Str.eq modelId "mock-prose-suffix" of
+                True ->
+                  Ok { text = "{\"n\":1}\nThanks!", usage = Nothing }
+
+                False ->
+                  case Str.eq modelId "mock-invalid" of
+                    True ->
+                      Ok { text = "Ok: {not json}", usage = Nothing }
+
+                    False ->
+                      case Str.eq modelId "mock-no-json" of
+                        True ->
+                          Ok { text = "No JSON here.", usage = Nothing }
+
+                        False ->
+                          Err (ProviderError "Unknown mock model id.")
+
+countOccurrences : String -> String -> Int
+countOccurrences needle haystack =
+  case Str.isEmpty needle of
+    True ->
+      0
+
+    False ->
+      countOccurrencesFrom needle (Str.length needle) 0 haystack
+
+countOccurrencesFrom : String -> Int -> Int -> String -> Int
+countOccurrencesFrom needle needleLen acc s =
+  case Str.indexOf needle s of
+    Nothing ->
+      acc
+
+    Just i ->
+      let next = Str.drop (Int.add i needleLen) s in
+      countOccurrencesFrom needle needleLen (Int.add acc 1) next

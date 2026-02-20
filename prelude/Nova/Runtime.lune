@@ -1,0 +1,120 @@
+module Nova.Runtime exposing (
+  RuntimeConfig,
+  ToolExecError(..),
+  executeWithGuards,
+  executeWithGuardsUsing
+)
+
+import Lune.Prelude exposing (Int, Bool(..), Result(..), Maybe(..), Unit, unit, Task(..), Applicative(..), Monad(..))
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.Fiber as Fiber
+import Lune.Atomic as Atomic
+import Nova.Core exposing (Set, setMember)
+import Nova.Tool exposing (ToolId, ToolSpec, eqToolId)
+
+type alias RuntimeConfig =
+  { maxTurns : Int
+  , toolTimeoutMs : Int
+  , allowedTools : Set ToolId
+  , requireApproval : Set ToolId
+  }
+
+type ToolExecError =
+  ToolNotAllowed ToolId
+  | ApprovalRequired ToolId
+  | ToolTimedOut ToolId
+  | MaxTurnsExceeded Int
+  | ToolNotImplemented ToolId
+  | ToolFailed String
+
+executeWithGuards :
+  RuntimeConfig
+  -> ToolSpec a
+  -> a
+  -> IO (Result ToolExecError b)
+executeWithGuards cfg spec input =
+  executeWithGuardsUsing cfg spec (\_ -> prim_ioPure (Err (ToolNotImplemented spec.id))) input
+
+-- | Execute a tool via an explicit executor, enforcing allow/deny, approval,
+-- and timeout guards. This is the hook point for real tool execution.
+executeWithGuardsUsing :
+  RuntimeConfig
+  -> ToolSpec a
+  -> (a -> IO (Result ToolExecError b))
+  -> a
+  -> IO (Result ToolExecError b)
+executeWithGuardsUsing cfg spec exec input =
+  case guardTool cfg spec.id of
+    Err e ->
+      prim_ioPure (Err e)
+
+    Ok _ ->
+      Task.attempt <|
+        withTimeout cfg.toolTimeoutMs spec.id (Task (exec input))
+
+guardTool : RuntimeConfig -> ToolId -> Result ToolExecError Unit
+guardTool cfg toolId =
+  case prim_leInt cfg.maxTurns 0 of
+    True ->
+      Err (MaxTurnsExceeded cfg.maxTurns)
+
+    False ->
+      case setMember eqToolId toolId cfg.allowedTools of
+        False ->
+          Err (ToolNotAllowed toolId)
+
+        True ->
+          case setMember eqToolId toolId cfg.requireApproval of
+            True ->
+              Err (ApprovalRequired toolId)
+
+            False ->
+              Ok unit
+
+withTimeout : Int -> ToolId -> Task ToolExecError a -> Task ToolExecError a
+withTimeout timeoutMs toolId task =
+  do
+    resultVar <- Atomic.commit (Atomic.new Nothing)
+    _ <- Fiber.spawn (writeToolResult resultVar task)
+    _ <- Fiber.spawn (writeTimeoutResult resultVar timeoutMs toolId)
+    r <- Atomic.commit (awaitJust resultVar)
+    case r of
+      Ok a ->
+        Task.succeed a
+      Err e ->
+        Task.fail e
+
+writeToolResult : Atomic.Shared (Maybe (Result ToolExecError a)) -> Task ToolExecError a -> Task e Unit
+writeToolResult resultVar task =
+  do
+    r <- Task.fromIO (Task.attempt task)
+    _ <- Atomic.commit (writeIfNothing resultVar r)
+    Task.succeed unit
+
+writeTimeoutResult : Atomic.Shared (Maybe (Result ToolExecError a)) -> Int -> ToolId -> Task e Unit
+writeTimeoutResult resultVar timeoutMs toolId =
+  do
+    _ <- IO.sleepMs timeoutMs
+    _ <- Atomic.commit (writeIfNothing resultVar (Err (ToolTimedOut toolId)))
+    Task.succeed unit
+
+writeIfNothing : Atomic.Shared (Maybe a) -> a -> Atomic.Atomic Unit
+writeIfNothing var value =
+  do
+    current <- Atomic.read var
+    case current of
+      Nothing ->
+        Atomic.write var (Just value)
+      Just _ ->
+        pure unit
+
+awaitJust : Atomic.Shared (Maybe a) -> Atomic.Atomic a
+awaitJust var =
+  do
+    v <- Atomic.read var
+    case v of
+      Nothing ->
+        Atomic.wait
+      Just x ->
+        pure x

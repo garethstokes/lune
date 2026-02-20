@@ -1,450 +1,608 @@
 module Nova exposing (
-  Provider(..),
   openrouter,
   ollama,
-  Model,
-  Usage,
-  Response,
-  Error(..),
-  Request,
+  provider,
+  providerId,
+  showProvider,
+  showError,
+
+  -- Hooks
+  NovaHooks,
+
+  -- Client
   Client,
-  OpenRouterConfig,
-  OllamaConfig,
+  newClient,
   defaultClient,
+  withProvider,
+  withModel,
   withOpenRouterKey,
   withOpenRouterBaseUrl,
   withOllamaBaseUrl,
-  openrouterModel,
-  ollamaModel,
+  withHooks,
+  withoutHooks,
+
+  -- Prompt helpers
+  toolPreamble,
+  toolPostamble,
+  extractJson,
+  composeToolPrompt,
+
+  -- Public API
   ask,
   json,
   tool,
-  toolPreamble,
-  toolPostamble
+
+  -- Streaming (architecture only)
+  Stream,
+  StreamStep(..),
+  next,
+  NovaEvent(..),
+  showEvent,
+  showNovaEvent,
+  showStreamStep,
+  showStreamResult,
+  askStream,
+
+  -- Tool execution (guarded + auditable)
+  executeTool,
+  showToolExecError
 )
 
-{-| Nova (v0): lightweight LLM client surface for Lune.
+{-| Nova (v2): thin LLM decision engine surface for Lune.
 
-Template-first API:
-- Prompts are `Template` (interpolation splices templates, not strings).
-- `tool` enforces "JSON only" via prompt wrappers + best-effort JSON extraction.
+Public APIs:
+- `ask` returns raw text.
+- `json` decodes JSON from the full response body.
+- `tool` enforces "JSON only" via prompt wrappers and best-effort JSON extraction.
 
-Provider support (v0):
-- OpenRouter: requires API key (returns Unauthorized if missing).
-- Ollama: local models (HTTP client is stubbed; supports a mock mode for tests).
+Internals are layered into:
+- `Nova.Core` (types + provider registry)
+- `Nova.Prompt` (prompt + JSON extraction)
+- `Nova.Tool` (tool identity + schema + decoding)
+- `Nova.Runtime` (tool execution guards)
+- Streaming is simulated via chunking (no HTTP streaming yet).
 -}
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..))
+import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Unit, unit, Applicative(..), Monad(..))
 import Lune.Int as Int
 import Lune.String as Str
-import Template exposing (Template, Semigroup(..))
+import Lune.Json as RawJson exposing (Json)
+import Lune.Json.Decode as Decode exposing (DecodeError, PathItem(..))
+import Lune.Json.Encode as Encode
+import Nova.Core as Core exposing (Provider, Usage, Response, Error(..), Request, ProviderSettings, ProviderConfig, ProviderRegistry)
+import Nova.Prompt as Prompt
+import Nova.Tool as Tool exposing (ToolId, ToolSpec)
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 import Json
-import Lune.Json as RawJson
 
---------------------------------------------------------------------------------
--- Models
---------------------------------------------------------------------------------
-
-type Provider =
-  OpenRouter
-  | Ollama
-
--- Convenience values matching spec naming.
 openrouter : Provider
 openrouter =
-  OpenRouter
+  Core.openrouter
 
 ollama : Provider
 ollama =
-  Ollama
+  Core.ollama
 
-type alias Model =
-  { provider : Provider
-  , id : String
+provider : String -> Provider
+provider s =
+  Core.Provider s
+
+providerId : Provider -> String
+providerId =
+  Core.providerId
+
+showProvider : Provider -> String
+showProvider =
+  providerId
+
+showError : Error -> String
+showError e =
+  case e of
+    NetworkError msg ->
+      Str.append "NetworkError " msg
+
+    RateLimited ->
+      "RateLimited"
+
+    Unauthorized ->
+      "Unauthorized"
+
+    BadRequest msg ->
+      Str.append "BadRequest " msg
+
+    ProviderError msg ->
+      Str.append "ProviderError " msg
+
+    DecodeError msg ->
+      Str.append "DecodeError " msg
+
+--------------------------------------------------------------------------------
+-- Hooks
+--------------------------------------------------------------------------------
+
+type alias NovaHooks =
+  { onTurn :
+      { request : Request
+      , response : Response
+      }
+      -> IO Unit
+
+  , onToolStart :
+      { tool : ToolId
+      , input : Json
+      }
+      -> IO Unit
+
+  , onToolFinish :
+      { tool : ToolId
+      , output : Json
+      , durationMs : Int
+      }
+      -> IO Unit
   }
 
 --------------------------------------------------------------------------------
--- Usage + responses
---------------------------------------------------------------------------------
-
-type alias Usage =
-  { inputTokens : Int
-  , outputTokens : Int
-  , totalTokens : Int
-  }
-
-type alias Response =
-  { text : String
-  , usage : Maybe Usage
-  }
-
---------------------------------------------------------------------------------
--- Errors
---------------------------------------------------------------------------------
-
-type Error =
-  NetworkError String
-  | RateLimited
-  | Unauthorized
-  | BadRequest String
-  | ProviderError String
-  | DecodeError String
-
---------------------------------------------------------------------------------
--- Core request
---------------------------------------------------------------------------------
-
-type alias Request =
-  { model : Model
-  , prompt : Template
-  }
-
---------------------------------------------------------------------------------
--- Client config
+-- Client
 --------------------------------------------------------------------------------
 
 type alias Client =
-  { openrouter : OpenRouterConfig
-  , ollama : OllamaConfig
+  { provider : Provider
+  , model : String
+  , providerConfig : ProviderConfig
+  , providers : ProviderRegistry
+  , hooks : Maybe NovaHooks
   }
 
-type alias OpenRouterConfig =
-  { baseUrl : String
-  , apiKey : Maybe String
-  , appName : Maybe String
-  }
-
-type alias OllamaConfig =
-  { baseUrl : String
+newClient : ProviderRegistry -> Provider -> String -> Client
+newClient providers provider model =
+  { provider = provider
+  , model = model
+  , providerConfig = Core.defaultProviderConfig
+  , providers = providers
+  , hooks = Nothing
   }
 
 defaultClient : Client
 defaultClient =
-  { openrouter =
-      { baseUrl = "https://openrouter.ai/api/v1"
-      , apiKey = Nothing
-      , appName = Nothing
-      }
-  , ollama =
-      { baseUrl = "http://localhost:11434"
-      }
+  newClient Core.defaultProviderRegistry ollama "llama3"
+
+withProvider : Provider -> Client -> Client
+withProvider provider client =
+  { provider = provider
+  , model = client.model
+  , providerConfig = client.providerConfig
+  , providers = client.providers
+  , hooks = client.hooks
+  }
+
+withModel : String -> Client -> Client
+withModel model client =
+  { provider = client.provider
+  , model = model
+  , providerConfig = client.providerConfig
+  , providers = client.providers
+  , hooks = client.hooks
+  }
+
+withHooks : NovaHooks -> Client -> Client
+withHooks hooks client =
+  { provider = client.provider
+  , model = client.model
+  , providerConfig = client.providerConfig
+  , providers = client.providers
+  , hooks = Just hooks
+  }
+
+withoutHooks : Client -> Client
+withoutHooks client =
+  { provider = client.provider
+  , model = client.model
+  , providerConfig = client.providerConfig
+  , providers = client.providers
+  , hooks = Nothing
+  }
+
+eqProvider : Provider -> Provider -> Bool
+eqProvider a b =
+  Str.eq (providerId a) (providerId b)
+
+defaultSettings : ProviderSettings
+defaultSettings =
+  { baseUrl = ""
+  , apiKey = Nothing
+  , appName = Nothing
+  }
+
+getSettings : Provider -> ProviderConfig -> ProviderSettings
+getSettings provider cfg =
+  case Core.dictGet eqProvider provider cfg of
+    Just s -> s
+    Nothing -> defaultSettings
+
+updateSettings : Provider -> (ProviderSettings -> ProviderSettings) -> Client -> Client
+updateSettings provider f client =
+  let current = getSettings provider client.providerConfig in
+  let next = f current in
+  { provider = client.provider
+  , model = client.model
+  , providerConfig = Core.dictInsert eqProvider provider next client.providerConfig
+  , providers = client.providers
+  , hooks = client.hooks
   }
 
 withOpenRouterKey : String -> Client -> Client
-withOpenRouterKey key client =
-  { openrouter =
-      { baseUrl = client.openrouter.baseUrl
-      , apiKey = Just key
-      , appName = client.openrouter.appName
-      }
-  , ollama = client.ollama
-  }
+withOpenRouterKey key =
+  updateSettings openrouter (\s ->
+    { baseUrl = s.baseUrl
+    , apiKey = Just key
+    , appName = s.appName
+    }
+  )
 
 withOpenRouterBaseUrl : String -> Client -> Client
-withOpenRouterBaseUrl url client =
-  { openrouter =
-      { baseUrl = url
-      , apiKey = client.openrouter.apiKey
-      , appName = client.openrouter.appName
-      }
-  , ollama = client.ollama
-  }
+withOpenRouterBaseUrl url =
+  updateSettings openrouter (\s ->
+    { baseUrl = url
+    , apiKey = s.apiKey
+    , appName = s.appName
+    }
+  )
 
 withOllamaBaseUrl : String -> Client -> Client
-withOllamaBaseUrl url client =
-  { openrouter = client.openrouter
-  , ollama = { baseUrl = url }
-  }
-
---------------------------------------------------------------------------------
--- Convenience model builders
---------------------------------------------------------------------------------
-
-openrouterModel : String -> Model
-openrouterModel id =
-  { provider = OpenRouter, id = id }
-
-ollamaModel : String -> Model
-ollamaModel id =
-  { provider = Ollama, id = id }
+withOllamaBaseUrl url =
+  updateSettings ollama (\s ->
+    { baseUrl = url
+    , apiKey = s.apiKey
+    , appName = s.appName
+    }
+  )
 
 --------------------------------------------------------------------------------
 -- Prompt helpers (public)
 --------------------------------------------------------------------------------
 
-toolPreamble : Template
+toolPreamble : String
 toolPreamble =
-  ''
-    You must output exactly one JSON value and nothing else.
+  Prompt.toolPreamble
 
-    Rules:
-    - Output ONLY valid JSON.
-    - No markdown.
-    - No code fences.
-    - No prose or explanations.
-    - No leading or trailing text.
-    - Do not add extra keys beyond the requested schema.
-  ''
-
-toolPostamble : Template
+toolPostamble : String
 toolPostamble =
-  ''
-    Output ONLY JSON now.
-  ''
+  Prompt.toolPostamble
+
+extractJson : String -> Result Error String
+extractJson =
+  Prompt.extractJson
+
+composeToolPrompt : ToolSpec a -> String -> String
+composeToolPrompt =
+  Prompt.composeToolPrompt
 
 --------------------------------------------------------------------------------
 -- Public API
 --------------------------------------------------------------------------------
 
-ask : Client -> Request -> IO (Result Error Response)
-ask client req =
-  case req.model.provider of
-    OpenRouter ->
-      callOpenRouter client.openrouter req.model.id (Template.render req.prompt)
+askRaw : Client -> String -> IO (Result Error Response)
+askRaw client prompt =
+  let request =
+    { provider = client.provider
+    , model = client.model
+    , prompt = prompt
+    } in
+  prim_ioBind
+    (Core.callProvider client.providers client.providerConfig client.provider client.model prompt)
+    (\r ->
+      case r of
+        Err e ->
+          prim_ioPure (Err e)
 
-    Ollama ->
-      callOllama client.ollama req.model.id (Template.render req.prompt)
+        Ok response ->
+          case client.hooks of
+            Nothing ->
+              prim_ioPure (Ok response)
 
-json : Json.Decode a => Client -> Request -> IO (Result Error a)
-json client req =
-  prim_ioBind (ask client req) (\r ->
+            Just hooks ->
+              prim_ioBind (hooks.onTurn { request = request, response = response }) (\_ ->
+                prim_ioPure (Ok response)
+              )
+    )
+
+ask : Client -> String -> IO (Result Error String)
+ask client prompt =
+  prim_ioBind (askRaw client prompt) (\r ->
     case r of
       Err e ->
         prim_ioPure (Err e)
 
-      Ok resp ->
-        case Json.decode resp.text of
+      Ok response ->
+        prim_ioPure (Ok response.text)
+  )
+
+json : Json.Decode a => Client -> String -> IO (Result Error a)
+json client prompt =
+  prim_ioBind (askRaw client prompt) (\r ->
+    case r of
+      Err e ->
+        prim_ioPure (Err e)
+
+      Ok response ->
+        case Json.decodeDetailed response.text of
           Ok a ->
             prim_ioPure (Ok a)
-          Err msg ->
-            prim_ioPure (Err (DecodeError msg))
+
+          Err decodeErr ->
+            prim_ioPure (Err (Core.DecodeError (formatDecodeError decodeErr)))
   )
 
-tool : Json.Decode a => Client -> Request -> IO (Result Error a)
-tool client req =
-  let req2 = { req | prompt = toolPreamble <> req.prompt <> toolPostamble } in
-  prim_ioBind (ask client req2) (\r ->
+tool : Json.Decode a => Client -> String -> IO (Result Error a)
+tool client prompt =
+  let wrapped =
+    Str.unlines
+      [ toolPreamble
+      , ""
+      , prompt
+      , ""
+      , toolPostamble
+      ] in
+  prim_ioBind (askRaw client wrapped) (\r ->
     case r of
       Err e ->
         prim_ioPure (Err e)
 
-      Ok resp ->
-        case extractJson resp.text of
-          Err msg ->
-            prim_ioPure (Err (DecodeError msg))
+      Ok response ->
+        case extractJson response.text of
+          Err e ->
+            prim_ioPure (Err e)
 
           Ok rawJson ->
-            case Json.decode rawJson of
+            case Json.decodeDetailed rawJson of
               Ok a ->
                 prim_ioPure (Ok a)
-              Err msg ->
-                prim_ioPure (Err (DecodeError msg))
+
+              Err decodeErr ->
+                prim_ioPure (Err (Core.DecodeError (formatDecodeError decodeErr)))
   )
 
---------------------------------------------------------------------------------
--- JSON extraction (internal)
---------------------------------------------------------------------------------
-
-extractJson : String -> Result String String
-extractJson s =
-  extractJsonTrimmed (Str.trim s)
-
-extractJsonTrimmed : String -> Result String String
-extractJsonTrimmed t =
-  case startsLikeJsonContainer t of
-    True ->
-      case validateJson t of
-        Ok _ ->
-          Ok t
-        Err _ ->
-          extractViaSlice t
-
-    False ->
-      extractViaSlice t
-
-startsLikeJsonContainer : String -> Bool
-startsLikeJsonContainer t =
-  case Str.startsWith "{" t of
-    True -> True
-    False -> Str.startsWith "[" t
-
-extractViaSlice : String -> Result String String
-extractViaSlice t =
-  case findJsonSlice t of
-    Err _ ->
-      Err (Str.append "Could not find JSON in response: " (snippet 240 t))
-    Ok raw ->
-      case validateJson raw of
-        Ok _ -> Ok raw
-        Err _ -> Err (Str.append "Could not parse JSON in response: " (snippet 240 raw))
-
-validateJson : String -> Result String RawJson.Json
-validateJson raw =
-  RawJson.parse raw
-
-findJsonSlice : String -> Result String String
-findJsonSlice t =
-  case firstJsonStart t of
-    Nothing ->
-      Err "no start"
-    Just start ->
-      case lastJsonEnd t of
-        Nothing ->
-          Err "no end"
-        Just end ->
-          case ltInt start end of
-            True ->
-              Ok (sliceInclusive start end t)
-            False ->
-              Err "invalid slice"
-
-firstJsonStart : String -> Maybe Int
-firstJsonStart t =
-  minMaybe (Str.indexOf "{" t) (Str.indexOf "[" t)
-
-lastJsonEnd : String -> Maybe Int
-lastJsonEnd t =
-  maxMaybe
-    (lastIndexOfChar (prim_intToChar 125) t)  -- '}'
-    (lastIndexOfChar (prim_intToChar 93) t)   -- ']'
-
-lastIndexOfChar : Char -> String -> Maybe Int
-lastIndexOfChar c s =
-  lastIndexOfCharGo c (Str.toChars s) 0 Nothing
-
-lastIndexOfCharGo : Char -> List Char -> Int -> Maybe Int -> Maybe Int
-lastIndexOfCharGo c chars idx last =
-  case chars of
+formatDecodeError : DecodeError -> String
+formatDecodeError err =
+  case err.path of
     [] ->
-      last
-    Cons x xs ->
-      case prim_eqInt (prim_charToInt x) (prim_charToInt c) of
-        True ->
-          lastIndexOfCharGo c xs (Int.add idx 1) (Just idx)
-        False ->
-          lastIndexOfCharGo c xs (Int.add idx 1) last
+      err.message
 
-minMaybe : Maybe Int -> Maybe Int -> Maybe Int
-minMaybe a b =
-  case a of
-    Nothing -> b
-    Just x ->
-      case b of
-        Nothing -> a
-        Just y ->
-          case prim_leInt x y of
-            True -> Just x
-            False -> Just y
+    _ ->
+      Str.append err.message (Str.append " at " (pathToString err.path))
 
-maxMaybe : Maybe Int -> Maybe Int -> Maybe Int
-maxMaybe a b =
-  case a of
-    Nothing -> b
-    Just x ->
-      case b of
-        Nothing -> a
-        Just y ->
-          case prim_leInt x y of
-            True -> Just y
-            False -> Just x
+pathToString : List PathItem -> String
+pathToString path =
+  pathToStringGo "$" path
 
-sliceInclusive : Int -> Int -> String -> String
-sliceInclusive start end s =
-  let len = Int.add (Int.sub end start) 1 in
-  Str.take len (Str.drop start s)
-
-ltInt : Int -> Int -> Bool
-ltInt a b =
-  case prim_leInt a b of
-    True ->
-      case prim_eqInt a b of
-        True -> False
-        False -> True
-    False ->
-      False
-
-snippet : Int -> String -> String
-snippet n s =
-  case prim_leInt (Str.length s) n of
-    True ->
-      s
-    False ->
-      Str.append (Str.take n s) "…"
-
---------------------------------------------------------------------------------
--- Provider implementations (v0 stubs)
---------------------------------------------------------------------------------
-
-callOpenRouter : OpenRouterConfig -> String -> String -> IO (Result Error Response)
-callOpenRouter cfg _ _ =
-  case cfg.apiKey of
-    Nothing ->
-      prim_ioPure (Err Unauthorized)
-    Just _ ->
-      prim_ioPure (Err (ProviderError "OpenRouter: HTTP client not implemented (v0)."))
-
-callOllama : OllamaConfig -> String -> String -> IO (Result Error Response)
-callOllama cfg modelId prompt =
-  case Str.startsWith "mock://" cfg.baseUrl of
-    True ->
-      prim_ioPure (mockOllama modelId prompt)
-    False ->
-      prim_ioPure (Err (ProviderError "Ollama: HTTP client not implemented (v0)."))
-
-mockOllama : String -> String -> Result Error Response
-mockOllama modelId prompt =
-  case Str.eq modelId "mock-tool-wrapper" of
-    True ->
-      let pre = countOccurrences "You must output exactly one JSON value and nothing else." prompt in let post = countOccurrences "Output ONLY JSON now." prompt in
-      Ok
-        { text =
-            Str.append
-              (Str.append "[" (Str.fromInt pre))
-              (Str.append (Str.append "," (Str.fromInt post)) "]")
-        , usage = Nothing
-        }
-
-    False ->
-      case Str.eq modelId "mock-pure" of
-        True ->
-          Ok { text = "{\"n\":1}", usage = Nothing }
-
-        False ->
-          case Str.eq modelId "mock-prose-prefix" of
-            True ->
-              Ok { text = "Sure.\n{\"n\":1}", usage = Nothing }
-
-            False ->
-              case Str.eq modelId "mock-prose-suffix" of
-                True ->
-                  Ok { text = "{\"n\":1}\nThanks!", usage = Nothing }
-
-                False ->
-                  case Str.eq modelId "mock-invalid" of
-                    True ->
-                      Ok { text = "Ok: {not json}", usage = Nothing }
-
-                    False ->
-                      case Str.eq modelId "mock-no-json" of
-                        True ->
-                          Ok { text = "No JSON here.", usage = Nothing }
-
-                        False ->
-                          Err (ProviderError "Unknown mock model id.")
-
-countOccurrences : String -> String -> Int
-countOccurrences needle haystack =
-  case Str.isEmpty needle of
-    True ->
-      0
-    False ->
-      countOccurrencesFrom needle (Str.length needle) 0 haystack
-
-countOccurrencesFrom : String -> Int -> Int -> String -> Int
-countOccurrencesFrom needle needleLen acc s =
-  case Str.indexOf needle s of
-    Nothing ->
+pathToStringGo : String -> List PathItem -> String
+pathToStringGo acc items =
+  case items of
+    [] ->
       acc
-    Just i ->
-      let next = Str.drop (Int.add i needleLen) s in
-      countOccurrencesFrom needle needleLen (Int.add acc 1) next
+
+    Cons item rest ->
+      pathToStringGo (Str.append acc (pathItemToString item)) rest
+
+pathItemToString : PathItem -> String
+pathItemToString item =
+  case item of
+    Field name ->
+      Str.append "." name
+
+    Index i ->
+      Str.append "[" (Str.append (Str.fromInt i) "]")
+
+--------------------------------------------------------------------------------
+-- Streaming (architecture only)
+--------------------------------------------------------------------------------
+
+type Stream a =
+  Stream (IO (Result Error (StreamStep a)))
+
+type StreamStep a =
+  StreamEnd
+  | StreamYield a (Stream a)
+
+next : Stream a -> IO (Result Error (StreamStep a))
+next stream =
+  case stream of
+    Stream io ->
+      io
+
+streamFromList : List a -> Stream a
+streamFromList xs =
+  Stream (prim_ioPure (Ok (stepFromList xs)))
+
+stepFromList : List a -> StreamStep a
+stepFromList xs =
+  case xs of
+    [] ->
+      StreamEnd
+
+    Cons x rest ->
+      StreamYield x (streamFromList rest)
+
+type NovaEvent =
+  TextDelta String
+  | ToolCallDelta Json
+  | ToolCallComplete Json
+  | UsageFinal Usage
+
+showNovaEvent : NovaEvent -> String
+showNovaEvent ev =
+  case ev of
+    TextDelta s ->
+      Str.append "TextDelta " s
+
+    ToolCallDelta _ ->
+      "ToolCallDelta"
+
+    ToolCallComplete _ ->
+      "ToolCallComplete"
+
+    UsageFinal _ ->
+      "UsageFinal"
+
+showEvent : NovaEvent -> String
+showEvent =
+  showNovaEvent
+
+showStreamStep : (a -> String) -> StreamStep a -> String
+showStreamStep showA step =
+  case step of
+    StreamEnd ->
+      "StreamEnd"
+
+    StreamYield a _ ->
+      Str.append "StreamYield " (showA a)
+
+showStreamResult : (e -> String) -> (a -> String) -> Result e (StreamStep a) -> String
+showStreamResult showE showA r =
+  case r of
+    Err e ->
+      Str.append "StreamErr " (showE e)
+
+    Ok step ->
+      showStreamStep showA step
+
+askStream : Client -> String -> Stream NovaEvent
+askStream client prompt =
+  Stream
+    ( prim_ioBind (askRaw client prompt) (\r ->
+        case r of
+          Err e ->
+            prim_ioPure (Err e)
+
+          Ok response ->
+            prim_ioPure (Ok (stepFromList (responseToEvents response)))
+      )
+    )
+
+responseToEvents : Response -> List NovaEvent
+responseToEvents response =
+  let chunks = chunkText 24 response.text in
+  let textEvents = listMap TextDelta chunks in
+  case response.usage of
+    Nothing ->
+      textEvents
+
+    Just usage ->
+      listAppend textEvents (Cons (UsageFinal usage) [])
+
+chunkText : Int -> String -> List String
+chunkText chunkSize s =
+  case prim_leInt chunkSize 0 of
+    True ->
+      case Str.isEmpty s of
+        True -> []
+        False -> Cons s []
+
+    False ->
+      case prim_leInt (Str.length s) chunkSize of
+        True ->
+          case Str.isEmpty s of
+            True -> []
+            False -> Cons s []
+
+        False ->
+          Cons (Str.take chunkSize s) (chunkText chunkSize (Str.drop chunkSize s))
+
+listMap : (a -> b) -> List a -> List b
+listMap f xs =
+  case xs of
+    [] ->
+      []
+
+    Cons x rest ->
+      Cons (f x) (listMap f rest)
+
+listAppend : List a -> List a -> List a
+listAppend xs ys =
+  case xs of
+    [] ->
+      ys
+
+    Cons x rest ->
+      Cons x (listAppend rest ys)
+
+--------------------------------------------------------------------------------
+-- Tool execution (guarded + auditable)
+--------------------------------------------------------------------------------
+
+executeTool :
+  Client
+  -> RuntimeConfig
+  -> ToolSpec a
+  -> (a -> Json)
+  -> (b -> Json)
+  -> (a -> IO (Result ToolExecError b))
+  -> a
+  -> IO (Result ToolExecError b)
+executeTool client runtimeConfig spec encodeInput encodeOutput exec input =
+  do
+    let inputJson = encodeInput input
+    case client.hooks of
+      Nothing ->
+        pure unit
+
+      Just hooks ->
+        hooks.onToolStart { tool = spec.id, input = inputJson }
+
+    t0 <- prim_timeNowMicros
+    result <- Runtime.executeWithGuardsUsing runtimeConfig spec exec input
+    t1 <- prim_timeNowMicros
+    let durationMs = Int.div (Int.sub t1 t0) 1000
+    let outputJson =
+      case result of
+        Ok b ->
+          encodeOutput b
+
+        Err e ->
+          encodeToolExecError e
+
+    case client.hooks of
+      Nothing ->
+        pure unit
+
+      Just hooks ->
+        hooks.onToolFinish
+          { tool = spec.id
+          , output = outputJson
+          , durationMs = durationMs
+          }
+
+    pure result
+
+encodeToolExecError : ToolExecError -> Json
+encodeToolExecError e =
+  Encode.object
+    [ { key = "error"
+      , value = Encode.string (toolExecErrorToString e)
+      }
+    ]
+
+toolExecErrorToString : ToolExecError -> String
+toolExecErrorToString e =
+  case e of
+    ToolNotAllowed id ->
+      Str.append "ToolNotAllowed " (Tool.toolIdToString id)
+
+    ApprovalRequired id ->
+      Str.append "ApprovalRequired " (Tool.toolIdToString id)
+
+    ToolTimedOut id ->
+      Str.append "ToolTimedOut " (Tool.toolIdToString id)
+
+    MaxTurnsExceeded n ->
+      Str.append "MaxTurnsExceeded " (Str.fromInt n)
+
+    ToolNotImplemented id ->
+      Str.append "ToolNotImplemented " (Tool.toolIdToString id)
+
+    ToolFailed msg ->
+      Str.append "ToolFailed " msg
+
+showToolExecError : ToolExecError -> String
+showToolExecError =
+  toolExecErrorToString
