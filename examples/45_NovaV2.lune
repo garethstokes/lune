@@ -39,17 +39,26 @@ mockProvider = provider "mock"
 mockCall _ model prompt =
   case model of
     "echo" ->
-      prim_ioPure <| Ok
-          { text = prompt, usage = Just
-              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+      prim_ioPure
+        <| Ok
+          { text = prompt
+          , usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
+          }
     "json" ->
-      prim_ioPure <| Ok
-          { text = "{\"n\":1}", usage = Just
-              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+      prim_ioPure
+        <| Ok
+          { text = "{\"n\":1}"
+          , usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
+          }
     "tool" ->
-      prim_ioPure <| Ok
-          { text = "ok\n{\"n\":2}\nbye", usage = Just
-              { inputTokens = 0, outputTokens = 0, totalTokens = 0 } }
+      prim_ioPure
+        <| Ok
+          { text = "ok\n{\"n\":2}\nbye"
+          , usage = Just
+              { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
+          }
     _ ->
       prim_ioPure (Err (ProviderError "Unknown model"))
 
@@ -113,7 +122,12 @@ encodeAddArgs args =
 main : Task Unit Unit
 main =
   do
-    let providers = Core.dictInsert Nova.providerEq mockProvider mockProviderImpl Core.defaultProviderRegistry
+    let providers =
+      Core.dictInsert
+        Nova.providerEq
+        mockProvider
+        mockProviderImpl
+        Core.defaultProviderRegistry
     let client = withHooks hooks (newClient providers mockProvider "echo")
     IO.println "ask:"
     a <- Task.fromIO (Task.attempt (ask client "Hello from Nova v2"))
@@ -125,7 +139,10 @@ main =
     t <- Task.fromIO (Task.attempt (tool (withModel "tool" client) "ignored"))
     IO.println <| Nova.showJsonResult t
     IO.println "askStream:"
-    let stream = askStream client "This is a longer string to demonstrate simulated streaming."
+    let stream =
+      askStream
+        client
+        "This is a longer string to demonstrate simulated streaming."
     s1 <- Task.fromIO <| next stream
     IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s1
     case s1 of
@@ -139,11 +156,15 @@ main =
           IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s2
           Task.succeed unit
     IO.println "executeTool_allow:"
-    r1 <- toResult (executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
+    r1 <-
+      toResult
+        (executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
           { a = 1, b = 2 })
     IO.println <| Nova.showToolExecResult r1
     IO.println "executeTool_deny:"
-    r2 <- toResult (executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
+    r2 <-
+      toResult
+        (executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
           { a = 1, b = 2 })
     IO.println <| Nova.showToolExecResult r2
 -- | Convert a Task's success/failure into a Result value (never fails)

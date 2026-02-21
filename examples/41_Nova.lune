@@ -15,11 +15,10 @@ import Nova exposing (
   , tool
 )
 import Nova.Core exposing (Error(..))
-
 -- | Convert a failable Task into a Task that always succeeds with a Result.
+
 toResult : Task e a -> Task x (Result e a)
-toResult task =
-  Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))
+toResult task = Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))
 
 showError : Error -> String
 showError e =

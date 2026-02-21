@@ -685,6 +685,13 @@ isRecordLiteral :: S.Expr -> Bool
 isRecordLiteral (S.RecordLiteral _) = True
 isRecordLiteral _ = False
 
+-- | Check if an expression is a multi-argument function application.
+-- Returns True for expressions like `f x y` (2+ args), False for `f x` or atoms.
+isMultiArgApp :: S.Expr -> Bool
+isMultiArgApp e =
+  let (_, args) = collectApps e
+   in length args >= 2
+
 collectInfixAppend :: S.Expr -> Maybe [S.Expr]
 collectInfixAppend expr =
   case expr of
@@ -781,13 +788,57 @@ formatStmt :: S.Stmt -> Doc
 formatStmt stmt =
   case stmt of
     S.BindStmt pat rhs ->
-      group (formatPattern pat <+> text "<-" <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs))
+      formatBindLike (formatPattern pat) "<-" rhs
     S.DiscardBindStmt rhs ->
-      group (text "_" <+> text "<-" <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs))
+      formatBindLike (text "_") "<-" rhs
     S.LetStmt name rhs ->
-      group (text "let" <+> text name <+> text "=" <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs))
+      formatBindLike (text "let" <+> text name) "=" rhs
     S.ExprStmt e ->
       formatExpr PrecExprTop e
+
+-- | Format a binding statement (x <- rhs or let x = rhs).
+-- Special cases <| expressions to keep the binding on the same line as the pipe head.
+formatBindLike :: Doc -> T.Text -> S.Expr -> Doc
+formatBindLike lhs op rhs =
+  case rhs of
+    -- f (g x y ...) where g has multiple args -> format as f <| g x y ...
+    -- But not when arg is a list literal, tuple, or record (those have their own formatting)
+    S.App f arg | shouldUsePipeOperator f arg ->
+      let (innerH, innerArgs) = collectApps arg
+          fDoc = formatExpr PrecExprApp f
+          innerHeadDoc = formatExpr PrecExprApp innerH
+          innerArgDocs = map (formatExpr PrecExprAtom) innerArgs
+          pipeHead = lhs <+> text op <+> fDoc <+> text "<|" <+> innerHeadDoc
+          -- Indent args by length of "lhs op f <| " to align under the function
+          pipeIndent = indentSize + indentSize  -- Use double indent for readability
+       in pipeHead <> nest pipeIndent (mconcat (map (\a -> hardLine <> a) innerArgDocs))
+    -- Normal case
+    _ ->
+      group (lhs <+> text op <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs))
+
+-- | Check if we should transform f (g x y) to f <| g x y
+shouldUsePipeOperator :: S.Expr -> S.Expr -> Bool
+shouldUsePipeOperator f arg =
+  isMultiArgApp arg
+    && not (isInfixApp f)
+    && not (isListLiteral arg)
+    && not (isTupleLiteral arg)
+    && not (isRecordLiteral arg)
+
+isListLiteral :: S.Expr -> Bool
+isListLiteral e = case listExpr e of
+  Just _ -> True
+  Nothing -> False
+
+isTupleLiteral :: S.Expr -> Bool
+isTupleLiteral e = case tupleExpr e of
+  Just _ -> True
+  Nothing -> False
+
+-- | Check if an expression is an infix operator application.
+isInfixApp :: S.Expr -> Bool
+isInfixApp (S.App (S.App (S.Var op) _) _) = isOperatorName op
+isInfixApp _ = False
 
 formatPattern :: S.Pattern -> Doc
 formatPattern pat =
