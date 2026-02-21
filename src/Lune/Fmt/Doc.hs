@@ -129,7 +129,7 @@ render width doc =
           best col ((i + j, a) : zs)
         Group a ->
           let flat = flatten a
-           in if fits (width - col) ((i, flat) : zs)
+           in if fitsFlat (width - col) (i, flat) && fits (width - col) ((i, flat) : zs)
                 then best col ((i, flat) : zs)
                 else best col ((i, a) : zs)
 
@@ -148,6 +148,44 @@ render width doc =
         Concat a b -> Concat (flatten a) (flatten b)
         Nest j a -> Nest j (flatten a)
         Group a -> flatten a
+
+    -- | Check if a single flattened doc fits within the width.
+    -- Does not allow early exit at Line/LineBreak since those become spaces when flattened.
+    fitsFlat :: Int -> (Int, Doc) -> Bool
+    fitsFlat w _ | w < 0 =
+      False
+    fitsFlat _ (_, Empty) =
+      True
+    fitsFlat w (_, Text t) =
+      w >= T.length t
+    fitsFlat _ (_, Line) =
+      True  -- Flattened Line is a space, but we're at the end of this doc
+    fitsFlat _ (_, LineBreak) =
+      True  -- Flattened LineBreak is empty
+    fitsFlat _ (_, HardLine) =
+      True  -- HardLine forces a break
+    fitsFlat w (_, SoftSpace) =
+      w >= 1
+    fitsFlat w (i, Concat a b) =
+      fitsFlat w (i, a) && fitsFlat (w - docWidth a) (i, b)
+    fitsFlat w (i, Nest j a) =
+      fitsFlat w (i + j, a)
+    fitsFlat w (i, Group a) =
+      fitsFlat w (i, flatten a)
+
+    -- | Calculate the width of a flattened doc (for use in fitsFlat).
+    docWidth :: Doc -> Int
+    docWidth d =
+      case d of
+        Empty -> 0
+        Text t -> T.length t
+        Line -> 1  -- becomes space
+        LineBreak -> 0  -- becomes empty
+        HardLine -> 0  -- forces break, width doesn't matter
+        SoftSpace -> 0  -- becomes empty when flattened
+        Concat a b -> docWidth a + docWidth b
+        Nest _ a -> docWidth a
+        Group a -> docWidth (flatten a)
 
     fits :: Int -> [(Int, Doc)] -> Bool
     fits w _ | w < 0 =
