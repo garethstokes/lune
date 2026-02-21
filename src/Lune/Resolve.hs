@@ -1,6 +1,7 @@
 module Lune.Resolve
   ( ResolveError (..)
   , resolveProgram
+  , resolveEntryModule
   , qualifyName
   ) where
 
@@ -30,11 +31,71 @@ data ResolveError
   | OverlappingBuiltinInstance Text Text Text
   | OrphanInstance Text Text Text
   | UnboundName Text Text
+  | InternalResolveError Text
   deriving (Eq, Show)
 
 qualifyName :: Text -> Text -> Text
 qualifyName modName name =
   modName <> "." <> name
+
+newtype ResolvedValue = ResolvedValue
+  { resolvedValueName :: Text
+  }
+  deriving (Eq, Ord, Show)
+
+newtype ResolvedType = ResolvedType
+  { resolvedTypeName :: Text
+  }
+  deriving (Eq, Ord, Show)
+
+newtype ResolvedCtor = ResolvedCtor
+  { resolvedCtorName :: Text
+  }
+  deriving (Eq, Ord, Show)
+
+data ExportsEnv = ExportsEnv
+  { eeValues :: Map (Text, Text) ResolvedValue -- (ModuleName, Name)
+  , eeTypes :: Map (Text, Text) ResolvedType
+  , eeCtors :: Map (Text, Text) ResolvedCtor
+  , eeModules :: Map Text ModuleExports
+  }
+  deriving (Eq, Show)
+
+emptyExportsEnv :: ExportsEnv
+emptyExportsEnv =
+  ExportsEnv
+    { eeValues = Map.empty
+    , eeTypes = Map.empty
+    , eeCtors = Map.empty
+    , eeModules = Map.empty
+    }
+
+insertModuleExports :: Text -> ModuleExports -> ExportsEnv -> ExportsEnv
+insertModuleExports modName ex env =
+  env
+    { eeValues = eeValues env <> values
+    , eeTypes = eeTypes env <> types
+    , eeCtors = eeCtors env <> ctors
+    , eeModules = Map.insert modName ex (eeModules env)
+    }
+  where
+    values =
+      Map.fromList
+        [ ((modName, name), ResolvedValue (qualifyName modName name))
+        | name <- Set.toList (exportValues ex)
+        ]
+
+    types =
+      Map.fromList
+        [ ((modName, name), ResolvedType name)
+        | name <- Map.keys (exportTypes ex) <> Map.keys (exportClasses ex)
+        ]
+
+    ctors =
+      Map.fromList
+        [ ((modName, ctorName), ResolvedCtor (qualifyName modName ctorName))
+        | ctorName <- concat (Map.elems (exportCtorsByType ex))
+        ]
 
 data ModuleExports = ModuleExports
   { exportValues :: Set Text
@@ -45,29 +106,29 @@ data ModuleExports = ModuleExports
   }
   deriving (Eq, Show)
 
-resolveProgram :: MG.Program -> Either ResolveError S.Module
+resolveProgram :: MG.Program -> Either ResolveError (Map Text S.Module)
 resolveProgram prog = do
   checkProgramCoherence prog
   -- Desugar pipe operators before resolution since |> and <| are syntactic sugar
   let progWithDesugar = prog { MG.progModules = Map.map desugarPipesLM (MG.progModules prog) }
-  exportTable <- buildExportTable (MG.progModules progWithDesugar)
-  decls <- concat <$> mapM (resolveOne exportTable progWithDesugar) (MG.progOrder progWithDesugar)
-  pure
-    S.Module
-      { S.modName = MG.progEntryName prog
-      , S.modExports = []
-      , S.modImports = []
-      , S.modDecls = decls
-      }
+  let modules = MG.progModules progWithDesugar
+  (_, resolved) <- foldlM (resolveOne modules) (emptyExportsEnv, Map.empty) (MG.progOrder progWithDesugar)
+  pure resolved
   where
     desugarPipesLM lm = lm { MG.lmModule = Desugar.desugarPipesModule (MG.lmModule lm) }
 
-    resolveOne exportTable prog' modName =
-      case Map.lookup modName (MG.progModules prog') of
+    resolveOne modules (exportsEnv, acc) modName =
+      case Map.lookup modName modules of
         Nothing ->
-          Left (UnboundName modName modName)
-        Just m ->
-          resolveModule exportTable m
+          Left (InternalResolveError ("ModuleGraph missing module " <> modName))
+        Just lm -> do
+          let m = MG.lmModule lm
+          decls' <- resolveModule exportsEnv lm
+          moduleExports <- exportsForModule m
+          let resolvedMod = m {S.modDecls = decls'}
+              exportsEnv' = insertModuleExports modName moduleExports exportsEnv
+              acc' = Map.insert modName resolvedMod acc
+          Right (exportsEnv', acc')
 
 checkProgramCoherence :: MG.Program -> Either ResolveError ()
 checkProgramCoherence prog =
@@ -148,6 +209,15 @@ buildExportTable modules =
       do
         ex <- exportsForModule (MG.lmModule lm)
         pure (Map.insert (MG.lmName lm) ex acc)
+
+resolveEntryModule :: MG.Program -> Either ResolveError S.Module
+resolveEntryModule prog = do
+  mods <- resolveProgram prog
+  case Map.lookup (MG.progEntryName prog) mods of
+    Just m ->
+      Right m
+    Nothing ->
+      Left (InternalResolveError ("resolveEntryModule: missing entry module " <> MG.progEntryName prog))
 
 exportsForModule :: S.Module -> Either ResolveError ModuleExports
 exportsForModule m = do
@@ -260,18 +330,18 @@ ctorsFromDecl decl =
     _ ->
       []
 
-resolveModule :: Map Text ModuleExports -> MG.LoadedModule -> Either ResolveError [S.Decl]
-resolveModule exportTable lm = do
+resolveModule :: ExportsEnv -> MG.LoadedModule -> Either ResolveError [S.Decl]
+resolveModule exportsEnv lm = do
   let m = MG.lmModule lm
       modName = S.modName m
       builtinNames = Map.keysSet Builtins.builtinSchemes
 
   importAliases <- buildImportAliases modName (S.modImports m)
 
-  unqualifiedImports0 <- buildUnqualifiedImports modName exportTable importAliases (S.modImports m)
+  unqualifiedImports0 <- buildUnqualifiedImports modName exportsEnv importAliases (S.modImports m)
   unqualifiedImports <-
     if shouldImplicitPreludeImport lm
-      then addImplicitPreludeImports modName exportTable unqualifiedImports0
+      then addImplicitPreludeImports modName exportsEnv unqualifiedImports0
       else Right unqualifiedImports0
 
   let localValues = localValueMap modName (S.modDecls m)
@@ -283,7 +353,7 @@ resolveModule exportTable lm = do
           , scopeLocalValues = localValues
           , scopeUnqualifiedImports = unqualifiedImports
           , scopeImportAliases = importAliases
-          , scopeExports = exportTable
+          , scopeExports = exportsEnv
           , scopeBuiltinNames = builtinNames
           }
 
@@ -293,9 +363,9 @@ shouldImplicitPreludeImport :: MG.LoadedModule -> Bool
 shouldImplicitPreludeImport lm =
   MG.lmName lm /= "Lune.Prelude" && not ("prelude/" `T.isPrefixOf` T.pack (MG.lmPath lm))
 
-addImplicitPreludeImports :: Text -> Map Text ModuleExports -> Map Text Text -> Either ResolveError (Map Text Text)
-addImplicitPreludeImports current exportTable acc =
-  case Map.lookup "Lune.Prelude" exportTable of
+addImplicitPreludeImports :: Text -> ExportsEnv -> Map Text Text -> Either ResolveError (Map Text Text)
+addImplicitPreludeImports current exportsEnv acc =
+  case Map.lookup "Lune.Prelude" (eeModules exportsEnv) of
     Nothing ->
       Right acc
     Just preludeExports -> do
@@ -315,7 +385,7 @@ data Scope = Scope
   , scopeLocalValues :: Map Text Text
   , scopeUnqualifiedImports :: Map Text Text
   , scopeImportAliases :: Map Text Text
-  , scopeExports :: Map Text ModuleExports
+  , scopeExports :: ExportsEnv
   , scopeBuiltinNames :: Set Text
   }
 
@@ -341,11 +411,11 @@ defaultAlias name =
 
 buildUnqualifiedImports ::
   Text ->
-  Map Text ModuleExports ->
+  ExportsEnv ->
   Map Text Text ->
   [S.Import] ->
   Either ResolveError (Map Text Text)
-buildUnqualifiedImports current exportTable _aliasTable =
+buildUnqualifiedImports current exportsEnv _aliasTable =
   foldlM step Map.empty
   where
     step acc imp =
@@ -354,7 +424,7 @@ buildUnqualifiedImports current exportTable _aliasTable =
           Right acc
         Just exposing -> do
           moduleExports <-
-            case Map.lookup (S.impName imp) exportTable of
+            case Map.lookup (S.impName imp) (eeModules exportsEnv) of
               Nothing ->
                 Left (QualifiedAccessUnknownModule current (S.impName imp))
               Just ex ->
@@ -488,7 +558,7 @@ resolveTypeName scope ty =
           let alias = T.dropEnd 1 prefix  -- remove trailing dot
            in case Map.lookup alias (scopeImportAliases scope) of
                 Just targetModule ->
-                  case Map.lookup targetModule (scopeExports scope) of
+                  case Map.lookup targetModule (eeModules (scopeExports scope)) of
                     Just exports
                       | typeName `Map.member` exportTypes exports ->
                           Right (S.TypeCon typeName)
@@ -593,7 +663,7 @@ resolveFieldAccess scope base field =
       Right (S.FieldAccess base' field)
   where
     ensureExported targetModule name =
-      case Map.lookup targetModule (scopeExports scope) of
+      case Map.lookup targetModule (eeModules (scopeExports scope)) of
         Nothing ->
           Left (QualifiedAccessUnknownModule (scopeModule scope) targetModule)
         Just exports ->

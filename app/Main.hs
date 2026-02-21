@@ -38,6 +38,7 @@ import qualified Lune.Resolve as Resolve
 import qualified Lune.Fmt as Fmt
 import qualified Lune.LSP.Server as LSP
 import System.FilePath (takeDirectory, (</>))
+import qualified Lune.Syntax as S
 
 main :: IO ()
 main = do
@@ -263,8 +264,26 @@ runProgramPipeline opts = do
       Left err -> do
         putStrLn (show err)
         exitFailure
-      Right m ->
-        pure m
+      Right mods -> do
+        let ordered = MG.progOrder program
+        declsChunks <-
+          case traverse (`Map.lookup` mods) ordered of
+            Nothing ->
+              pure (Left (Resolve.InternalResolveError "resolveProgram: missing module in resolved map"))
+            Just ms ->
+              pure (Right (concatMap S.modDecls ms))
+        case declsChunks of
+          Left err -> do
+            putStrLn (show err)
+            exitFailure
+          Right decls ->
+            pure
+              S.Module
+                { S.modName = MG.progEntryName program
+                , S.modExports = []
+                , S.modImports = []
+                , S.modDecls = decls
+                }
 
   let mod' =
         if optDesugar opts || optTypecheck opts || optCore opts || optEval opts || optRun opts
@@ -405,8 +424,26 @@ build opts = do
       Left err -> do
         putStrLn (show err)
         exitFailure
-      Right m ->
-        pure m
+      Right mods -> do
+        let ordered = MG.progOrder program
+        declsChunks <-
+          case traverse (`Map.lookup` mods) ordered of
+            Nothing ->
+              pure (Left (Resolve.InternalResolveError "resolveProgram: missing module in resolved map"))
+            Just ms ->
+              pure (Right (concatMap S.modDecls ms))
+        case declsChunks of
+          Left err -> do
+            putStrLn (show err)
+            exitFailure
+          Right decls ->
+            pure
+              S.Module
+                { S.modName = MG.progEntryName program
+                , S.modExports = []
+                , S.modImports = []
+                , S.modDecls = decls
+                }
 
   let mod' = desugarModule resolved
 

@@ -1,7 +1,11 @@
 module Lune.Check
   ( TypecheckError (..)
+  , TypeScheme
   , typecheckModule
+  , typecheckModuleEnv
   , renderScheme
+  , renderTypeScheme
+  , renderTypeSchemeHover
   ) where
 
 import Control.Monad (foldM_)
@@ -20,8 +24,11 @@ import qualified Lune.Kind as K
 import Lune.Kind (KindEnv, KindError, kindCheckQualType, kindEnvFromDecls)
 import qualified Lune.Syntax as S
 import Lune.Infer
+import qualified Lune.Pretty.Type as PrettyType
 import Lune.Type
 import Lune.TypeConvert (AliasEnv, buildAliasEnv, convertType, expandAliases, schemeFromQualType)
+
+type TypeScheme = Scheme
 
 data InstanceCandidate = InstanceCandidate
   { instanceCandidateClass :: Text
@@ -109,6 +116,10 @@ typecheckModule m = do
       go classEnv0 env' ((name, scheme) : acc) instances rest
 
     nameOf (n, _, _) = n
+
+typecheckModuleEnv :: S.Module -> Either TypecheckError (Map Text TypeScheme)
+typecheckModuleEnv m =
+  Map.fromList <$> typecheckModule m
 
 checkSigKinds :: KindEnv -> K.ClassEnv -> [S.Decl] -> Either TypecheckError ()
 checkSigKinds kindEnv classKinds =
@@ -416,6 +427,14 @@ renderScheme (Forall vars constraints ty) =
       case constraints of
         [] -> ""
         _ -> renderConstraints constraints <> " => "
+
+renderTypeScheme :: TypeScheme -> Text
+renderTypeScheme =
+  renderScheme
+
+renderTypeSchemeHover :: TypeScheme -> Text
+renderTypeSchemeHover =
+  PrettyType.renderTypeSchemeHover
 
 renderConstraints :: [Constraint] -> Text
 renderConstraints constraints =

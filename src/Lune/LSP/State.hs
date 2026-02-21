@@ -2,6 +2,7 @@
 
 module Lune.LSP.State
   ( LspState (..)
+  , SemanticInfo (..)
   , OpenDocInfo (..)
   , emptyLspState
   , setOpenDoc
@@ -11,6 +12,11 @@ module Lune.LSP.State
   , setLastDiagnostics
   , lookupLastDiagnostics
   , clearLastDiagnostics
+  , setSemanticInfo
+  , lookupSemanticInfoByPath
+  , lookupSemanticInfoByModule
+  , clearSemanticInfoByPath
+  , clearSemanticInfoByModule
   , incrementCheckVersion
   , getAffectedFiles
   ) where
@@ -21,18 +27,33 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Language.LSP.Protocol.Types (Diagnostic)
+import qualified Lune.Check as Check
+import Lune.LSP.Convert (Span)
 
 -- | Information about an open document, including parsed module metadata.
 data OpenDocInfo = OpenDocInfo
   { odiText :: Text
   , odiModuleName :: Maybe Text       -- Nothing if parse failed
   , odiImports :: Set Text            -- Empty if parse failed
+  , odiImportAliases :: Map Text Text -- alias -> module name
+  }
+  deriving (Show)
+
+data SemanticInfo = SemanticInfo
+  { siModuleName :: Text
+  , siPath :: FilePath
+  , siTypesAt :: [(Span, Check.TypeScheme)]
+  , siValueEnv :: Map Text Check.TypeScheme
+  , siDocs :: Map Text Text
+  , siModuleDoc :: Maybe Text
   }
   deriving (Show)
 
 data LspState = LspState
   { openDocs :: Map FilePath OpenDocInfo
   , lastDiagnostics :: Map FilePath [Diagnostic]
+  , semanticByModule :: Map Text SemanticInfo
+  , semanticByPath :: Map FilePath SemanticInfo
   , checkVersion :: Int
   }
 
@@ -41,6 +62,8 @@ emptyLspState =
   LspState
     { openDocs = Map.empty
     , lastDiagnostics = Map.empty
+    , semanticByModule = Map.empty
+    , semanticByPath = Map.empty
     , checkVersion = 0
     }
 
@@ -76,6 +99,29 @@ lookupLastDiagnostics path st =
 clearLastDiagnostics :: FilePath -> LspState -> LspState
 clearLastDiagnostics path st =
   st {lastDiagnostics = Map.delete path (lastDiagnostics st)}
+
+setSemanticInfo :: SemanticInfo -> LspState -> LspState
+setSemanticInfo info st =
+  st
+    { semanticByModule = Map.insert (siModuleName info) info (semanticByModule st)
+    , semanticByPath = Map.insert (siPath info) info (semanticByPath st)
+    }
+
+lookupSemanticInfoByPath :: FilePath -> LspState -> Maybe SemanticInfo
+lookupSemanticInfoByPath path st =
+  Map.lookup path (semanticByPath st)
+
+lookupSemanticInfoByModule :: Text -> LspState -> Maybe SemanticInfo
+lookupSemanticInfoByModule modName st =
+  Map.lookup modName (semanticByModule st)
+
+clearSemanticInfoByPath :: FilePath -> LspState -> LspState
+clearSemanticInfoByPath path st =
+  st {semanticByPath = Map.delete path (semanticByPath st)}
+
+clearSemanticInfoByModule :: Text -> LspState -> LspState
+clearSemanticInfoByModule modName st =
+  st {semanticByModule = Map.delete modName (semanticByModule st)}
 
 -- | Get all open files affected by a change to the given file.
 -- Returns the changed file plus all open files that directly import its module.

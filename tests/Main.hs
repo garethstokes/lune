@@ -14,7 +14,7 @@
 module Main where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (bracket, finally)
+import Control.Exception (SomeException, bracket, finally, try)
 import qualified Data.Aeson as Aeson
 import Data.Aeson (Value (..), (.=), encode, object)
 import Data.Aeson.Types (parseMaybe, (.:))
@@ -47,6 +47,7 @@ import Test.Tasty.Golden (goldenVsStringDiff)
 import Test.Tasty.HUnit (testCase, assertEqual)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
+import Data.Maybe (fromMaybe)
 
 main :: IO ()
 main = do
@@ -64,7 +65,7 @@ main = do
     , testGroup "Fmt" (map fmtGoldenTest fmtCases)
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
     , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
-    , testGroup "LSP" [lspIntegrationTest, vfsImportPropagationTest]
+    , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, vfsImportPropagationTest]
     ]
 
 -- | Discover .lune files in a directory, sorted for determinism.
@@ -365,6 +366,399 @@ lspIntegrationTest =
           _ <- waitForExitCode 2000000 ph
           pure ()
 
+hoverIntegrationTest :: TestTree
+hoverIntegrationTest =
+  testCase "HoverIdentifier" $ do
+    logMsg "starting hover test"
+    luneBin <- getLuneBin
+    withLspServer luneBin $ \hin hout _ph -> do
+      -- Initialize handshake
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (1 :: Int)
+          , "method" .= ("initialize" :: T.Text)
+          , "params"
+              .= object
+                [ "processId" .= (Nothing :: Maybe Int)
+                , "rootUri" .= (Nothing :: Maybe T.Text)
+                , "capabilities" .= object []
+                ]
+          ]
+
+      initResp <- waitForResponseId 1 hout
+      let hoverProvider =
+            (parseMaybe $ \v -> do
+              o <- case v of
+                Object o -> pure o
+                _ -> fail "initialize result not object"
+              caps <- o .: "capabilities"
+              caps .: "hoverProvider"
+            ) initResp :: Maybe Value
+      assertEqual "hoverProvider is advertised" True (hoverProvider /= Nothing)
+
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("initialized" :: T.Text)
+          , "params" .= object []
+          ]
+
+      let diskText =
+            T.unlines
+              [ "module A exposing (main, foo)"
+              , ""
+              , "foo : Int"
+              , "foo = 1"
+              , ""
+              , "main : Int"
+              , "main = foo"
+              ]
+          vfsText =
+            T.unlines
+              [ "module A exposing (main, bar)"
+              , ""
+              , "bar : Int"
+              , "bar = 1"
+              , ""
+              , "main : Int"
+              , "main = bar"
+              ]
+
+      withTempFile "lune-lsp-hover" ".lune" $ \tmpPath -> do
+        TIO.writeFile tmpPath diskText
+        let tmpUri = fileUri tmpPath
+            hoverPos = object ["line" .= (6 :: Int), "character" .= (8 :: Int)]
+
+        -- Hover over disk-backed document (not opened).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (2 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= tmpUri]
+                  , "position" .= hoverPos
+                  ]
+            ]
+
+        diskHover <- waitForResponseId 2 hout
+        let diskHoverJson = TE.decodeUtf8 (LBS.toStrict (encode diskHover))
+        assertEqual "disk hover contains foo" True ("foo" `T.isInfixOf` diskHoverJson)
+
+        -- Now open the same URI with different contents (VFS should win).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didOpen" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= tmpUri
+                        , "languageId" .= ("lune" :: T.Text)
+                        , "version" .= (0 :: Int)
+                        , "text" .= vfsText
+                        ]
+                  ]
+            ]
+
+        _ <- waitForPublishDiagnostics tmpUri hout
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (3 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= tmpUri]
+                  , "position" .= hoverPos
+                  ]
+            ]
+
+        vfsHover <- waitForResponseId 3 hout
+        let vfsHoverJson = TE.decodeUtf8 (LBS.toStrict (encode vfsHover))
+        assertEqual "VFS hover contains bar" True ("bar" `T.isInfixOf` vfsHoverJson)
+
+      -- Shutdown/exit
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (4 :: Int)
+          , "method" .= ("shutdown" :: T.Text)
+          , "params" .= Null
+          ]
+      _ <- waitForResponseId 4 hout
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("exit" :: T.Text)
+          , "params" .= Null
+          ]
+
+typedHoverIntegrationTest :: TestTree
+typedHoverIntegrationTest =
+  testCase "HoverTypes" $ do
+    logMsg "starting typed hover test"
+    luneBin <- getLuneBin
+
+    withTempDirectory "lune-lsp-typed-hover" $ \tmpDir -> do
+      let pathA = tmpDir </> "A.lune"
+          pathB = tmpDir </> "B.lune"
+          pathDecode = tmpDir </> "Lune" </> "Json" </> "Decode.lune"
+          uriA = fileUri pathA
+          uriB = fileUri pathB
+
+          textB =
+            T.unlines
+              [ "module B exposing (bar)"
+              , ""
+              , "bar = 1"
+              ]
+
+          textBBroken =
+            T.unlines
+              [ "module B exposing (bar)"
+              , ""
+              , "bar = \"x\""
+              ]
+
+          textA =
+            T.unlines
+              [ "module A exposing (main, usesB, usesField, usesAlias)"
+              , ""
+              , "import B"
+              , "import Lune.Json.Decode"
+              , "import Lune.Json.Decode as D"
+              , ""
+              , "usesB = B.bar"
+              , "usesField = Decode.field"
+              , "usesAlias = D.field"
+              , "usesLong = Decode.longArrows"
+              , "main = usesB"
+              ]
+
+          hoverBBarPos = object ["line" .= (6 :: Int), "character" .= (10 :: Int)]
+          hoverDecodeFieldPos = object ["line" .= (7 :: Int), "character" .= (20 :: Int)]
+          hoverAliasFieldPos = object ["line" .= (8 :: Int), "character" .= (15 :: Int)]
+          hoverLongArrowsPos = object ["line" .= (9 :: Int), "character" .= (20 :: Int)]
+
+      TIO.writeFile pathB textB
+      createDirectoryIfMissing True (tmpDir </> "Lune" </> "Json")
+      TIO.writeFile pathDecode $
+        T.unlines
+          [ "module Lune.Json.Decode exposing (Decoder, field, longArrows)"
+          , ""
+          , "import Lune.Json exposing (Json)"
+          , ""
+          , "type alias Decoder a = Json -> a"
+          , ""
+          , "-- | Extract a field from a JSON object."
+          , "--   Fails if missing."
+          , "field : String -> Decoder a -> Decoder b -> Decoder b"
+          , "field _ _ fallback ="
+          , "  fallback"
+          , ""
+          , "longArrows : Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int -> Int"
+          , "longArrows a b c d e f g h i j k l m ="
+          , "  a"
+          ]
+      TIO.writeFile pathA textA
+
+      withLspServer luneBin $ \hin hout _ph -> do
+        -- Initialize handshake
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (1 :: Int)
+            , "method" .= ("initialize" :: T.Text)
+            , "params"
+                .= object
+                  [ "processId" .= (Nothing :: Maybe Int)
+                  , "rootUri" .= (Nothing :: Maybe T.Text)
+                  , "capabilities" .= object []
+                  ]
+            ]
+
+        _ <- waitForResponseId 1 hout
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("initialized" :: T.Text)
+            , "params" .= object []
+            ]
+
+        -- Open A (B stays disk-backed).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didOpen" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uriA
+                        , "languageId" .= ("lune" :: T.Text)
+                        , "version" .= (0 :: Int)
+                        , "text" .= textA
+                        ]
+                  ]
+            ]
+
+        diagsA1 <- waitForPublishDiagnostics uriA hout
+        assertEqual "A has no initial errors" 0 (length diagsA1)
+
+        -- Hover qualified identifier from non-open module (B.bar).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (2 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uriA]
+                  , "position" .= hoverBBarPos
+                  ]
+            ]
+
+        hoverBBar1 <- waitForResponseId 2 hout
+        let hoverBBar1Md = fromMaybe "" (extractHoverMarkdown hoverBBar1)
+        assertEqual "hover B.bar contains ```lune" True ("```lune" `T.isInfixOf` hoverBBar1Md)
+        assertEqual "hover B.bar contains B.bar" True ("B.bar" `T.isInfixOf` hoverBBar1Md)
+        assertEqual "hover B.bar contains Int" True ("Int" `T.isInfixOf` hoverBBar1Md)
+
+        -- Hover qualified identifier via default import alias (Decode.field).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (3 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uriA]
+                  , "position" .= hoverDecodeFieldPos
+                  ]
+            ]
+
+        hoverDecodeField <- waitForResponseId 3 hout
+        let hoverDecodeFieldMd = fromMaybe "" (extractHoverMarkdown hoverDecodeField)
+        assertEqual "hover Decode.field contains ```lune" True ("```lune" `T.isInfixOf` hoverDecodeFieldMd)
+        assertEqual "hover Decode.field contains field :" True ("field :" `T.isInfixOf` hoverDecodeFieldMd)
+        assertEqual "hover Decode.field contains Extract a field" True ("Extract a field" `T.isInfixOf` hoverDecodeFieldMd)
+
+        -- Hover qualified identifier via explicit alias (D.field).
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (4 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uriA]
+                  , "position" .= hoverAliasFieldPos
+                  ]
+            ]
+
+        hoverAliasField <- waitForResponseId 4 hout
+        let hoverAliasFieldMd = fromMaybe "" (extractHoverMarkdown hoverAliasField)
+        assertEqual "hover D.field contains ```lune" True ("```lune" `T.isInfixOf` hoverAliasFieldMd)
+        assertEqual "hover D.field contains Extract a field" True ("Extract a field" `T.isInfixOf` hoverAliasFieldMd)
+
+        -- Hover long arrow chain; should be wrapped across lines.
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (7 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uriA]
+                  , "position" .= hoverLongArrowsPos
+                  ]
+            ]
+
+        hoverLongArrows <- waitForResponseId 7 hout
+        let hoverLongArrowsMd = fromMaybe "" (extractHoverMarkdown hoverLongArrows)
+        assertEqual "hover Decode.longArrows contains field :" True ("longArrows :" `T.isInfixOf` hoverLongArrowsMd)
+        assertEqual "hover Decode.longArrows wraps arrows" True ("\n  ->" `T.isInfixOf` hoverLongArrowsMd)
+
+        -- Open B with disk contents, then change it in-memory; A's hover should update.
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didOpen" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uriB
+                        , "languageId" .= ("lune" :: T.Text)
+                        , "version" .= (0 :: Int)
+                        , "text" .= textB
+                        ]
+                  ]
+            ]
+
+        diagsB1 <- waitForPublishDiagnostics uriB hout
+        diagsA2 <- waitForPublishDiagnostics uriA hout
+        assertEqual "B has no errors after open" 0 (length diagsB1)
+        assertEqual "A has no errors after B open" 0 (length diagsA2)
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didChange" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uriB
+                        , "version" .= (1 :: Int)
+                        ]
+                  , "contentChanges" .= [object ["text" .= textBBroken]]
+                  ]
+            ]
+
+        diagsB2 <- waitForPublishDiagnostics uriB hout
+        diagsA3 <- waitForPublishDiagnostics uriA hout
+        assertEqual "B has no errors after change" 0 (length diagsB2)
+        assertEqual "A has no errors after B change" 0 (length diagsA3)
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (5 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uriA]
+                  , "position" .= hoverBBarPos
+                  ]
+            ]
+
+        hoverBBar2 <- waitForResponseId 5 hout
+        let hoverBBar2Json = TE.decodeUtf8 (LBS.toStrict (encode hoverBBar2))
+        assertEqual "hover B.bar contains String after B change" True ("String" `T.isInfixOf` hoverBBar2Json)
+
+        -- Shutdown/exit
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (6 :: Int)
+            , "method" .= ("shutdown" :: T.Text)
+            , "params" .= Null
+            ]
+        _ <- waitForResponseId 6 hout
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("exit" :: T.Text)
+            , "params" .= Null
+            ]
+
 logMsg :: String -> IO ()
 logMsg msg = do
   dbg <- lookupEnv "LUNE_LSP_TEST_DEBUG"
@@ -376,6 +770,11 @@ logMsg msg = do
 
 getLuneBin :: IO FilePath
 getLuneBin = do
+  -- Ensure the binary is up-to-date, since this test suite shells out to it.
+  (ecBuild, _outBuild, errBuild) <- readProcessWithExitCode "cabal" ["build", "-v0", "exe:lune"] ""
+  case ecBuild of
+    ExitSuccess -> pure ()
+    ExitFailure _ -> error ("cabal build exe:lune failed: " <> errBuild)
   (ec, out, err) <- readProcessWithExitCode "cabal" ["list-bin", "lune"] ""
   case ec of
     ExitSuccess ->
@@ -420,8 +819,12 @@ withLspServer luneBin action =
 
 drainStderr :: Handle -> IO ()
 drainStderr h = do
-  chunk <- BS.hGetSome h 4096
-  if BS.null chunk then pure () else drainStderr h
+  chunkOrErr <- (try (BS.hGetSome h 4096) :: IO (Either SomeException BS.ByteString))
+  case chunkOrErr of
+    Left _ ->
+      pure ()
+    Right chunk ->
+      if BS.null chunk then pure () else drainStderr h
 
 sendLsp :: Handle -> Value -> IO ()
 sendLsp h v = do
@@ -536,6 +939,18 @@ extractFirstEditNewText =
         e .: "newText"
       _ ->
         fail "missing edit"
+
+extractHoverMarkdown :: Value -> Maybe T.Text
+extractHoverMarkdown =
+  parseMaybe $ \v -> do
+    o <- case v of
+      Object o -> pure o
+      _ -> fail "hover not an object"
+    contents <- o .: "contents"
+    c <- case contents of
+      Object c -> pure c
+      _ -> fail "hover.contents not an object"
+    c .: "value"
 
 fileUri :: FilePath -> T.Text
 fileUri path =

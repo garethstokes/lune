@@ -10,9 +10,12 @@ module Lune.LSP.Handlers
 
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad.IO.Class (liftIO)
-import Data.IORef (IORef, atomicModifyIORef', readIORef)
+import Data.Char (isAlphaNum)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -40,6 +43,10 @@ import Language.LSP.Protocol.Types
   , DidCloseTextDocumentParams (..)
   , DidOpenTextDocumentParams (..)
   , DocumentFormattingParams (..)
+  , Hover (..)
+  , HoverParams (..)
+  , MarkupContent (..)
+  , MarkupKind (..)
   , Null (..)
   , Position (..)
   , PublishDiagnosticsParams (..)
@@ -56,6 +63,7 @@ import Language.LSP.Protocol.Types
   )
 import qualified Lune.Check as Check
 import Lune.Desugar (desugarModule)
+import qualified Lune.Docs as Docs
 import qualified Lune.Fmt as Fmt
 import Lune.ModuleGraph (ModuleLoader (..))
 import qualified Lune.ModuleGraph as MG
@@ -74,13 +82,19 @@ import Lune.LSP.Convert
 import Lune.LSP.State
   ( LspState
   , OpenDocInfo (..)
+  , SemanticInfo (..)
   , clearLastDiagnostics
+  , clearSemanticInfoByModule
+  , clearSemanticInfoByPath
   , getAffectedFiles
   , lookupLastDiagnostics
   , lookupOpenDoc
   , lookupOpenDocText
+  , lookupSemanticInfoByModule
+  , lookupSemanticInfoByPath
   , removeOpenDoc
   , setLastDiagnostics
+  , setSemanticInfo
   , setOpenDoc
   )
 import System.IO (hPutStrLn, stderr)
@@ -100,6 +114,7 @@ handlers stateRef =
   mconcat
     [ diagnosticsHandlers stateRef
     , formattingHandlers stateRef
+    , hoverHandlers stateRef
     ]
 
 -- =============================================================================
@@ -121,13 +136,21 @@ handleDidOpen stateRef (TNotificationMessage _ _ (DidOpenTextDocumentParams docI
     Nothing ->
       pure ()
     Just path -> do
-      let (modName, imports) = parseModuleInfo path contents
+      let (modName, imports, importAliases) = parseModuleInfo path contents
           info = OpenDocInfo
             { odiText = contents
             , odiModuleName = modName
             , odiImports = imports
+            , odiImportAliases = importAliases
             }
-      liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
+      liftIO $
+        atomicModifyIORef' stateRef $ \st ->
+          let oldMod = odiModuleName =<< lookupOpenDoc path st
+              st1 = setOpenDoc path info st
+              st2 = clearSemanticInfoByPath path st1
+              st3 = maybe st2 (`clearSemanticInfoByModule` st2) oldMod
+              st4 = maybe st3 (`clearSemanticInfoByModule` st3) modName
+           in (st4, ())
       publishWorkspaceDiagnostics stateRef path
 
 handleDidChange :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidChange -> LspM () ()
@@ -145,13 +168,21 @@ handleDidChange stateRef (TNotificationMessage _ _ (DidChangeTextDocumentParams 
                 case last cs of
                   TextDocumentContentChangeEvent (InR (TextDocumentContentChangeWholeDocument t)) -> t
                   TextDocumentContentChangeEvent (InL (TextDocumentContentChangePartial _ _ t)) -> t
-              (modName, imports) = parseModuleInfo path newText
+              (modName, imports, importAliases) = parseModuleInfo path newText
               info = OpenDocInfo
                 { odiText = newText
                 , odiModuleName = modName
                 , odiImports = imports
+                , odiImportAliases = importAliases
                 }
-          liftIO $ atomicModifyIORef' stateRef (\st -> (setOpenDoc path info st, ()))
+          liftIO $
+            atomicModifyIORef' stateRef $ \st ->
+              let oldMod = odiModuleName =<< lookupOpenDoc path st
+                  st1 = setOpenDoc path info st
+                  st2 = clearSemanticInfoByPath path st1
+                  st3 = maybe st2 (`clearSemanticInfoByModule` st2) oldMod
+                  st4 = maybe st3 (`clearSemanticInfoByModule` st3) modName
+               in (st4, ())
           publishWorkspaceDiagnostics stateRef path
 
 handleDidClose :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidClose -> LspM () ()
@@ -161,17 +192,24 @@ handleDidClose stateRef (TNotificationMessage _ _ (DidCloseTextDocumentParams (T
       pure ()
     Just path -> do
       liftIO $
-        atomicModifyIORef' stateRef (\st -> (clearLastDiagnostics path (removeOpenDoc path st), ()))
+        atomicModifyIORef' stateRef $ \st ->
+          let oldMod = odiModuleName =<< lookupOpenDoc path st
+              st1 = clearSemanticInfoByPath path st
+              st2 = maybe st1 (`clearSemanticInfoByModule` st1) oldMod
+              st3 = clearLastDiagnostics path (removeOpenDoc path st2)
+           in (st3, ())
       sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing [])
 
 publishCheckedDiagnostics :: IORef LspState -> FilePath -> Text -> LspM () ()
 publishCheckedDiagnostics stateRef path contents = do
-  let loader = mkLspModuleLoader stateRef
-  diags <- liftIO (checkFile loader path contents)
+  CheckResult diags semantics <- liftIO (checkFileWithSemantic stateRef path contents)
   let lspDiags = map (toLspDiagnostic contents) diags
       uri = filePathToUri' path
   liftIO $
-    atomicModifyIORef' stateRef (\st -> (setLastDiagnostics path lspDiags st, ()))
+    atomicModifyIORef' stateRef $ \st ->
+      let st1 = setLastDiagnostics path lspDiags st
+          st2 = foldr setSemanticInfo st1 semantics
+       in (st2, ())
   sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- | Publish diagnostics for the changed file and all files that import it.
@@ -180,23 +218,25 @@ publishWorkspaceDiagnostics :: IORef LspState -> FilePath -> LspM () ()
 publishWorkspaceDiagnostics stateRef changedPath = do
   st <- liftIO (readIORef stateRef)
   let affected = getAffectedFiles changedPath st
-      loader = mkLspModuleLoader stateRef
       -- Process changed file first, then others in sorted order
       others = sort (filter (/= changedPath) affected)
       ordered = changedPath : others
   -- Publish diagnostics for each affected file
-  mapM_ (publishDiagsForFile loader st) ordered
+  mapM_ (publishDiagsForFile st) ordered
   where
-    publishDiagsForFile loader st path =
+    publishDiagsForFile st path =
       -- Get current text from open docs or skip if not open
       case lookupOpenDocText path st of
         Nothing -> pure ()
         Just contents -> do
-          diags <- liftIO (checkFile loader path contents)
+          CheckResult diags semantics <- liftIO (checkFileWithSemantic stateRef path contents)
           let lspDiags = map (toLspDiagnostic contents) diags
               uri = filePathToUri' path
           liftIO $
-            atomicModifyIORef' stateRef (\st' -> (setLastDiagnostics path lspDiags st', ()))
+            atomicModifyIORef' stateRef $ \st' ->
+              let st1 = setLastDiagnostics path lspDiags st'
+                  st2 = foldr setSemanticInfo st1 semantics
+               in (st2, ())
           sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- =============================================================================
@@ -261,6 +301,194 @@ publishFormattingFailure stateRef path uri msg = do
   sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing allDiags)
 
 -- =============================================================================
+-- Hover
+-- =============================================================================
+
+hoverHandlers :: IORef LspState -> Handlers (LspM ())
+hoverHandlers stateRef =
+  mconcat
+    [ requestHandler SMethod_TextDocumentHover (handleHover stateRef)
+    ]
+
+handleHover ::
+  IORef LspState ->
+  TRequestMessage 'Method_TextDocumentHover ->
+  (Either (TResponseError 'Method_TextDocumentHover) (MessageResult 'Method_TextDocumentHover) -> LspM () ()) ->
+  LspM () ()
+handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier uri) pos _token)) responder =
+  case uriToFilePath' uri of
+    Nothing ->
+      responder (Right (InR Null))
+    Just path -> do
+      st <- liftIO (readIORef stateRef)
+      -- Prefer open buffers; fall back to disk.
+      docOrErr <- liftIO $ do
+        case lookupOpenDoc path st of
+          Just info ->
+            pure (Right (odiText info, odiModuleName info, odiImportAliases info))
+          Nothing -> do
+            contentsOrErr <- (try (TIO.readFile path) :: IO (Either SomeException Text))
+            pure $
+              case contentsOrErr of
+                Left e -> Left e
+                Right contents ->
+                  let (modName, _imports, importAliases) = parseModuleInfo path contents
+                   in Right (contents, modName, importAliases)
+
+      case docOrErr of
+        Left e -> do
+          liftIO $ hPutStrLn stderr ("lune: hover: failed to read " <> path <> ": " <> displayException e)
+          responder (Right (InR Null))
+        Right (docText, modName, importAliases) -> do
+          let tokenAndRange = wordAtPosition docText pos
+
+          case tokenAndRange of
+            Nothing ->
+              responder (Right (InR Null))
+            Just (range, tok) -> do
+              let mTarget = resolveHoverTarget st path modName importAliases tok
+                  (mScheme, mDoc) =
+                    case mTarget of
+                      Nothing ->
+                        (Nothing, Nothing)
+                      Just (sem, name) ->
+                        ( lookupSchemeInSemantic sem name
+                        , Map.lookup name (siDocs sem)
+                        )
+
+                  md =
+                    case (mScheme, mDoc) of
+                      (Just scheme, doc) ->
+                        let typeBlock =
+                              T.intercalate
+                                "\n"
+                                [ "### " <> tok
+                                , ""
+                                , "```lune"
+                                , tok <> " : " <> Check.renderTypeSchemeHover scheme
+                                , "```"
+                                ]
+                         in case doc of
+                              Nothing -> typeBlock
+                              Just d -> typeBlock <> "\n\n" <> d
+                      (Nothing, Just d) ->
+                        T.intercalate "\n" ["### " <> tok, "", d]
+                      (Nothing, Nothing) ->
+                        case lookupModuleDocForToken st importAliases tok of
+                          Just d ->
+                            T.intercalate "\n" ["### " <> tok, "", d]
+                          Nothing ->
+                            T.concat
+                              [ "### "
+                              , tok
+                              , case modName of
+                                  Nothing -> ""
+                                  Just m -> "\n\n_Module: " <> m <> "_"
+                              ]
+
+                  hover =
+                    Hover
+                      { _contents = InL (MarkupContent MarkupKind_Markdown md)
+                      , _range = Just range
+                      }
+
+              responder (Right (InL hover))
+  where
+    resolveHoverTarget st path modName importAliases tok =
+      case T.splitOn "." tok of
+        [modRef, name] -> do
+          sem <- lookupQualifiedSemantic st modRef importAliases
+          pure (sem, name)
+        _ -> do
+          sem <- lookupUnqualifiedSemantic st path modName
+          pure (sem, tok)
+
+    lookupUnqualifiedSemantic st path modName = do
+      case lookupSemanticInfoByPath path st of
+        Just s -> Just s
+        Nothing ->
+          modName >>= \m -> lookupSemanticInfoByModule m st
+
+    lookupQualifiedSemantic st modRef importAliases = do
+      targetMod <-
+        case lookupSemanticInfoByModule modRef st of
+          Just _ -> Just modRef
+          Nothing -> Map.lookup modRef importAliases
+      lookupSemanticInfoByModule targetMod st
+
+    lookupSchemeInSemantic sem name =
+      lookupFirst [siModuleName sem <> "." <> name, name] (siValueEnv sem)
+
+    lookupModuleDocForToken st importAliases tok =
+      let fromModule m =
+            siModuleDoc =<< lookupSemanticInfoByModule m st
+       in case fromModule tok of
+            Just d -> Just d
+            Nothing ->
+              case Map.lookup tok importAliases of
+                Nothing -> Nothing
+                Just m -> fromModule m
+
+    lookupFirst keys env =
+      case keys of
+        [] ->
+          Nothing
+        (k : ks) ->
+          case Map.lookup k env of
+            Just v -> Just v
+            Nothing -> lookupFirst ks env
+
+-- | Get the token at the cursor position.
+--
+-- Token characters: A-Z a-z 0-9 _ .
+--
+-- TODO: LSP positions use UTF-16 code units; for Hover v1 we assume the
+-- character index aligns with 'Text' indexing for ASCII.
+wordAtPosition :: Text -> Position -> Maybe (Range, Text)
+wordAtPosition doc (Position line0 char0) = do
+  let ls = T.splitOn "\n" doc
+      li = fromIntegral line0 :: Int
+  lineText <- if li < 0 || li >= length ls then Nothing else Just (ls !! li)
+
+  let len = T.length lineText
+      ci = fromIntegral char0 :: Int
+      isTokenChar ch =
+        isAlphaNum ch || ch == '_' || ch == '.'
+      charInBounds i = i >= 0 && i < len
+      at i = T.index lineText i
+      isTok = isTokenChar
+
+      -- Prefer the character under the cursor; if it's not a token, fall back
+      -- to the character just before the cursor (common when hovering at end).
+      startIx
+        | charInBounds ci && isTok (at ci) = Just ci
+        | charInBounds (ci - 1) && isTok (at (ci - 1)) = Just (ci - 1)
+        | otherwise = Nothing
+
+  ix <- startIx
+
+  let goLeft i
+        | i <= 0 = 0
+        | isTok (at (i - 1)) = goLeft (i - 1)
+        | otherwise = i
+
+      goRight i
+        | i >= len = len
+        | isTok (at i) = goRight (i + 1)
+        | otherwise = i
+
+      left = goLeft ix
+      right = goRight (ix + 1)
+      tok = T.take (right - left) (T.drop left lineText)
+      range =
+        Range
+          { _start = Position line0 (fromIntegral left)
+          , _end = Position line0 (fromIntegral right)
+          }
+
+  if T.null tok then Nothing else Just (range, tok)
+
+-- =============================================================================
 -- Lune diagnostics
 -- =============================================================================
 
@@ -268,6 +496,11 @@ data LuneDiag = LuneDiag
   { luneDiagSpan :: Maybe Span
   , luneDiagSeverity :: DiagnosticSeverity
   , luneDiagMessage :: Text
+  }
+
+data CheckResult = CheckResult
+  { crDiagnostics :: [LuneDiag]
+  , crSemantics :: [SemanticInfo]
   }
 
 toLspDiagnostic :: Text -> LuneDiag -> Diagnostic
@@ -287,41 +520,116 @@ toLspDiagnostic doc (LuneDiag sp sev msg) =
         Nothing
         Nothing
 
-checkFile :: ModuleLoader -> FilePath -> Text -> IO [LuneDiag]
-checkFile loader path contents =
+checkFileWithSemantic :: IORef LspState -> FilePath -> Text -> IO CheckResult
+checkFileWithSemantic stateRef path contents =
   handleExceptions $ do
+    let baseLoader = mkLspModuleLoader stateRef
+    srcCacheRef <- newIORef (Map.singleton path contents)
+    let loader =
+          ModuleLoader
+            { mlReadFileText = \p -> do
+                res <- mlReadFileText baseLoader p
+                case res of
+                  Right txt ->
+                    atomicModifyIORef' srcCacheRef (\m -> (Map.insert p txt m, ()))
+                  Left _ ->
+                    pure ()
+                pure res
+            }
     case parseModuleFromText path contents of
       Left bundle ->
-        pure [diagFromParseBundle bundle]
+        pure CheckResult {crDiagnostics = [diagFromParseBundle bundle], crSemantics = []}
       Right m -> do
         loaded <- MG.loadProgramWithEntryModuleUsing loader path m
         case loaded of
           Left err ->
-            pure [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))]
+            pure CheckResult {crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))], crSemantics = []}
           Right prog ->
             case Resolve.resolveProgram prog of
               Left err ->
-                pure [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))]
-              Right resolved -> do
-                let mod' = desugarModule resolved
-                case validateModule mod' of
-                  Left err ->
-                    pure [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))]
-                  Right () ->
-                    case Check.typecheckModule mod' of
+                pure CheckResult {crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))], crSemantics = []}
+              Right resolvedMods -> do
+                let order = MG.progOrder prog
+                resolvedModulesInOrder <-
+                  case traverse (`Map.lookup` resolvedMods) order of
+                    Nothing ->
+                      pure (Left "resolveProgram did not return all modules in progOrder")
+                    Just ms ->
+                      pure (Right ms)
+
+                case resolvedModulesInOrder of
+                  Left msg ->
+                    pure CheckResult {crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error msg], crSemantics = []}
+                  Right ms -> do
+                    let combined =
+                          S.Module
+                            { S.modName = MG.progEntryName prog
+                            , S.modExports = []
+                            , S.modImports = []
+                            , S.modDecls = concatMap S.modDecls ms
+                            }
+                        mod' = desugarModule combined
+                    case validateModule mod' of
                       Left err ->
-                        pure [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))]
-                      Right _ ->
-                        pure []
+                        pure CheckResult {crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))], crSemantics = []}
+                      Right () ->
+                        case Check.typecheckModuleEnv mod' of
+                          Left err ->
+                            pure CheckResult {crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error (T.pack (show err))], crSemantics = []}
+                          Right valueEnv -> do
+                            let progModules = MG.progModules prog
+
+                            srcCache <- readIORef srcCacheRef
+                            docsByModule <-
+                              fmap Map.fromList $
+                                traverse
+                                  ( \modName -> do
+                                      let emptyTable = Docs.DocTable {Docs.dtModuleDoc = Nothing, Docs.dtDeclDocs = Map.empty}
+                                      case Map.lookup modName progModules of
+                                        Nothing ->
+                                          pure (modName, emptyTable)
+                                        Just lm -> do
+                                          let srcOrErr =
+                                                if MG.lmPath lm == path
+                                                  then Right contents
+                                                  else case Map.lookup (MG.lmPath lm) srcCache of
+                                                    Just src -> Right src
+                                                    Nothing -> Left "missing source"
+                                          let table =
+                                                case srcOrErr of
+                                                  Left _ -> emptyTable
+                                                  Right src -> Docs.extractDocTable src
+                                          pure (modName, table)
+                                  )
+                                  order
+
+                            let semantics =
+                                  [ let table = Map.findWithDefault (Docs.DocTable Nothing Map.empty) modName docsByModule
+                                     in SemanticInfo
+                                          { siModuleName = modName
+                                          , siPath = MG.lmPath lm
+                                          , siTypesAt = []
+                                          , siValueEnv = Map.filterWithKey (\k _ -> (modName <> ".") `T.isPrefixOf` k) valueEnv
+                                          , siDocs = Docs.dtDeclDocs table
+                                          , siModuleDoc = Docs.dtModuleDoc table
+                                          }
+                                  | modName <- order
+                                  , Just lm <- [Map.lookup modName progModules]
+                                  ]
+                            pure CheckResult {crDiagnostics = [], crSemantics = semantics}
   where
     handleExceptions action = do
-      res <- (try action :: IO (Either SomeException [LuneDiag]))
+      res <- (try action :: IO (Either SomeException CheckResult))
       case res of
-        Right ds ->
-          pure ds
+        Right r ->
+          pure r
         Left e -> do
           hPutStrLn stderr ("lune: LSP checkFile failed: " <> displayException e)
-          pure [LuneDiag Nothing DiagnosticSeverity_Error ("Internal error: " <> T.pack (displayException e))]
+          pure
+            CheckResult
+              { crDiagnostics = [LuneDiag Nothing DiagnosticSeverity_Error ("Internal error: " <> T.pack (displayException e))]
+              , crSemantics = []
+              }
 
 diagFromParseBundle :: ParseErrorBundle Text Void -> LuneDiag
 diagFromParseBundle bundle =
@@ -336,11 +644,26 @@ parseModuleFromText = Parser.parseTextBundle
 
 -- | Parse module to extract just name and imports.
 -- Returns (Nothing, empty) if parsing fails.
-parseModuleInfo :: FilePath -> Text -> (Maybe Text, Set Text)
+parseModuleInfo :: FilePath -> Text -> (Maybe Text, Set Text, Map Text Text)
 parseModuleInfo path contents =
   case Parser.parseTextBundle path contents of
-    Left _ -> (Nothing, Set.empty)
-    Right m -> (Just (S.modName m), Set.fromList (map S.impName (S.modImports m)))
+    Left _ -> (Nothing, Set.empty, Map.empty)
+    Right m ->
+      let imports = Set.fromList (map S.impName (S.modImports m))
+          importAliases =
+            Map.fromList
+              [ (aliasFor imp, S.impName imp)
+              | imp <- S.modImports m
+              ]
+       in (Just (S.modName m), imports, importAliases)
+  where
+    aliasFor imp =
+      case S.impAs imp of
+        Just a -> a
+        Nothing -> defaultAlias (S.impName imp)
+
+    defaultAlias name =
+      last (T.splitOn "." name)
 
 -- | Create a ModuleLoader that reads from open buffers first, then disk.
 mkLspModuleLoader :: IORef LspState -> ModuleLoader

@@ -41,6 +41,8 @@ library
 
   other-modules:
       Lune.Builtins
+      Lune.Docs
+      Lune.Pretty.Type
       Lune.Template
       Lune.Eval.FFI
       Lune.Eval.Types
