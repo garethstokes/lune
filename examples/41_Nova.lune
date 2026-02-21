@@ -16,6 +16,11 @@ import Nova exposing (
 )
 import Nova.Core exposing (Error(..))
 
+-- | Convert a failable Task into a Task that always succeeds with a Result.
+toResult : Task e a -> Task x (Result e a)
+toResult task =
+  Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))
+
 showError : Error -> String
 showError e =
   case e of
@@ -54,41 +59,41 @@ main =
     let baseClient = withOllamaBaseUrl "mock://" defaultClient
     IO.println "routing_openrouter_missing_key:"
     let openrouterClient = withModel "x" (withProvider openrouter baseClient)
-    r1 <- Task.fromIO <| ask openrouterClient "hi"
+    r1 <- ask openrouterClient "hi" |> toResult
     IO.println <| showAskResult r1
     IO.println "routing_ollama_mock:"
     let pureClient = withModel "mock-pure" (withProvider ollama baseClient)
-    r2 <- Task.fromIO <| ask pureClient "hi"
+    r2 <- ask pureClient "hi" |> toResult
     IO.println <| showAskResult r2
     IO.println "tool_wrapper_counts:"
     let toolWrapperClient = withModel "mock-tool-wrapper" (withProvider ollama baseClient)
-    countsR <- Task.fromIO <| tool toolWrapperClient "user"
+    countsR <- tool toolWrapperClient "user" |> toResult
     IO.println <| showJsonResult countsR
     IO.println "json_pure:"
-    jp <- Task.fromIO <| json pureClient "p"
+    jp <- json pureClient "p" |> toResult
     IO.println <| showJsonResult jp
     IO.println "tool_pure:"
-    tp <- Task.fromIO <| tool pureClient "p"
+    tp <- tool pureClient "p" |> toResult
     IO.println <| showJsonResult tp
     IO.println "json_prose_prefix:"
     let prosePrefixClient = withModel "mock-prose-prefix" (withProvider ollama baseClient)
-    jpp <- Task.fromIO <| json prosePrefixClient "p"
+    jpp <- json prosePrefixClient "p" |> toResult
     IO.println <| showJsonResult jpp
     IO.println "tool_prose_prefix:"
-    tpp <- Task.fromIO <| tool prosePrefixClient "p"
+    tpp <- tool prosePrefixClient "p" |> toResult
     IO.println <| showJsonResult tpp
     IO.println "json_prose_suffix:"
     let proseSuffixClient = withModel "mock-prose-suffix" (withProvider ollama baseClient)
-    jps <- Task.fromIO <| json proseSuffixClient "p"
+    jps <- json proseSuffixClient "p" |> toResult
     IO.println <| showJsonResult jps
     IO.println "tool_prose_suffix:"
-    tps <- Task.fromIO <| tool proseSuffixClient "p"
+    tps <- tool proseSuffixClient "p" |> toResult
     IO.println <| showJsonResult tps
     IO.println "tool_invalid:"
     let invalidClient = withModel "mock-invalid" (withProvider ollama baseClient)
-    ti <- Task.fromIO <| tool invalidClient "p"
+    ti <- tool invalidClient "p" |> toResult
     IO.println <| showJsonResult ti
     IO.println "tool_no_json:"
     let noJsonClient = withModel "mock-no-json" (withProvider ollama baseClient)
-    tn <- Task.fromIO <| tool noJsonClient "p"
+    tn <- tool noJsonClient "p" |> toResult
     IO.println <| showJsonResult tn
