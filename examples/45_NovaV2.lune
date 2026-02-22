@@ -39,28 +39,28 @@ mockProvider = provider "mock"
 mockCall _ model prompt =
   case model of
     "echo" ->
-      prim_ioPure
+      IO.pure
         <| Ok
           { text = prompt
           , usage = Just
               { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
           }
     "json" ->
-      prim_ioPure
+      IO.pure
         <| Ok
           { text = "{\"n\":1}"
           , usage = Just
               { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
           }
     "tool" ->
-      prim_ioPure
+      IO.pure
         <| Ok
           { text = "ok\n{\"n\":2}\nbye"
           , usage = Just
               { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
           }
     _ ->
-      prim_ioPure (Err (ProviderError "Unknown model"))
+      IO.pure (Err (ProviderError "Unknown model"))
 
 mockProviderImpl =
   { id = mockProvider, call = mockCall, capabilities = Core.setEmpty }
@@ -157,17 +157,13 @@ main =
           Task.succeed unit
     IO.println "executeTool_allow:"
     r1 <-
-      toResult
+      Task.result
         (executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
           { a = 1, b = 2 })
     IO.println <| Nova.showToolExecResult r1
     IO.println "executeTool_deny:"
     r2 <-
-      toResult
+      Task.result
         (executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
           { a = 1, b = 2 })
     IO.println <| Nova.showToolExecResult r2
--- | Convert a Task's success/failure into a Result value (never fails)
-
-toResult : Task e a -> Task x (Result e a)
-toResult task = Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))
