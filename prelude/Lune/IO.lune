@@ -5,7 +5,9 @@ module Lune.IO exposing (
   sleepMs,
   readFile,
   writeFile,
-  Error
+  Error,
+  pure,
+  andThen
 )
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
@@ -13,6 +15,16 @@ module Lune.IO exposing (
 import Lune.Prelude exposing (Task(..), Int, Result(..), String, Unit)
 
 type Error = Error#
+
+-- | Lift a pure value into IO.
+pure : a -> IO a
+pure a =
+  prim_ioPure a
+
+-- | Sequence two IO actions.
+andThen : IO a -> (a -> IO b) -> IO b
+andThen io f =
+  prim_ioBind io f
 
 println : String -> Task e Unit
 println s =
