@@ -14,12 +14,9 @@ all implemented in pure Lune over the Protocol and Connection modules.
 
 Example:
 ```
-result <- PgQuery.query conn "SELECT id, name FROM users"
-case result of
-  Ok rows ->
-    -- rows : List (List (Maybe Bytes))
-    -- each row is a list of nullable column values
-  Err e -> IO.println e.message
+rows <- PgQuery.query conn "SELECT id, name FROM users"
+-- rows : List (List (Maybe Bytes))
+-- each row is a list of nullable column values
 ```
 -}
 

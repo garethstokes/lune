@@ -14,13 +14,9 @@ and provides a thin wrapper for sending queries and reading responses.
 
 Example:
 ```
-result <- Connection.connect "localhost" 5432 "mydb" "myuser"
-case result of
-  Ok conn ->
-    do
-      -- use conn with Query module
-      Connection.close conn
-  Err e -> IO.println e.message
+conn <- Connection.connect "localhost" 5432 "mydb" "myuser"
+-- use conn with Query module
+Connection.close conn
 ```
 -}
 
