@@ -18,6 +18,8 @@ Reference: https://www.postgresql.org/docs/current/protocol-message-formats.html
 -}
 
 import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, String, Maybe(..), Bool(..), Monad(..))
+import Lune.Task as Task exposing (Task)
+import Lune.IO as IO
 import Lune.Bytes as Bytes exposing (Bytes)
 import Lune.Net.Tls as Tls exposing (TlsConn)
 import Lune.IO exposing (Error)
@@ -350,36 +352,38 @@ updatePgError fieldType value acc =
 
 -- IO: Read one complete message from a TLS connection
 
-readMessage : TlsConn -> IO (Result String BackendMessage)
+readMessage : TlsConn -> Task String BackendMessage
 readMessage conn =
-  do
-    typeResult <- Tls.recvBytes conn 1
-    case typeResult of
-      Err _ -> pure (Err "readMessage: failed to read type byte")
-      Ok typeBuf ->
-        case Bytes.toList typeBuf of
-          Cons typeTag _ ->
-            do
-              lenResult <- Tls.recvBytes conn 4
-              case lenResult of
-                Err _ -> pure (Err "readMessage: failed to read length")
-                Ok lenBuf ->
-                  case Bytes.unpackInt32BE lenBuf of
-                    Err _ -> pure (Err "readMessage: invalid length")
-                    Ok len ->
-                      readMessagePayload conn typeTag (Int.sub len 4)
-          Nil -> pure (Err "readMessage: empty type read")
+  Task
+    ( do
+        typeResult <- Tls.recvBytes conn 1
+        case typeResult of
+          Err _ -> IO.pure (Err "readMessage: failed to read type byte")
+          Ok typeBuf ->
+            case Bytes.toList typeBuf of
+              Cons typeTag _ ->
+                do
+                  lenResult <- Tls.recvBytes conn 4
+                  case lenResult of
+                    Err _ -> IO.pure (Err "readMessage: failed to read length")
+                    Ok lenBuf ->
+                      case Bytes.unpackInt32BE lenBuf of
+                        Err _ -> IO.pure (Err "readMessage: invalid length")
+                        Ok len ->
+                          readMessagePayloadIO conn typeTag (Int.sub len 4)
+              Nil -> IO.pure (Err "readMessage: empty type read")
+    )
 
-readMessagePayload : TlsConn -> Int -> Int -> IO (Result String BackendMessage)
-readMessagePayload conn typeTag payloadLen =
+readMessagePayloadIO : TlsConn -> Int -> Int -> IO (Result String BackendMessage)
+readMessagePayloadIO conn typeTag payloadLen =
   case Int.lte payloadLen 0 of
-    True -> pure (decodeMessage typeTag Bytes.empty)
+    True -> IO.pure (decodeMessage typeTag Bytes.empty)
     False ->
       do
         payloadResult <- Tls.recvBytes conn payloadLen
         case payloadResult of
-          Err _ -> pure (Err "readMessage: failed to read payload")
-          Ok payload -> pure (decodeMessage typeTag payload)
+          Err _ -> IO.pure (Err "readMessage: failed to read payload")
+          Ok payload -> IO.pure (decodeMessage typeTag payload)
 
 -- Helpers
 
