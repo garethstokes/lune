@@ -7,7 +7,8 @@ module Lune.Task exposing (
   then,
   mapError,
   onError,
-  attempt
+  attempt,
+  result
 )
 
 {-| `Task e a` is the primary user-facing effect in Lune.
@@ -90,3 +91,9 @@ attempt : Task e a -> IO (Result e a)
 attempt task =
   case task of
     Task io -> io
+
+-- | Convert a Task's success/failure into a Result value.
+-- The returned Task never fails (error type is unconstrained).
+result : Task e a -> Task x (Result e a)
+result task =
+  onError (map Ok task) (\e -> succeed (Err e))
