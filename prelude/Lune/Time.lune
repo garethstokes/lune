@@ -33,6 +33,7 @@ which converts PostgreSQL timestamp strings to/from Timestamp values.
 -}
 
 import Lune.Prelude exposing (Bool(..), Int, Result(..), Task(..))
+import Lune.IO as IO
 import Lune.Int as Int
 
 -- =============================================================================
@@ -49,7 +50,9 @@ type Timestamp = Timestamp Int
 -- | Get the current time
 now : Task e Timestamp
 now =
-  Task (prim_ioBind prim_timeNowMicros (\micros -> prim_ioPure (Ok (Timestamp micros))))
+  Task <|
+    IO.andThen prim_timeNowMicros <|
+      \micros -> IO.pure (Ok (Timestamp micros))
 
 -- | Create a timestamp from microseconds since epoch
 fromMicros : Int -> Timestamp
