@@ -33,6 +33,7 @@ module Nova.Core exposing (
 import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Pair(..))
 import Lune.Int as Int
 import Lune.String as Str
+import Lune.IO as IO
 
 --------------------------------------------------------------------------------
 -- Collections (minimal, deterministic)
@@ -252,7 +253,7 @@ callProvider :
 callProvider registry cfg provider model prompt =
   case dictGet eqProvider provider registry of
     Nothing ->
-      prim_ioPure (Err (ProviderError (Str.append "Unknown provider: " (providerId provider))))
+      IO.pure (Err (ProviderError (Str.append "Unknown provider: " (providerId provider))))
 
     Just impl ->
       impl.call cfg model prompt
@@ -292,20 +293,20 @@ callOpenRouter cfg _ _ =
   let settings = getSettings openrouter cfg in
   case settings.apiKey of
     Nothing ->
-      prim_ioPure (Err Unauthorized)
+      IO.pure (Err Unauthorized)
 
     Just _ ->
-      prim_ioPure (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
+      IO.pure (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
 
 callOllama : ProviderConfig -> String -> String -> IO (Result Error Response)
 callOllama cfg modelId prompt =
   let settings = getSettings ollama cfg in
   case Str.startsWith "mock://" settings.baseUrl of
     True ->
-      prim_ioPure (mockOllama modelId prompt)
+      IO.pure (mockOllama modelId prompt)
 
     False ->
-      prim_ioPure (Err (ProviderError "Ollama: HTTP client not implemented (v2)."))
+      IO.pure (Err (ProviderError "Ollama: HTTP client not implemented (v2)."))
 
 mockOllama : String -> String -> Result Error Response
 mockOllama modelId prompt =
