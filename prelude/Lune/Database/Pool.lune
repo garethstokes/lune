@@ -34,13 +34,15 @@ Pool.destroyPool pool
 import Lune.Prelude exposing (IO, Result(..), Unit, List(..), Int, Bool(..), Monad(..))
 import Lune.Atomic as Atomic exposing (Atomic, Shared)
 import Lune.Int as Int
+import Lune.Task as Task exposing (Task)
+import Lune.IO as LuneIO
 
 -- | Operations required for managing connections
 -- `open` creates a new connection
 -- `close` closes a connection
 type alias ConnectionOps conn err =
-  { open : Unit -> IO (Result err conn)
-  , close : conn -> IO (Result err Unit)
+  { open : Unit -> Task err conn
+  , close : conn -> Task err Unit
   }
 
 -- | Generic connection pool
@@ -82,35 +84,43 @@ destroyPool pool =
       )
     closeAll pool.ops.close conns
 
-closeAll : (conn -> IO (Result err Unit)) -> List conn -> IO Unit
+closeAll : (conn -> Task err Unit) -> List conn -> IO Unit
 closeAll closeFn conns =
   case conns of
-    Nil -> pure Unit
+    Nil -> LuneIO.pure Unit
     Cons c rest ->
       do
-        _ <- closeFn c
+        _ <- Task.attempt (closeFn c)
         closeAll closeFn rest
 
 -- | Use a connection from the pool, automatically releasing it when done
 -- If an error occurs during the action, the connection is still returned to the pool.
-withConnection : Pool conn err -> (conn -> IO (Result err a)) -> IO (Result err a)
+withConnection : Pool conn err -> (conn -> Task err a) -> Task err a
 withConnection pool action =
-  do
-    acquireResult <- acquire pool
-    case acquireResult of
-      Err e -> pure (Err e)
-      Ok conn ->
-        do
-          result <- action conn
-          release pool conn
-          pure result
+  Task
+    ( do
+        acquireResultIO <- Task.attempt (acquire pool)
+        case acquireResultIO of
+          Err e -> LuneIO.pure (Err e)
+          Ok conn ->
+            do
+              resultIO <- Task.attempt (action conn)
+              _ <- Task.attempt (releaseTask pool conn)
+              LuneIO.pure resultIO
+    )
+
+releaseTask : Pool conn err -> conn -> Task x Unit
+releaseTask pool conn =
+  Task.fromIO (release pool conn)
 
 -- Internal: acquire a connection from the pool
-acquire : Pool conn err -> IO (Result err conn)
+acquire : Pool conn err -> Task err conn
 acquire pool =
-  do
-    outcome <- Atomic.commit (tryAcquire pool)
-    handleAcquireOutcome pool outcome
+  Task
+    ( do
+        outcome <- Atomic.commit (tryAcquire pool)
+        Task.attempt (handleAcquireOutcome pool outcome)
+    )
 
 -- STM transaction: try to take an idle connection or reserve a slot for a new one
 -- Returns: Ok (Just conn) if we got an idle connection
@@ -143,27 +153,27 @@ tryAcquire pool =
                   False ->
                     Atomic.wait
 
-handleAcquireOutcome : Pool conn err -> Maybe conn -> IO (Result err conn)
+handleAcquireOutcome : Pool conn err -> Maybe conn -> Task err conn
 handleAcquireOutcome pool outcome =
   case outcome of
-    Just conn -> pure (Ok conn)
+    Just conn -> Task.succeed conn
     Nothing -> openNewConnection pool
 
 -- Internal: open a new connection using the pool's ops
-openNewConnection : Pool conn err -> IO (Result err conn)
+openNewConnection : Pool conn err -> Task err conn
 openNewConnection pool =
-  do
-    connResult <- pool.ops.open Unit
-    case connResult of
-      Err e ->
-        do
-          Atomic.commit
-            (do
-              used <- Atomic.read pool.inUse
-              Atomic.write pool.inUse (Int.sub used 1)
-            )
-          pure (Err e)
-      Ok conn -> pure (Ok conn)
+  Task.onError (pool.ops.open Unit)
+    (\e ->
+      Task
+        ( do
+            Atomic.commit
+              (do
+                used <- Atomic.read pool.inUse
+                Atomic.write pool.inUse (Int.sub used 1)
+              )
+            LuneIO.pure (Err e)
+        )
+    )
 
 -- Internal: release a connection back to the pool
 release : Pool conn err -> conn -> IO Unit
