@@ -16,6 +16,7 @@ not implemented here; the compiler/runtime provide the `prim_*` hooks.
 -}
 
 import Lune.Prelude exposing (Task(..), Result(..), Unit)
+import Lune.IO as IO
 
 -- Internal runtime types (not part of the standard library surface).
 type STM a = STM#
@@ -26,7 +27,7 @@ type alias Shared a = TVar a
 
 commit : Atomic a -> Task e a
 commit ma =
-  Task (prim_ioBind (prim_atomically ma) (\a -> prim_ioPure (Ok a)))
+  Task (IO.andThen (prim_atomically ma) (\a -> IO.pure (Ok a)))
 
 new : a -> Atomic (Shared a)
 new = prim_newTVar
