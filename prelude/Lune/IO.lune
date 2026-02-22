@@ -28,19 +28,19 @@ andThen io f =
 
 println : String -> Task e Unit
 println s =
-  Task (prim_ioBind (prim_putStrLn s) (\u -> prim_ioPure (Ok u)))
+  Task (IO.andThen (prim_putStrLn s) (\u -> IO.pure (Ok u)))
 
 readLine : Task e String
 readLine =
-  Task (prim_ioBind prim_readLine (\s -> prim_ioPure (Ok s)))
+  Task (IO.andThen prim_readLine (\s -> IO.pure (Ok s)))
 
 readInt : Task e Int
 readInt =
-  Task (prim_ioBind prim_readInt (\n -> prim_ioPure (Ok n)))
+  Task (IO.andThen prim_readInt (\n -> IO.pure (Ok n)))
 
 sleepMs : Int -> Task e Unit
 sleepMs ms =
-  Task (prim_ioBind (prim_sleepMs ms) (\u -> prim_ioPure (Ok u)))
+  Task (IO.andThen (prim_sleepMs ms) (\u -> IO.pure (Ok u)))
 
 readFile : String -> Task Error String
 readFile path =
