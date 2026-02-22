@@ -11,6 +11,7 @@ A fiber can be spawned from a `Task e a`. Awaiting a fiber yields the same `Task
 result (short-circuiting on `Err`).
 -}
 
+import Lune.IO as IO
 import Lune.Prelude exposing (Task(..), Result(..), Unit)
 
 -- Internal runtime type (not part of the standard library surface).
@@ -20,7 +21,7 @@ spawn : Task e a -> Task e2 (Fiber (Result e a))
 spawn task =
   case task of
     Task io ->
-      Task (prim_ioBind (prim_spawn io) (\fib -> prim_ioPure (Ok fib)))
+      Task (IO.andThen (prim_spawn io) (\fib -> IO.pure (Ok fib)))
 
 await : Fiber (Result e a) -> Task e a
 await fib =
@@ -28,4 +29,4 @@ await fib =
 
 yield : Task e Unit
 yield =
-  Task (prim_ioBind prim_yield (\u -> prim_ioPure (Ok u)))
+  Task (IO.andThen prim_yield (\u -> IO.pure (Ok u)))
