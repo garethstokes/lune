@@ -1,0 +1,10 @@
+module Test exposing (main)
+main =
+  do
+    r <-
+      executeTool
+        client
+        runtimeAllow
+        addSpec
+      |> toResult
+    Task.succeed unit

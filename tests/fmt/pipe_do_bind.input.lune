@@ -1,0 +1,5 @@
+module Test exposing (main)
+main=
+do
+  r<-toResult (executeTool client runtimeAllow addSpec)
+  Task.succeed unit
