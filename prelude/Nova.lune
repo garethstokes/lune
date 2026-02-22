@@ -68,6 +68,7 @@ Internals are layered into:
 -}
 
 import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Unit, unit, Task(..), Applicative(..), Monad(..))
+import Lune.IO as IO
 import Lune.Task as Task
 import Lune.Int as Int
 import Lune.String as Str
@@ -408,7 +409,7 @@ next stream =
 
 streamFromList : List a -> Stream a
 streamFromList xs =
-  Stream (prim_ioPure (Ok (stepFromList xs)))
+  Stream (IO.pure (Ok (stepFromList xs)))
 
 stepFromList : List a -> StreamStep a
 stepFromList xs =
@@ -465,13 +466,13 @@ showStreamResult showE showA r =
 askStream : Client -> String -> Stream NovaEvent
 askStream client prompt =
   Stream
-    ( prim_ioBind (Task.attempt (askRaw client prompt)) (\r ->
+    ( IO.andThen (Task.attempt (askRaw client prompt)) (\r ->
         case r of
           Err e ->
-            prim_ioPure (Err e)
+            IO.pure (Err e)
 
           Ok response ->
-            prim_ioPure (Ok (stepFromList (responseToEvents response)))
+            IO.pure (Ok (stepFromList (responseToEvents response)))
       )
     )
 
