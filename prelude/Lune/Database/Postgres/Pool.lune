@@ -29,6 +29,7 @@ Pool.destroyPool pool
 -}
 
 import Lune.Prelude exposing (IO, Result, Unit, Int, String, Maybe(..), Monad(..))
+import Lune.Task as Task exposing (Task)
 import Lune.Database.Pool as GenericPool
 import Lune.Database.Postgres.Connection as Conn exposing (PgConn)
 import Lune.Database.Postgres.Protocol exposing (PgError)
@@ -59,11 +60,11 @@ destroyPool : Pool -> IO Unit
 destroyPool = GenericPool.destroyPool
 
 -- | Use a connection from the pool, automatically releasing it when done
-withConnection : Pool -> (PgConn -> IO (Result PgError a)) -> IO (Result PgError a)
+withConnection : Pool -> (PgConn -> Task PgError a) -> Task PgError a
 withConnection = GenericPool.withConnection
 
 -- Internal: create connection from config
-connectWithConfig : PoolConfig -> IO (Result PgError PgConn)
+connectWithConfig : PoolConfig -> Task PgError PgConn
 connectWithConfig config =
   case config.password of
     Nothing -> Conn.connect config.host config.port config.database config.user
