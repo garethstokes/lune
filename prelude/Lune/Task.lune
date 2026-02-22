@@ -18,28 +18,29 @@ or succeed with a value `a`.
 -}
 
 import Lune.Prelude exposing (Task(..), Result(..))
+import Lune.IO as IO
 
 succeed : a -> Task e a
 succeed a =
-  Task (prim_ioPure (Ok a))
+  Task (IO.pure (Ok a))
 
 fail : e -> Task e a
 fail e =
-  Task (prim_ioPure (Err e))
+  Task (IO.pure (Err e))
 
 fromIO : IO a -> Task e a
 fromIO io =
-  Task (prim_ioBind io (\a -> prim_ioPure (Ok a)))
+  Task (IO.andThen io (\a -> IO.pure (Ok a)))
 
 map : (a -> b) -> Task e a -> Task e b
 map f task =
   case task of
     Task io ->
       Task
-        ( prim_ioBind io (\r ->
+        ( IO.andThen io (\r ->
             case r of
-              Err e -> prim_ioPure (Err e)
-              Ok a -> prim_ioPure (Ok (f a))
+              Err e -> IO.pure (Err e)
+              Ok a -> IO.pure (Ok (f a))
           )
         )
 
@@ -48,9 +49,9 @@ andThen task k =
   case task of
     Task io ->
       Task
-        ( prim_ioBind io (\r ->
+        ( IO.andThen io (\r ->
             case r of
-              Err e -> prim_ioPure (Err e)
+              Err e -> IO.pure (Err e)
               Ok a ->
                 case k a of
                   Task io2 -> io2
@@ -66,10 +67,10 @@ mapError f task =
   case task of
     Task io ->
       Task
-        ( prim_ioBind io (\r ->
+        ( IO.andThen io (\r ->
             case r of
-              Err e -> prim_ioPure (Err (f e))
-              Ok a -> prim_ioPure (Ok a)
+              Err e -> IO.pure (Err (f e))
+              Ok a -> IO.pure (Ok a)
           )
         )
 
@@ -78,9 +79,9 @@ onError task handler =
   case task of
     Task io ->
       Task
-        ( prim_ioBind io (\r ->
+        ( IO.andThen io (\r ->
             case r of
-              Ok a -> prim_ioPure (Ok a)
+              Ok a -> IO.pure (Ok a)
               Err e ->
                 case handler e of
                   Task io2 -> io2
