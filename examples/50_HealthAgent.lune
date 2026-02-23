@@ -138,6 +138,56 @@ encodeHealthReport r =
     , { key = "services", value = E.list encodeServiceStatus r.services }
     ]
 
+-- JSON decoders for LLM response
+
+decodeSeverity : D.Decoder Severity
+decodeSeverity =
+  D.andThen
+    (\s ->
+      case s of
+        "critical" -> D.succeed Critical
+        "warning" -> D.succeed Warning
+        "info" -> D.succeed Info
+        _ -> D.fail (Str.append "Unknown severity: " s)
+    )
+    D.string
+
+decodeIssue : D.Decoder Issue
+decodeIssue =
+  D.map3
+    (\sev sum det -> { severity = sev, summary = sum, details = det })
+    (D.field "severity" decodeSeverity)
+    (D.field "summary" D.string)
+    (D.field "details" D.string)
+
+decodeProposedAction : D.Decoder ProposedAction
+decodeProposedAction =
+  D.andThen
+    (\exp ->
+      D.map5
+        (\id iss act cmd risk ->
+          { id = id
+          , issue = iss
+          , action = act
+          , command = cmd
+          , risk = risk
+          , expectedOutcome = exp
+          })
+        (D.field "id" D.int)
+        (D.field "issue" D.string)
+        (D.field "action" D.string)
+        (D.field "command" D.string)
+        (D.field "risk" D.string)
+    )
+    (D.field "expectedOutcome" D.string)
+
+decodeHealthAnalysis : D.Decoder HealthAnalysis
+decodeHealthAnalysis =
+  D.map2
+    (\iss acts -> { issues = iss, actions = acts })
+    (D.field "issues" (D.list decodeIssue))
+    (D.field "actions" (D.list decodeProposedAction))
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
