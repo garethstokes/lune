@@ -59,6 +59,33 @@ type alias HealthReport =
   , services : List ServiceStatus
   }
 
+-- LLM analysis response types
+
+type Severity =
+  Critical
+  | Warning
+  | Info
+
+type alias Issue =
+  { severity : Severity
+  , summary : String
+  , details : String
+  }
+
+type alias ProposedAction =
+  { id : Int
+  , issue : String
+  , action : String
+  , command : String
+  , risk : String
+  , expectedOutcome : String
+  }
+
+type alias HealthAnalysis =
+  { issues : List Issue
+  , actions : List ProposedAction
+  }
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
