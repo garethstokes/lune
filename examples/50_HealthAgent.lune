@@ -401,6 +401,65 @@ buildAnalysisPrompt report =
     , RawJson.stringify (encodeHealthReport report)
     ]
 
+-- Approval loop
+
+type ApprovalResult =
+  Approved
+  | Skipped
+  | Quit
+
+promptForApproval : Task e ApprovalResult
+promptForApproval =
+  do
+    IO.println "Execute this action? [y/n/q] "
+    input <- IO.readLine
+    case input of
+      "y" -> Task.succeed Approved
+      "n" -> Task.succeed Skipped
+      "q" -> Task.succeed Quit
+      _ ->
+        do
+          IO.println "Please enter y, n, or q"
+          promptForApproval
+
+mockExecuteCommand : String -> Task e String
+mockExecuteCommand cmd =
+  Task.succeed (Str.join "" ["[MOCK] Would execute: ", cmd])
+
+processActions : Int -> List ProposedAction -> Task e Unit
+processActions total actions =
+  processActionsGo 1 total actions
+
+processActionsGo : Int -> Int -> List ProposedAction -> Task e Unit
+processActionsGo current total actions =
+  case actions of
+    [] ->
+      do
+        IO.println "All actions processed."
+        Task.succeed unit
+
+    Cons act rest ->
+      do
+        IO.println (showAction current total act)
+        approval <- promptForApproval
+        case approval of
+          Quit ->
+            do
+              IO.println "Quitting. Remaining actions skipped."
+              Task.succeed unit
+
+          Skipped ->
+            do
+              IO.println "Action skipped."
+              processActionsGo (Int.add current 1) total rest
+
+          Approved ->
+            do
+              result <- mockExecuteCommand act.command
+              IO.println result
+              IO.println "Action completed."
+              processActionsGo (Int.add current 1) total rest
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
