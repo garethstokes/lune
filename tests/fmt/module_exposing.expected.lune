@@ -37,6 +37,7 @@ module FmtExposing exposing (
   , ai
   , aj
 )
+
 import Foo.Bar exposing (
   x
   , y
@@ -70,5 +71,4 @@ import Foo.Bar exposing (
 main = 0
 
 a = 1
-
 b = 2

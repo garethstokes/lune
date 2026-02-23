@@ -1,4 +1,5 @@
 module FmtRecords exposing (main)
+
 type alias Point =
   { x : Int, y : Int, z : Int, w : Int, u : Int, v : Int, t : Int }
 

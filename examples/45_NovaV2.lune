@@ -128,16 +128,25 @@ main =
         mockProvider
         mockProviderImpl
         Core.defaultProviderRegistry
-    let client = withHooks hooks (newClient providers mockProvider "echo")
+    let client =
+      newClient
+        providers
+        mockProvider
+        "echo"
+      |> withHooks hooks
+
     IO.println "ask:"
     a <- Task.fromIO (Task.attempt (ask client "Hello from Nova v2"))
     IO.println <| Nova.showAskResult a
+
     IO.println "json:"
     j <- Task.fromIO (Task.attempt (json (withModel "json" client) "ignored"))
     IO.println <| Nova.showJsonResult j
+
     IO.println "tool:"
     t <- Task.fromIO (Task.attempt (tool (withModel "tool" client) "ignored"))
     IO.println <| Nova.showJsonResult t
+
     IO.println "askStream:"
     let stream =
       askStream
@@ -155,15 +164,29 @@ main =
           s2 <- Task.fromIO <| next rest
           IO.println <| Nova.showStreamResult Nova.showError Nova.showEvent s2
           Task.succeed unit
+
     IO.println "executeTool_allow:"
     r1 <-
-      Task.result
-        (executeTool client runtimeAllow addSpec encodeAddArgs Encode.int runAdd
-          { a = 1, b = 2 })
+      executeTool
+        client
+        runtimeAllow
+        addSpec
+        encodeAddArgs
+        Encode.int
+        runAdd
+        { a = 1, b = 2 }
+      |> Task.result
     IO.println <| Nova.showToolExecResult r1
+
     IO.println "executeTool_deny:"
     r2 <-
-      Task.result
-        (executeTool client runtimeDeny addSpec encodeAddArgs Encode.int runAdd
-          { a = 1, b = 2 })
+      executeTool
+        client
+        runtimeDeny
+        addSpec
+        encodeAddArgs
+        Encode.int
+        runAdd
+        { a = 1, b = 2 }
+      |> Task.result
     IO.println <| Nova.showToolExecResult r2

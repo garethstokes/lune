@@ -1,4 +1,4 @@
-module FmtTypeAppParens exposing (x)
+module FmtTypeAppParens exposing (   x   )
 
 x : IO (Result Error Int)
 x = 1

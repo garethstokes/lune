@@ -7,6 +7,7 @@ module Lune.Fmt.Doc
   , line
   , lineBreak
   , hardLine
+  , hardLineNoIndent
   , space
   , softSpace
   , (<+>)
@@ -32,6 +33,7 @@ data Doc
   | Line
   | LineBreak
   | HardLine
+  | HardLineNoIndent
   | SoftSpace
   | Concat Doc Doc
   | Nest Int Doc
@@ -59,6 +61,11 @@ lineBreak = LineBreak
 
 hardLine :: Doc
 hardLine = HardLine
+
+-- | A hard line break that does not emit indentation after the newline.
+-- Useful for producing truly empty blank lines inside nested blocks.
+hardLineNoIndent :: Doc
+hardLineNoIndent = HardLineNoIndent
 
 space :: Doc
 space = Text " "
@@ -121,6 +128,8 @@ render width doc =
           B.singleton '\n' <> indent i <> best i zs
         HardLine ->
           B.singleton '\n' <> indent i <> best i zs
+        HardLineNoIndent ->
+          B.singleton '\n' <> best 0 zs
         SoftSpace ->
           B.singleton ' ' <> best (col + 1) zs
         Concat a b ->
@@ -144,6 +153,7 @@ render width doc =
         Line -> Text " "
         LineBreak -> Empty
         HardLine -> HardLine
+        HardLineNoIndent -> HardLineNoIndent
         SoftSpace -> Empty
         Concat a b -> Concat (flatten a) (flatten b)
         Nest j a -> Nest j (flatten a)
@@ -164,6 +174,8 @@ render width doc =
       True  -- Flattened LineBreak is empty
     fitsFlat _ (_, HardLine) =
       True  -- HardLine forces a break
+    fitsFlat _ (_, HardLineNoIndent) =
+      True  -- Also forces a break
     fitsFlat w (_, SoftSpace) =
       w >= 1
     fitsFlat w (i, Concat a b) =
@@ -182,6 +194,7 @@ render width doc =
         Line -> 1  -- becomes space
         LineBreak -> 0  -- becomes empty
         HardLine -> 0  -- forces break, width doesn't matter
+        HardLineNoIndent -> 0
         SoftSpace -> 0  -- becomes empty when flattened
         Concat a b -> docWidth a + docWidth b
         Nest _ a -> docWidth a
@@ -203,6 +216,8 @@ render width doc =
         LineBreak ->
           True
         HardLine ->
+          True
+        HardLineNoIndent ->
           True
         SoftSpace ->
           fits (w - 1) zs

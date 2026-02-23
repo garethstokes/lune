@@ -6,8 +6,12 @@ module Lune.Fmt.Format
   , formatModuleHeader
   , formatImport
   , formatDecl
+  , formatDeclsWithLayouts
+  , DoLayout (..)
+  , DoItem (..)
   ) where
 
+import Control.Monad.Trans.State.Strict (State, evalState, get, put)
 import Data.List (intersperse)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -18,6 +22,7 @@ import Lune.Fmt.Doc
   , braces
   , group
   , hardLine
+  , hardLineNoIndent
   , hsep
   , line
   , lineBreak
@@ -31,6 +36,22 @@ import Lune.Fmt.Doc
   , vsep
   , (<+>)
   )
+
+data DoItem
+  = DoSlot
+  | DoBlank
+  | DoComment !Text
+  deriving (Eq, Show)
+
+data DoLayout = DoLayout
+  { doLayoutItems :: ![DoItem]
+  , doLayoutCommentOffsets :: ![Int]
+  }
+  deriving (Eq, Show)
+
+type LayoutStream = [Maybe DoLayout]
+
+type FmtM a = State LayoutStream a
 
 indentSize :: Int
 indentSize = 2
@@ -129,30 +150,38 @@ formatDeclBlocks decls =
 
 formatDecl :: S.Decl -> Doc
 formatDecl decl =
+  evalState (formatDeclM decl) []
+
+formatDeclsWithLayouts :: [Maybe DoLayout] -> [S.Decl] -> [Doc]
+formatDeclsWithLayouts layouts decls =
+  evalState (mapM formatDeclM decls) layouts
+
+formatDeclM :: S.Decl -> FmtM Doc
+formatDeclM decl =
   case decl of
     S.DeclTypeSig name qualTy ->
-      group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy))
+      pure (group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy)))
 
     S.DeclValue name args body ->
-      formatValueDecl name args body
+      formatValueDeclM name args body
 
     S.DeclType typeName vars ctors ->
-      formatTypeDecl typeName vars ctors
+      pure (formatTypeDecl typeName vars ctors)
 
     S.DeclTypeAlias anns name vars bodyTy ->
-      formatTypeAliasDecl anns name vars bodyTy
+      pure (formatTypeAliasDecl anns name vars bodyTy)
 
     S.DeclNewtype name vars ctorName ctorTy ->
-      formatNewtypeDecl name vars ctorName ctorTy
+      pure (formatNewtypeDecl name vars ctorName ctorTy)
 
     S.DeclClass name params supers methods ->
-      formatClassDecl name params supers methods
+      pure (formatClassDecl name params supers methods)
 
     S.DeclInstance cls headTy methods ->
-      formatInstanceDecl cls headTy methods
+      formatInstanceDeclM cls headTy methods
 
     S.DeclForeignImport conv symbolName name qualTy ->
-      formatForeignImport conv symbolName name qualTy
+      pure (formatForeignImport conv symbolName name qualTy)
 
 formatForeignImport :: S.ForeignConvention -> Text -> Text -> S.QualType -> Doc
 formatForeignImport conv symbolName name qualTy =
@@ -231,20 +260,36 @@ formatClassMethodSig (S.ClassMethodSig name qualTy) =
 
 formatInstanceDecl :: Text -> S.Type -> [S.InstanceMethodDef] -> Doc
 formatInstanceDecl cls headTy methods =
+  evalState (formatInstanceDeclM cls headTy methods) []
+
+formatInstanceDeclM :: Text -> S.Type -> [S.InstanceMethodDef] -> FmtM Doc
+formatInstanceDeclM cls headTy methods = do
   let header =
         text "instance" <+> text cls <+> formatType PrecTop headTy <+> text "where"
-      methodsDoc =
-        case methods of
-          [] -> mempty
-          _ -> nest indentSize (hardLine <> vsep (map formatInstanceMethodDef methods))
-   in header <> methodsDoc
+  methodsDoc <-
+    case methods of
+      [] ->
+        pure mempty
+      _ -> do
+        docs <- mapM formatInstanceMethodDefM methods
+        pure (nest indentSize (hardLine <> vsep docs))
+  pure (header <> methodsDoc)
 
 formatInstanceMethodDef :: S.InstanceMethodDef -> Doc
-formatInstanceMethodDef (S.InstanceMethodDef name expr) =
-  group (text name <+> text "=" <> nest indentSize (rhsSepFor expr <> formatExpr PrecExprTop expr))
+formatInstanceMethodDef def =
+  evalState (formatInstanceMethodDefM def) []
+
+formatInstanceMethodDefM :: S.InstanceMethodDef -> FmtM Doc
+formatInstanceMethodDefM (S.InstanceMethodDef name expr) = do
+  exprDoc <- formatExprM PrecExprTop expr
+  pure (group (text name <+> text "=" <> nest indentSize (rhsSepFor expr <> exprDoc)))
 
 formatValueDecl :: Text -> [S.Pattern] -> S.Expr -> Doc
 formatValueDecl name args body =
+  evalState (formatValueDeclM name args body) []
+
+formatValueDeclM :: Text -> [S.Pattern] -> S.Expr -> FmtM Doc
+formatValueDeclM name args body =
   let lhs =
         case args of
           [] ->
@@ -254,7 +299,9 @@ formatValueDecl name args body =
               text name
                 <+> formatPattern a
                 <> nest indentSize (mconcat (map (\p -> line <> formatPattern p) rest))
-   in group (lhs <+> text "=" <> nest indentSize (rhsSepFor body <> formatExpr PrecExprTop body))
+   in do
+        bodyDoc <- formatExprM PrecExprTop body
+        pure (group (lhs <+> text "=" <> nest indentSize (rhsSepFor body <> bodyDoc)))
 
 -- ===== Types / constraints =====
 
@@ -371,68 +418,87 @@ data ExprPrec
 
 formatExpr :: ExprPrec -> S.Expr -> Doc
 formatExpr prec expr =
+  evalState (formatExprM prec expr) []
+
+popDoLayout :: FmtM (Maybe DoLayout)
+popDoLayout = do
+  st <- get
+  case st of
+    [] -> pure Nothing
+    x : xs -> do
+      put xs
+      pure x
+
+formatExprM :: ExprPrec -> S.Expr -> FmtM Doc
+formatExprM prec expr =
   case listExpr expr of
     Just xs ->
-      formatList (map (formatExpr PrecExprTop) xs)
+      formatList <$> mapM (formatExprM PrecExprTop) xs
     Nothing ->
       case tupleExpr expr of
         Just xs ->
-          formatTuple (map (formatExpr PrecExprTop) xs)
+          formatTuple <$> mapM (formatExprM PrecExprTop) xs
         Nothing ->
           case expr of
             S.Var name ->
-              formatVar name
+              pure (formatVar name)
 
             S.StringLit s ->
-              formatStringLiteral s
+              pure (formatStringLiteral s)
 
             S.TemplateLit flavor parts ->
-              formatTemplateLit flavor parts
+              formatTemplateLitM flavor parts
 
             S.IntLit n ->
-              text (T.pack (show n))
+              pure (text (T.pack (show n)))
 
             S.FloatLit f ->
-              text (T.pack (show f))
+              pure (text (T.pack (show f)))
 
             S.CharLit c ->
-              formatCharLiteral c
+              pure (formatCharLiteral c)
 
             S.RecordLiteral fields ->
-              formatRecordLiteral fields
+              formatRecordLiteralM fields
 
             S.RecordUpdate base fields ->
-              formatRecordUpdate base fields
+              formatRecordUpdateM base fields
 
             S.FieldAccess e field ->
-              formatExpr PrecExprAtom e <> text "." <> text field
+              (\eDoc -> eDoc <> text "." <> text field) <$> formatExprM PrecExprAtom e
 
             S.App _ _ ->
-              formatAppLike prec expr
+              formatAppLikeM prec expr
 
             S.Lam args body ->
               let argsDoc =
                     case args of
                       [] -> mempty
                       _ -> hsep (map formatPattern args)
-                  doc =
-                    group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> formatExpr PrecExprTop body))
-               in parenthesizeIf (prec /= PrecExprTop) doc
+               in do
+                    bodyDoc <- formatExprM PrecExprTop body
+                    let doc =
+                          group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> bodyDoc))
+                    pure (parenthesizeIf (prec /= PrecExprTop) doc)
 
             S.LetIn _ _ _ ->
               if prec == PrecExprTop
-                then formatLetBlock expr
-                else parensBlock (formatLetBlock expr)
+                then formatLetBlockM expr
+                else parensBlock <$> formatLetBlockM expr
 
             S.Case scrut alts ->
               if prec == PrecExprTop
-                then formatCase scrut alts
-                else parensBlock (formatCase scrut alts)
+                then formatCaseM scrut alts
+                else parensBlock <$> formatCaseM scrut alts
 
             S.DoBlock stmts ->
               if prec == PrecExprTop
-                then formatDoBlock stmts
-                else parensBlock (formatDoBlock stmts)
+                then do
+                  layout <- popDoLayout
+                  formatDoBlockM layout stmts
+                else do
+                  layout <- popDoLayout
+                  parensBlock <$> formatDoBlockM layout stmts
 
 isBlockExpr :: S.Expr -> Bool
 isBlockExpr e =
@@ -503,48 +569,59 @@ formatCharLiteral c =
 
 formatTemplateLit :: S.TemplateFlavor -> [S.TemplatePart] -> Doc
 formatTemplateLit flavor parts =
+  evalState (formatTemplateLitM flavor parts) []
+
+formatTemplateLitM :: S.TemplateFlavor -> [S.TemplatePart] -> FmtM Doc
+formatTemplateLitM flavor parts =
   case flavor of
     S.TemplateInline ->
-      formatInlineTemplate parts
+      formatInlineTemplateM parts
     S.TemplateBlock ->
-      formatBlockTemplate parts
+      formatBlockTemplateM parts
 
-formatInlineTemplate :: [S.TemplatePart] -> Doc
-formatInlineTemplate parts =
-  text "\"" <> text (renderInlineTemplateParts parts) <> text "\""
+formatInlineTemplateM :: [S.TemplatePart] -> FmtM Doc
+formatInlineTemplateM parts = do
+  rendered <- renderInlineTemplatePartsM parts
+  pure (text "\"" <> text rendered <> text "\"")
 
-formatBlockTemplate :: [S.TemplatePart] -> Doc
-formatBlockTemplate parts =
+formatBlockTemplateM :: [S.TemplatePart] -> FmtM Doc
+formatBlockTemplateM parts = do
   -- Canonical form:
   -- ''\n
   --   <content>\n
   -- ''
-  let content = renderBlockTemplateParts parts
-      ls = T.splitOn "\n" content
+  content <- renderBlockTemplatePartsM parts
+  let ls = T.splitOn "\n" content
       bodyLineDocs = map text ls
       bodyDoc = mconcat (intersperse hardLine bodyLineDocs)
-   in if T.null content
-        then text "''" <> hardLine <> text "''"
-        else text "''" <> nest indentSize (hardLine <> bodyDoc) <> hardLine <> text "''"
+  pure $
+    if T.null content
+      then text "''" <> hardLine <> text "''"
+      else text "''" <> nest indentSize (hardLine <> bodyDoc) <> hardLine <> text "''"
 
-renderInlineTemplateParts :: [S.TemplatePart] -> Text
-renderInlineTemplateParts =
-  T.concat . map renderOne
+renderInlineTemplatePartsM :: [S.TemplatePart] -> FmtM Text
+renderInlineTemplatePartsM =
+  fmap T.concat . mapM renderOne
   where
     renderOne p =
       case p of
-        S.TemplateText t -> escapeInlineTemplateText t
-        S.TemplateHole e ->
-          "${" <> renderFlatExpr e <> "}"
+        S.TemplateText t ->
+          pure (escapeInlineTemplateText t)
+        S.TemplateHole e -> do
+          rendered <- renderFlatExprM e
+          pure ("${" <> rendered <> "}")
 
-renderBlockTemplateParts :: [S.TemplatePart] -> Text
-renderBlockTemplateParts =
-  T.concat . map renderOne
+renderBlockTemplatePartsM :: [S.TemplatePart] -> FmtM Text
+renderBlockTemplatePartsM =
+  fmap T.concat . mapM renderOne
   where
     renderOne p =
       case p of
-        S.TemplateText t -> escapeBlockTemplateText t
-        S.TemplateHole e -> "${" <> renderFlatExpr e <> "}"
+        S.TemplateText t ->
+          pure (escapeBlockTemplateText t)
+        S.TemplateHole e -> do
+          rendered <- renderFlatExprM e
+          pure ("${" <> rendered <> "}")
 
 escapeInlineTemplateText :: Text -> Text
 escapeInlineTemplateText =
@@ -555,32 +632,44 @@ escapeBlockTemplateText =
   -- Only escape interpolation starts; keep newlines as-is.
   T.replace "${" "\\${"
 
-renderFlatExpr :: S.Expr -> Text
-renderFlatExpr e =
+renderFlatExprM :: S.Expr -> FmtM Text
+renderFlatExprM e = do
   -- Best-effort single-line rendering for interpolation holes.
-  render defaultWidth (group (formatExpr PrecExprTop e))
+  doc <- formatExprM PrecExprTop e
+  pure (render defaultWidth (group doc))
 
 formatRecordLiteral :: [(Text, S.Expr)] -> Doc
 formatRecordLiteral fields =
+  evalState (formatRecordLiteralM fields) []
+
+formatRecordLiteralM :: [(Text, S.Expr)] -> FmtM Doc
+formatRecordLiteralM fields =
   case fields of
-    [] -> text "{}"
+    [] ->
+      pure (text "{}")
     (f : fs)
       -- If any field has multi-line content, use hardLine for all fields
-      | any hasMultiLineContent (map snd fields) ->
-          text "{"
-            <> space
-            <> formatRecordField f
-            <> mconcat (map (\x -> hardLine <> text "," <+> formatRecordField x) fs)
-            <> hardLine
-            <> text "}"
-      | otherwise ->
-          group $
+      | any hasMultiLineContent (map snd fields) -> do
+          firstDoc <- formatRecordFieldM f
+          restDocs <- mapM formatRecordFieldM fs
+          pure $
             text "{"
               <> space
-              <> formatRecordField f
-              <> mconcat (map (\x -> lineBreak <> text "," <+> formatRecordField x) fs)
-              <> line
+              <> firstDoc
+              <> mconcat (map (\x -> hardLine <> text "," <+> x) restDocs)
+              <> hardLine
               <> text "}"
+      | otherwise -> do
+          firstDoc <- formatRecordFieldM f
+          restDocs <- mapM formatRecordFieldM fs
+          pure $
+            group $
+              text "{"
+                <> space
+                <> firstDoc
+                <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
+                <> line
+                <> text "}"
 
 -- | Check if an expression contains multi-line content (template literals, etc.)
 hasMultiLineContent :: S.Expr -> Bool
@@ -599,78 +688,102 @@ hasMultiLineContent expr =
 
 formatRecordUpdate :: S.Expr -> [(Text, S.Expr)] -> Doc
 formatRecordUpdate base fields =
+  evalState (formatRecordUpdateM base fields) []
+
+formatRecordUpdateM :: S.Expr -> [(Text, S.Expr)] -> FmtM Doc
+formatRecordUpdateM base fields =
   case fields of
-    [] ->
-      group (text "{" <+> formatExpr PrecExprTop base <+> text "}")
-    _ ->
+    [] -> do
+      baseDoc <- formatExprM PrecExprTop base
+      pure (group (text "{" <+> baseDoc <+> text "}"))
+    _ -> do
+      baseDoc <- formatExprM PrecExprTop base
       let (f : fs) = fields
-       in group $
-            text "{"
-              <> space
-              <> formatExpr PrecExprTop base
-              <> line
-              <> text "|"
-              <+> formatRecordField f
-              <> mconcat (map (\x -> lineBreak <> text "," <+> formatRecordField x) fs)
-              <> line
-              <> text "}"
+      firstDoc <- formatRecordFieldM f
+      restDocs <- mapM formatRecordFieldM fs
+      pure $
+        group $
+          text "{"
+            <> space
+            <> baseDoc
+            <> line
+            <> text "|"
+            <+> firstDoc
+            <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
+            <> line
+            <> text "}"
 
 formatRecordField :: (Text, S.Expr) -> Doc
-formatRecordField (name, expr) =
-  group (text name <+> text "=" <> nest indentSize (rhsSepFor expr <> formatExpr PrecExprTop expr))
+formatRecordField f =
+  evalState (formatRecordFieldM f) []
+
+formatRecordFieldM :: (Text, S.Expr) -> FmtM Doc
+formatRecordFieldM (name, expr) = do
+  exprDoc <- formatExprM PrecExprTop expr
+  pure (group (text name <+> text "=" <> nest indentSize (rhsSepFor expr <> exprDoc)))
 
 formatAppLike :: ExprPrec -> S.Expr -> Doc
 formatAppLike prec expr =
+  evalState (formatAppLikeM prec expr) []
+
+formatAppLikeM :: ExprPrec -> S.Expr -> FmtM Doc
+formatAppLikeM prec expr =
   case collectInfixAppend expr of
-    Just parts ->
-      let first : rest = map (formatExpr PrecExprInfix) parts
+    Just parts -> do
+      partDocs <- mapM (formatExprM PrecExprInfix) parts
+      let first : rest = partDocs
           doc =
             group
               ( first
                   <> nest indentSize
                     (mconcat (map (\x -> line <> text "<>" <+> x) rest))
               )
-       in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
+      pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
     Nothing ->
       case collectInfixBackwardPipe expr of
-        Just parts ->
-          let first : rest = map (formatExpr PrecExprInfix) parts
+        Just parts -> do
+          partDocs <- mapM (formatExprM PrecExprInfix) parts
+          let first : rest = partDocs
               doc =
                 group
                   ( first
                       <> nest indentSize
                         (mconcat (map (\x -> line <> text "<|" <+> x) rest))
                   )
-           in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
+          pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
         Nothing ->
           case collectInfixForwardPipe expr of
-            Just parts ->
-              let first : rest = map (formatExpr PrecExprInfix) parts
+            Just parts -> do
+              partDocs <- mapM (formatExprM PrecExprInfix) parts
+              let first : rest = partDocs
                   doc =
                     group
                       ( first
                           <> nest indentSize
                             (mconcat (map (\x -> line <> text "|>" <+> x) rest))
                       )
-               in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
+              pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
             Nothing ->
               let (h, args) = collectApps expr
-                  headDoc = formatExpr PrecExprApp h
-                  doc = case args of
-                    -- Special case: last argument is a record literal - use hardLine before it
-                    -- This gives: func arg1 arg2\n    { field = value }
-                    _ | not (null args) && isRecordLiteral (last args) ->
-                      let initArgs = init args
-                          lastArg = last args
-                          initDocs = map (formatExpr PrecExprAtom) initArgs
-                          lastDoc = formatExpr PrecExprAtom lastArg
-                       in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) initDocs)))
-                            <> nest indentSize (hardLine <> lastDoc)
-                    -- Normal case
-                    _ ->
-                      let argDocs = map (formatExpr PrecExprAtom) args
-                       in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
-               in parenthesizeIf (prec == PrecExprAtom) doc
+               in do
+                    headDoc <- formatExprM PrecExprApp h
+                    doc <-
+                      case args of
+                        -- Special case: last argument is a record literal - use hardLine before it
+                        -- This gives: func arg1 arg2\n    { field = value }
+                        _ | not (null args) && isRecordLiteral (last args) -> do
+                          let initArgs = init args
+                              lastArg = last args
+                          initDocs <- mapM (formatExprM PrecExprAtom) initArgs
+                          lastDoc <- formatExprM PrecExprAtom lastArg
+                          pure $
+                            group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) initDocs)))
+                              <> nest indentSize (hardLine <> lastDoc)
+                        -- Normal case
+                        _ -> do
+                          argDocs <- mapM (formatExprM PrecExprAtom) args
+                          pure (group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs))))
+                    pure (parenthesizeIf (prec == PrecExprAtom) doc)
 
 collectApps :: S.Expr -> (S.Expr, [S.Expr])
 collectApps =
@@ -762,16 +875,25 @@ hsepInfix op (x : xs) =
 
 formatLetBlock :: S.Expr -> Doc
 formatLetBlock expr =
+  evalState (formatLetBlockM expr) []
+
+formatLetBlockM :: S.Expr -> FmtM Doc
+formatLetBlockM expr = do
   let (bindings, body) = collectLetBindings expr
-      bindingDocs =
-        map
-          (\(name, rhs) -> group (text name <+> text "=" <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs)))
-          bindings
-   in text "let"
-        <> nest indentSize (hardLine <> vsep bindingDocs)
-        <> hardLine
-        <> text "in"
-        <> nest indentSize (hardLine <> formatExpr PrecExprTop body)
+  bindingDocs <-
+    mapM
+      ( \(name, rhs) -> do
+          rhsDoc <- formatExprM PrecExprTop rhs
+          pure (group (text name <+> text "=" <> nest indentSize (rhsSepFor rhs <> rhsDoc)))
+      )
+      bindings
+  bodyDoc <- formatExprM PrecExprTop body
+  pure $
+    text "let"
+      <> nest indentSize (hardLine <> vsep bindingDocs)
+      <> hardLine
+      <> text "in"
+      <> nest indentSize (hardLine <> bodyDoc)
 
 collectLetBindings :: S.Expr -> ([(Text, S.Expr)], S.Expr)
 collectLetBindings =
@@ -786,34 +908,110 @@ collectLetBindings =
 
 formatCase :: S.Expr -> [S.Alt] -> Doc
 formatCase scrut alts =
-  group
-    ( text "case"
-        <> nest indentSize (line <> formatExpr PrecExprTop scrut)
-        <> line
-        <> text "of"
-    )
-    <> nest indentSize (hardLine <> vsep (map formatAlt alts))
+  evalState (formatCaseM scrut alts) []
+
+formatCaseM :: S.Expr -> [S.Alt] -> FmtM Doc
+formatCaseM scrut alts = do
+  scrutDoc <- formatExprM PrecExprTop scrut
+  altDocs <- mapM formatAltM alts
+  pure $
+    group
+      ( text "case"
+          <> nest indentSize (line <> scrutDoc)
+          <> line
+          <> text "of"
+      )
+      <> nest indentSize (hardLine <> vsep altDocs)
 
 formatAlt :: S.Alt -> Doc
-formatAlt (S.Alt pat body) =
-  group (formatPattern pat <+> text "->")
-    <> nest indentSize (hardLine <> formatExpr PrecExprTop body)
+formatAlt alt =
+  evalState (formatAltM alt) []
+
+formatAltM :: S.Alt -> FmtM Doc
+formatAltM (S.Alt pat body) = do
+  bodyDoc <- formatExprM PrecExprTop body
+  pure $
+    group (formatPattern pat <+> text "->")
+      <> nest indentSize (hardLine <> bodyDoc)
 
 formatDoBlock :: [S.Stmt] -> Doc
 formatDoBlock stmts =
-  text "do" <> nest indentSize (hardLine <> vsep (map formatStmt stmts))
+  evalState (formatDoBlockM Nothing stmts) []
+
+formatCommentDoc :: Text -> Doc
+formatCommentDoc t =
+  let ls = T.splitOn "\n" t
+      lineDocs = map text ls
+   in mconcat (intersperse hardLine lineDocs)
+
+vsepKeepEmpty :: [Doc] -> Doc
+vsepKeepEmpty docs =
+  case docs of
+    [] -> mempty
+    d : ds -> go d ds
+  where
+    go prev rest =
+      case rest of
+        [] ->
+          prev
+        next : xs ->
+          prev <> sepForNext next <> go next xs
+
+    sepForNext next =
+      if next == mempty
+        then hardLineNoIndent
+        else hardLine
+
+doLayoutSlotCount :: DoLayout -> Int
+doLayoutSlotCount =
+  length . filter (== DoSlot) . doLayoutItems
+
+renderDoLayoutItems :: [Doc] -> [DoItem] -> [Doc]
+renderDoLayoutItems stmtDocs0 items0 =
+  go stmtDocs0 items0 []
+  where
+    go stmtDocs items acc =
+      case items of
+        [] ->
+          reverse acc <> stmtDocs
+        it : rest ->
+          case it of
+            DoSlot ->
+              case stmtDocs of
+                d : ds -> go ds rest (d : acc)
+                [] -> go [] rest acc
+            DoBlank ->
+              go stmtDocs rest (mempty : acc)
+            DoComment t ->
+              go stmtDocs rest (formatCommentDoc t : acc)
+
+formatDoBlockM :: Maybe DoLayout -> [S.Stmt] -> FmtM Doc
+formatDoBlockM maybeLayout stmts = do
+  stmtDocs <- mapM formatStmtM stmts
+  let bodyDoc =
+        case maybeLayout of
+          Just layout
+            | doLayoutSlotCount layout == length stmts ->
+                vsepKeepEmpty (renderDoLayoutItems stmtDocs (doLayoutItems layout))
+          _ ->
+            vsep stmtDocs
+  pure (text "do" <> nest indentSize (hardLine <> bodyDoc))
 
 formatStmt :: S.Stmt -> Doc
 formatStmt stmt =
+  evalState (formatStmtM stmt) []
+
+formatStmtM :: S.Stmt -> FmtM Doc
+formatStmtM stmt =
   case stmt of
     S.BindStmt pat rhs ->
-      formatBindLike (formatPattern pat) "<-" rhs
+      formatBindLikeM (formatPattern pat) "<-" rhs
     S.DiscardBindStmt rhs ->
-      formatBindLike (text "_") "<-" rhs
+      formatBindLikeM (text "_") "<-" rhs
     S.LetStmt name rhs ->
-      formatBindLike (text "let" <+> text name) "=" rhs
+      formatBindLikeM (text "let" <+> text name) "=" rhs
     S.ExprStmt e ->
-      formatExpr PrecExprTop e
+      formatExprM PrecExprTop e
 
 -- | Format a binding statement (x <- rhs or let x = rhs).
 -- When the RHS is f (g x y z), formats as:
@@ -824,28 +1022,31 @@ formatStmt stmt =
 --     |> f
 formatBindLike :: Doc -> T.Text -> S.Expr -> Doc
 formatBindLike lhs op rhs =
+  evalState (formatBindLikeM lhs op rhs) []
+
+formatBindLikeM :: Doc -> T.Text -> S.Expr -> FmtM Doc
+formatBindLikeM lhs op rhs =
   case rhs of
     -- Already a |> expression: (g x y ...) |> f where g has multiple args
-    S.App (S.App (S.Var "|>") innerExpr) f | isMultiArgApp innerExpr ->
+    S.App (S.App (S.Var "|>") innerExpr) f | isMultiArgApp innerExpr -> do
       let (innerH, innerArgs) = collectApps innerExpr
-          fDoc = formatExpr PrecExprApp f
-          innerHeadDoc = formatExpr PrecExprApp innerH
-          innerArgDocs = map (formatExpr PrecExprAtom) innerArgs
-          innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
-       in lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc)
+      fDoc <- formatExprM PrecExprApp f
+      innerHeadDoc <- formatExprM PrecExprApp innerH
+      innerArgDocs <- mapM (formatExprM PrecExprAtom) innerArgs
+      let innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
+      pure (lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc))
     -- f (g x y ...) where g has multiple args -> format with |>
-    S.App f arg | shouldUsePipeOperator f arg ->
+    S.App f arg | shouldUsePipeOperator f arg -> do
       let (innerH, innerArgs) = collectApps arg
-          fDoc = formatExpr PrecExprApp f
-          innerHeadDoc = formatExpr PrecExprApp innerH
-          innerArgDocs = map (formatExpr PrecExprAtom) innerArgs
-          -- Build: g \n x \n y \n z
-          innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
-          -- Full structure: lhs op \n innerApp \n |> f
-       in lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc)
+      fDoc <- formatExprM PrecExprApp f
+      innerHeadDoc <- formatExprM PrecExprApp innerH
+      innerArgDocs <- mapM (formatExprM PrecExprAtom) innerArgs
+      let innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
+      pure (lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc))
     -- Normal case
-    _ ->
-      group (lhs <+> text op <> nest indentSize (rhsSepFor rhs <> formatExpr PrecExprTop rhs))
+    _ -> do
+      rhsDoc <- formatExprM PrecExprTop rhs
+      pure (group (lhs <+> text op <> nest indentSize (rhsSepFor rhs <> rhsDoc)))
 
 formatPattern :: S.Pattern -> Doc
 formatPattern pat =

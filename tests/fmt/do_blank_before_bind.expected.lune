@@ -1,0 +1,8 @@
+module FmtDoBlankBeforeBind exposing (main)
+
+main =
+  do
+    IO.println "x"
+
+    y <- Task.succeed unit
+    IO.println "y"

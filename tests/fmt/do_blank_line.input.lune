@@ -1,0 +1,12 @@
+module FmtDoBlankLine exposing (main)
+
+main =
+  do
+    IO.println "ask:"
+    a <- Task.fromIO (Task.attempt (ask client "Hello from Nova v2"))
+    IO.println <| Nova.showAskResult a
+
+
+    IO.println "json:"
+    j <- Task.fromIO (Task.attempt (json (withModel "json" client) "ignored"))
+    IO.println <| Nova.showJsonResult j

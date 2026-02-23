@@ -1,4 +1,5 @@
 module FmtLists exposing (main)
+
 import Lune.Json.Encode as Encode
 
 main =
