@@ -250,6 +250,62 @@ collectHealthReport =
       , services = services
       }
 
+-- Display functions
+
+showSeverity : Severity -> String
+showSeverity sev =
+  case sev of
+    Critical -> "CRITICAL"
+    Warning -> "WARNING"
+    Info -> "INFO"
+
+showIssue : Issue -> String
+showIssue iss =
+  Str.join ""
+    [ "  * ["
+    , showSeverity iss.severity
+    , "] "
+    , iss.summary
+    ]
+
+showIssues : List Issue -> String
+showIssues issues =
+  case issues of
+    [] -> "No issues found."
+    _ ->
+      Str.join ""
+        [ "Issues found:\n"
+        , Str.join "\n" (List.map showIssue issues)
+        ]
+
+showAction : Int -> Int -> ProposedAction -> String
+showAction current total act =
+  Str.join ""
+    [ "+-------------------------------------------------+\n"
+    , "| Action "
+    , Str.fromInt current
+    , " of "
+    , Str.fromInt total
+    , " ["
+    , act.risk
+    , " risk]\n"
+    , "|\n"
+    , "| Issue: "
+    , act.issue
+    , "\n"
+    , "|\n"
+    , "| Proposed: "
+    , act.action
+    , "\n"
+    , "| Command:  "
+    , act.command
+    , "\n"
+    , "| Expected: "
+    , act.expectedOutcome
+    , "\n"
+    , "+-------------------------------------------------+"
+    ]
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
