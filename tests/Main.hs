@@ -56,11 +56,21 @@ main = do
   invalidExamples <- discoverExamples "examples/invalid"
   fmtCases <- discoverFmtCases "tests/fmt"
 
+  let interactiveExamples =
+        [ "50_HealthAgent"
+        ]
+
+      shouldSkipInteractive file =
+        takeBaseName file `elem` interactiveExamples
+
+      parseExamples = filter (not . shouldSkipInteractive) examples
+      evalExamples = filter (not . shouldSkipInteractive) examples
+
   -- Build test tree
   defaultMain $ testGroup "Lune Golden Tests"
-    [ testGroup "Parse" (map parseTest examples)
+    [ testGroup "Parse" (map parseTest parseExamples)
     , testGroup "Core" (map coreTest examples)
-    , testGroup "Eval" (map evalTest examples)
+    , testGroup "Eval" (map evalTest evalExamples)
     , testGroup "Negative" (map negativeTest invalidExamples)
     , testGroup "Fmt" (map fmtGoldenTest fmtCases)
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)

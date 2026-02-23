@@ -1,0 +1,89 @@
+module DeriveJson exposing (main)
+
+{-| Demonstrates @derive(Json) for record aliases and ADTs. -}
+
+import Lune.IO as IO
+import Lune.Json as Json
+import Lune.String as Str
+import Lune.Prelude exposing (Int, List(..), Maybe(..), Result(..), String, Task, Unit)
+
+@derive(Json)
+type alias Product =
+  { id : Int
+  , name : String
+  , tags : List String
+  , description : Maybe String
+  }
+
+@derive(Json)
+type Model
+  = Echo
+  | Add Int Int
+  | SetName String
+  | User { id : Int, name : String }
+
+main : Task Unit Unit
+main =
+  do
+    IO.println "=== Derive Json ==="
+    demoProduct
+    demoModel
+    demoUnknownTag
+
+demoProduct : Task Unit Unit
+demoProduct =
+  do
+    let p =
+      { id = 1
+      , name = "Widget"
+      , tags = ["sale", "new"]
+      , description = Nothing
+      }
+
+    let json = productEncoder p
+
+    IO.println (Str.append "Product JSON: " (Json.stringify json))
+
+    case D.decodeValue productDecoder json of
+      Err err -> IO.println (Str.append "Product decode error: " err.message)
+      Ok p2 -> IO.println (Str.append "Decoded product name: " p2.name)
+
+demoModel : Task Unit Unit
+demoModel =
+  do
+    roundtripModel Echo
+    roundtripModel (Add 1 2)
+    roundtripModel (SetName "Alice")
+    roundtripModel (User { id = 1, name = "Bob" })
+
+roundtripModel : Model -> Task Unit Unit
+roundtripModel m =
+  do
+    let json = modelEncoder m
+    IO.println (Str.append "Model JSON: " (Json.stringify json))
+
+    case D.decodeValue modelDecoder json of
+      Err err ->
+        IO.println (Str.append "Model decode error: " err.message)
+
+      Ok m2 ->
+        case m2 of
+          Echo -> IO.println "Decoded: Echo"
+          Add a b -> IO.println (Str.append "Decoded: Add " (Str.append (Str.fromInt a) (Str.append " " (Str.fromInt b))))
+          SetName s -> IO.println (Str.append "Decoded: SetName " s)
+          User u -> IO.println (Str.append "Decoded: User " u.name)
+
+demoUnknownTag : Task Unit Unit
+demoUnknownTag =
+  case Json.parse "{\"tag\":\"Nope\",\"fields\":[]}" of
+    Err msg ->
+      IO.println (Str.append "Parse error: " msg)
+
+    Ok json ->
+      case D.decodeValue modelDecoder json of
+        Ok _ ->
+          IO.println "Unexpected success decoding unknown tag"
+
+        Err err ->
+          IO.println (Str.append "Unknown tag error: " err.message)
+

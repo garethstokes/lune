@@ -8,24 +8,50 @@ module Lune.Derive
   ) where
 
 import Data.Text (Text)
-import qualified Data.Text as T
 import Lune.Syntax
 import Lune.Derive.Table (expandTableDerive, TableError)
+import Lune.Derive.Json (generateJsonForAliasRecord, generateJsonForAdt, JsonError)
 
 -- | Errors that can occur during derive expansion
 data DeriveError
   = UnknownDerive Text  -- ^ Unknown @derive(...) annotation
   | TableDeriveError TableError  -- ^ Error from Table derive
+  | JsonDeriveError JsonError  -- ^ Error from Json derive
   deriving (Show)
+
+data DeriveFlags = DeriveFlags
+  { dfHasTableDerive :: Bool
+  , dfHasJsonDerive :: Bool
+  }
+  deriving (Eq, Show)
+
+emptyFlags :: DeriveFlags
+emptyFlags =
+  DeriveFlags
+    { dfHasTableDerive = False
+    , dfHasJsonDerive = False
+    }
+
+combineFlags :: DeriveFlags -> DeriveFlags -> DeriveFlags
+combineFlags a b =
+  DeriveFlags
+    { dfHasTableDerive = dfHasTableDerive a || dfHasTableDerive b
+    , dfHasJsonDerive = dfHasJsonDerive a || dfHasJsonDerive b
+    }
 
 -- | Expand all @derive annotations in a module
 -- Returns the module with generated declarations and required imports added
 expandDerives :: Module -> Either DeriveError Module
 expandDerives m = do
-  (newDecls, hasTableDerive) <- processDecls (modDecls m)
-  let newImports = if hasTableDerive
-        then addDeriveImports (modImports m)
-        else modImports m
+  (newDecls, flags) <- processDecls (modDecls m)
+  let imports1 =
+        if dfHasTableDerive flags
+          then addDeriveImports (modImports m)
+          else modImports m
+      newImports =
+        if dfHasJsonDerive flags
+          then addJsonDeriveImports imports1
+          else imports1
   pure m { modDecls = newDecls, modImports = newImports }
 
 -- | Add imports required by Table derive
@@ -118,49 +144,81 @@ addDeriveImports existing =
       [ ExposeType "DbValue" ExposeAll
       ]
 
--- | Process all declarations, expanding derives
--- Returns (declarations, hasTableDerive)
-processDecls :: [Decl] -> Either DeriveError ([Decl], Bool)
-processDecls = go [] False
+-- | Add imports required by Json derive.
+--
+-- Inserts `import Lune.Json.Decode as D` and `import Lune.Json.Encode as E` if missing.
+addJsonDeriveImports :: [Import] -> [Import]
+addJsonDeriveImports existing =
+  let requiredImports =
+        [ Import "Lune.Json.Decode" (Just "D") Nothing
+        , Import "Lune.Json.Encode" (Just "E") Nothing
+        ]
+   in foldl (\acc req -> ensureImport req acc) existing requiredImports
   where
-    go acc hasTable [] = pure (reverse acc, hasTable)
-    go acc hasTable (d:ds) = do
-      (expanded, isTable) <- expandDecl d
-      go (expanded ++ acc) (hasTable || isTable) ds
+    ensureImport req acc =
+      if any (sameImport req) acc
+        then acc
+        else acc ++ [req]
 
--- | Expand a single declaration, returning (declarations, hasTableDerive)
-expandDecl :: Decl -> Either DeriveError ([Decl], Bool)
+    sameImport a b =
+      impName a == impName b && impAs a == impAs b
+
+-- | Process all declarations, expanding derives
+-- Returns (declarations, derive flags)
+processDecls :: [Decl] -> Either DeriveError ([Decl], DeriveFlags)
+processDecls = go [] emptyFlags
+  where
+    go acc flags [] = pure (reverse acc, flags)
+    go acc flags (d:ds) = do
+      (expanded, flags') <- expandDecl d
+      go (reverse expanded ++ acc) (combineFlags flags flags') ds
+
+-- | Expand a single declaration, returning (declarations, derive flags)
+expandDecl :: Decl -> Either DeriveError ([Decl], DeriveFlags)
 expandDecl decl =
   case decl of
     DeclTypeAlias anns name vars body -> do
-      (generated, hasTable) <- processAnnotations anns name vars body
-      pure (decl : generated, hasTable)
+      (generated, flags) <- processAliasAnnotations anns name vars body
+      pure (decl : generated, flags)
+    DeclTypeAnn anns name vars ctors -> do
+      (generated, flags) <- processAdtAnnotations anns name vars ctors
+      pure (decl : generated, flags)
     _ ->
-      pure ([decl], False)
+      pure ([decl], emptyFlags)
 
--- | Process annotations on a type alias
--- Returns (declarations, hasTableDerive)
-processAnnotations :: [Annotation] -> Text -> [Text] -> Type -> Either DeriveError ([Decl], Bool)
-processAnnotations anns name _vars body = do
-  results <- mapM (processAnnotation name body) anns
+processAliasAnnotations :: [Annotation] -> Text -> [Text] -> Type -> Either DeriveError ([Decl], DeriveFlags)
+processAliasAnnotations anns name vars body = do
+  results <- mapM (processAliasAnnotation name vars body) anns
   let (declLists, flags) = unzip results
-  pure (concat declLists, or flags)
+  pure (concat declLists, foldr combineFlags emptyFlags flags)
 
--- | Process a single annotation
--- Returns (declarations, isTableDerive)
-processAnnotation :: Text -> Type -> Annotation -> Either DeriveError ([Decl], Bool)
-processAnnotation typeName typeBody ann =
+processAdtAnnotations :: [Annotation] -> Text -> [Text] -> [TypeCtor] -> Either DeriveError ([Decl], DeriveFlags)
+processAdtAnnotations anns name vars ctors = do
+  results <- mapM (processAdtAnnotation name vars ctors) anns
+  let (declLists, flags) = unzip results
+  pure (concat declLists, foldr combineFlags emptyFlags flags)
+
+-- | Process a single annotation on a type alias.
+processAliasAnnotation :: Text -> [Text] -> Type -> Annotation -> Either DeriveError ([Decl], DeriveFlags)
+processAliasAnnotation typeName vars typeBody ann =
   case annName ann of
     "derive" ->
-      processDeriveAnnotation typeName typeBody (annArgs ann)
+      processDeriveAnnotationAlias typeName vars typeBody (annArgs ann)
     _ ->
-      -- Ignore unknown annotations (they might be documentation or future features)
-      pure ([], False)
+      pure ([], emptyFlags)
+
+-- | Process a single annotation on an ADT.
+processAdtAnnotation :: Text -> [Text] -> [TypeCtor] -> Annotation -> Either DeriveError ([Decl], DeriveFlags)
+processAdtAnnotation typeName vars ctors ann =
+  case annName ann of
+    "derive" ->
+      processDeriveAnnotationAdt typeName vars ctors (annArgs ann)
+    _ ->
+      pure ([], emptyFlags)
 
 -- | Process @derive(...) annotation
--- Returns (declarations, isTableDerive)
-processDeriveAnnotation :: Text -> Type -> Maybe Expr -> Either DeriveError ([Decl], Bool)
-processDeriveAnnotation typeName typeBody maybeArgs =
+processDeriveAnnotationAlias :: Text -> [Text] -> Type -> Maybe Expr -> Either DeriveError ([Decl], DeriveFlags)
+processDeriveAnnotationAlias typeName vars typeBody maybeArgs =
   case maybeArgs of
     Nothing ->
       Left (UnknownDerive "derive annotation requires arguments")
@@ -169,7 +227,39 @@ processDeriveAnnotation typeName typeBody maybeArgs =
         Just ("Table", tableName) ->
           case expandTableDerive typeName tableName typeBody of
             Left err -> Left (TableDeriveError err)
-            Right decls -> pure (decls, True)  -- Mark as Table derive
+            Right decls ->
+              pure
+                ( decls
+                , emptyFlags { dfHasTableDerive = True }
+                )
+        Just ("Json", _) ->
+          case generateJsonForAliasRecord typeName vars typeBody of
+            Left err -> Left (JsonDeriveError err)
+            Right decls ->
+              pure
+                ( decls
+                , emptyFlags { dfHasJsonDerive = True }
+                )
+        Just (kind, _) ->
+          Left (UnknownDerive kind)
+        Nothing ->
+          Left (UnknownDerive "invalid derive arguments")
+
+processDeriveAnnotationAdt :: Text -> [Text] -> [TypeCtor] -> Maybe Expr -> Either DeriveError ([Decl], DeriveFlags)
+processDeriveAnnotationAdt typeName vars ctors maybeArgs =
+  case maybeArgs of
+    Nothing ->
+      Left (UnknownDerive "derive annotation requires arguments")
+    Just args ->
+      case extractDeriveKind args of
+        Just ("Json", _) ->
+          case generateJsonForAdt typeName vars ctors of
+            Left err -> Left (JsonDeriveError err)
+            Right decls ->
+              pure
+                ( decls
+                , emptyFlags { dfHasJsonDerive = True }
+                )
         Just (kind, _) ->
           Left (UnknownDerive kind)
         Nothing ->

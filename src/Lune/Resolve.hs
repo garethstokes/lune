@@ -162,6 +162,7 @@ checkProgramCoherence prog =
         , typeName <-
             case decl of
               S.DeclType n _ _ -> [n]
+              S.DeclTypeAnn _ n _ _ -> [n]
               S.DeclTypeAlias _ n _ _ -> [n]
               S.DeclNewtype n _ _ _ -> [n]
               _ -> []
@@ -238,6 +239,7 @@ exportsForModule m = do
           , name <-
               case decl of
                 S.DeclType n _ _ -> [n]
+                S.DeclTypeAnn _ n _ _ -> [n]
                 S.DeclTypeAlias _ n _ _ -> [n]
                 S.DeclNewtype n _ _ _ -> [n]
                 _ -> []
@@ -322,6 +324,10 @@ ctorsFromDecl :: S.Decl -> [(Text, Text)]
 ctorsFromDecl decl =
   case decl of
     S.DeclType typeName _ ctors ->
+      [ (typeName, ctorName)
+      | S.TypeCtor ctorName _ <- ctors
+      ]
+    S.DeclTypeAnn _ typeName _ ctors ->
       [ (typeName, ctorName)
       | S.TypeCtor ctorName _ <- ctors
       ]
@@ -511,6 +517,8 @@ resolveDecl scope decl =
       Right (S.DeclValue (qualifyName (scopeModule scope) name) args' expr')
     S.DeclType typeName vars ctors ->
       Right (S.DeclType typeName vars [qualCtor c | c <- ctors])
+    S.DeclTypeAnn anns typeName vars ctors ->
+      Right (S.DeclTypeAnn anns typeName vars [qualCtor c | c <- ctors])
     S.DeclTypeAlias {} ->
       Right decl
     S.DeclNewtype typeName vars ctorName ctorType ->
@@ -652,12 +660,30 @@ resolveFieldAccess scope base field =
       | q `Set.notMember` scopeBound scope
       , Map.notMember q (scopeLocalValues scope) ->
           case Map.lookup q (scopeImportAliases scope) of
-            Nothing -> do
-              base' <- resolveExpr scope base
-              Right (S.FieldAccess base' field)
+            Nothing ->
+              -- Allow self-qualified access (e.g. `IO.andThen` inside module `Lune.IO`)
+              -- without requiring an explicit import of the current module.
+              if q == defaultAlias (scopeModule scope)
+                then
+                  case Map.lookup field (scopeLocalValues scope) of
+                    Just resolved ->
+                      Right (S.Var resolved)
+                    Nothing ->
+                      Left (UnboundName (scopeModule scope) field)
+                else do
+                  base' <- resolveExpr scope base
+                  Right (S.FieldAccess base' field)
             Just targetModule -> do
-              ensureExported targetModule field
-              Right (S.Var (qualifyName targetModule field))
+              if targetModule == scopeModule scope
+                then
+                  case Map.lookup field (scopeLocalValues scope) of
+                    Just resolved ->
+                      Right (S.Var resolved)
+                    Nothing ->
+                      Left (UnboundName (scopeModule scope) field)
+                else do
+                  ensureExported targetModule field
+                  Right (S.Var (qualifyName targetModule field))
     _ -> do
       base' <- resolveExpr scope base
       Right (S.FieldAccess base' field)

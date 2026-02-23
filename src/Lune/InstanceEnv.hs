@@ -58,6 +58,7 @@ buildInstanceEnv m classEnv =
         , name <-
             case decl of
               S.DeclType n _ _ -> [n]
+              S.DeclTypeAnn _ n _ _ -> [n]
               S.DeclTypeAlias _ n _ _ -> [n]
               S.DeclNewtype n _ _ _ -> [n]
               _ -> []

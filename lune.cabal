@@ -14,6 +14,7 @@ library
       Lune.Parser
       Lune.Derive
       Lune.Derive.Table
+      Lune.Derive.Json
       Lune.Desugar
       Lune.Validate
       Lune.Type

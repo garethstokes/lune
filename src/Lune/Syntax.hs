@@ -38,6 +38,7 @@ data Decl
   = DeclTypeSig Text QualType
   | DeclValue Text [Pattern] Expr
   | DeclType Text [Text] [TypeCtor]
+  | DeclTypeAnn [Annotation] Text [Text] [TypeCtor]  -- ^ Annotations, name, type params, constructors
   | DeclTypeAlias [Annotation] Text [Text] Type  -- ^ Annotations, name, type params, body
   | DeclNewtype Text [Text] Text Type
   | DeclClass Text [ClassParam] [Constraint] [ClassMethodSig]

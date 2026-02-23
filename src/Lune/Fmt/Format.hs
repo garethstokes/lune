@@ -168,6 +168,9 @@ formatDeclM decl =
     S.DeclType typeName vars ctors ->
       pure (formatTypeDecl typeName vars ctors)
 
+    S.DeclTypeAnn anns typeName vars ctors ->
+      pure (formatTypeDeclAnn anns typeName vars ctors)
+
     S.DeclTypeAlias anns name vars bodyTy ->
       pure (formatTypeAliasDecl anns name vars bodyTy)
 
@@ -208,6 +211,14 @@ formatTypeDecl name vars ctors =
           (c : cs) ->
             formatTypeCtor c : map (\x -> text "|" <+> formatTypeCtor x) cs
    in header <> nest indentSize (hardLine <> vsep ctorDocs)
+
+formatTypeDeclAnn :: [S.Annotation] -> Text -> [Text] -> [S.TypeCtor] -> Doc
+formatTypeDeclAnn anns name vars ctors =
+  let annsDoc =
+        case anns of
+          [] -> mempty
+          _ -> vsep (map formatAnnotation anns) <> hardLine
+   in annsDoc <> formatTypeDecl name vars ctors
 
 formatTypeCtor :: S.TypeCtor -> Doc
 formatTypeCtor (S.TypeCtor name args) =

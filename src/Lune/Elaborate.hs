@@ -766,6 +766,9 @@ ctorsFromDecl aliasEnv decl =
     S.DeclType typeName vars ctors ->
       let resultTy = foldl TApp (TCon typeName) (map TVar vars)
        in map (ctorScheme vars resultTy) ctors
+    S.DeclTypeAnn _ typeName vars ctors ->
+      let resultTy = foldl TApp (TCon typeName) (map TVar vars)
+       in map (ctorScheme vars resultTy) ctors
     S.DeclNewtype typeName vars ctorName ctorTy ->
       let resultTy = foldl TApp (TCon typeName) (map TVar vars)
           argTy = expandAliases aliasEnv (convertType aliasEnv ctorTy)

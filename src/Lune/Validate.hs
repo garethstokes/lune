@@ -62,6 +62,8 @@ declaredArities =
       case decl of
         DeclType name vars _ ->
           (name, length vars) : acc
+        DeclTypeAnn _ name vars _ ->
+          (name, length vars) : acc
         DeclTypeAlias _ name vars _ ->
           (name, length vars) : acc
         DeclNewtype name vars _ _ ->
@@ -76,6 +78,8 @@ validateDecl env decl =
       mapM_ (validateConstraint env) constraints
       validateType env ty
     DeclType _ _ ctors ->
+      mapM_ (validateTypeCtor env) ctors
+    DeclTypeAnn _ _ _ ctors ->
       mapM_ (validateTypeCtor env) ctors
     DeclTypeAlias _ _ _ body ->
       validateType env body

@@ -109,6 +109,7 @@ kindEnvFromDecls decls =
         , (name, vars) <-
             case decl of
               S.DeclType name vars _ -> [(name, vars)]
+              S.DeclTypeAnn _ name vars _ -> [(name, vars)]
               S.DeclTypeAlias _ name vars _ -> [(name, vars)]
               S.DeclNewtype name vars _ _ -> [(name, vars)]
               _ -> []

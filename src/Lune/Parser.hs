@@ -103,6 +103,7 @@ decl =
     [ P.label "class declaration" (try classDecl)
     , P.label "instance declaration" (try instanceDecl)
     , P.label "annotated type alias" (try annotatedTypeAliasDecl)
+    , P.label "annotated type declaration" (try annotatedTypeDecl)
     , P.label "type alias" (try typeAliasDecl)
     , P.label "type declaration" (try typeDecl)
     , P.label "newtype declaration" (try newtypeDecl)
@@ -181,11 +182,28 @@ annotatedTypeAliasDecl = do
   keyword "alias"
   name <- typeConstructor
   vars <- many typeVar
+  scnOptional
   symbol "="
   scnOptional
   body <- parseType
   scn
   pure (DeclTypeAlias anns name vars body)
+
+-- | Parse a type declaration with annotations (e.g. @derive(Json) type Model = ...)
+annotatedTypeDecl :: Parser Decl
+annotatedTypeDecl = do
+  anns <- some (annotation <* scn)
+  keyword "type"
+  name <- typeConstructor
+  vars <- many typeVar
+  scnOptional
+  symbol "="
+  scnOptional
+  ctors <- typeCtor `sepBy1` trySep
+  scn
+  pure (DeclTypeAnn anns name vars ctors)
+  where
+    trySep = try (scnOptional *> symbol "|" <* scnOptional)
 
 typeAliasDecl :: Parser Decl
 typeAliasDecl = do
@@ -193,6 +211,7 @@ typeAliasDecl = do
   keyword "alias"
   name <- typeConstructor
   vars <- many typeVar
+  scnOptional
   symbol "="
   scnOptional
   body <- parseType
@@ -204,6 +223,7 @@ typeDecl = do
   keyword "type"
   name <- typeConstructor
   vars <- many typeVar
+  scnOptional
   symbol "="
   scnOptional
   ctors <- typeCtor `sepBy1` trySep
@@ -217,6 +237,7 @@ newtypeDecl = do
   keyword "newtype"
   name <- typeConstructor
   vars <- many typeVar
+  scnOptional
   symbol "="
   scnOptional  -- Allow newline after =
   ctorName <- typeConstructor
@@ -440,7 +461,12 @@ parseExpr =
 parseBackwardPipe :: Parser Expr
 parseBackwardPipe = do
   first <- parseForwardPipe
-  rest <- many (try (infixOp "<|" *> parseForwardPipe))
+  -- NOTE: RHS uses parseExpr (not parseForwardPipe) so that constructs like
+  -- lambdas / case / let / do can appear without extra parentheses:
+  --   f <| \x -> ...
+  -- This also preserves right-associativity by letting the recursive call
+  -- consume further (<|) operators inside the RHS expression.
+  rest <- many (try (infixOp "<|" *> parseExpr))
   -- Right-associative: f <| x becomes App (App (Var "<|") f) x
   case rest of
     [] -> pure first

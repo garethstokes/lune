@@ -1,0 +1,10 @@
+module DeriveJsonUnsupported exposing (bad)
+
+@derive(Json)
+type alias NotARecord =
+  Int
+
+bad : Int
+bad =
+  1
+

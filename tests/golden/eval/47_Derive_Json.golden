@@ -1,0 +1,12 @@
+=== Derive Json ===
+Product JSON: {"id":1,"name":"Widget","tags":["sale","new"],"description":null}
+Decoded product name: Widget
+Model JSON: {"tag":"Echo","fields":[]}
+Decoded: Echo
+Model JSON: {"tag":"Add","fields":[1,2]}
+Decoded: Add 1 2
+Model JSON: {"tag":"SetName","fields":["Alice"]}
+Decoded: SetName Alice
+Model JSON: {"tag":"User","fields":[{"id":1,"name":"Bob"}]}
+Decoded: User Bob
+Unknown tag error: Unknown tag: Nope
