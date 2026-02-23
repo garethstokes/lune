@@ -23,6 +23,42 @@ import Nova.Core as Core exposing (Error(..), Provider, Response)
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 
+-- Health check result types
+
+type alias DiskUsage =
+  { mountPoint : String
+  , totalGb : Float
+  , usedGb : Float
+  , percentUsed : Int
+  }
+
+type alias MemoryUsage =
+  { totalMb : Int
+  , usedMb : Int
+  , availableMb : Int
+  , swapUsedMb : Int
+  }
+
+type alias ProcessInfo =
+  { pid : Int
+  , name : String
+  , cpuPercent : Float
+  , memoryPercent : Float
+  }
+
+type alias ServiceStatus =
+  { name : String
+  , isRunning : Bool
+  , uptime : Maybe String
+  }
+
+type alias HealthReport =
+  { disks : List DiskUsage
+  , memory : MemoryUsage
+  , topProcesses : List ProcessInfo
+  , services : List ServiceStatus
+  }
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
