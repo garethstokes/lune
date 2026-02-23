@@ -462,4 +462,46 @@ processActionsGo current total actions =
 
 main : Task Unit Unit
 main =
-  IO.println "Health Agent placeholder"
+  do
+    IO.println "=== Health Agent ==="
+    IO.println ""
+    IO.println "Collecting system health data..."
+    report <- collectHealthReport
+    IO.println "Health data collected."
+    IO.println ""
+    let providers =
+      Core.dictInsert
+        Nova.providerEq
+        mockHealthProvider
+        mockHealthProviderImpl
+        Core.defaultProviderRegistry
+    let client =
+      newClient providers mockHealthProvider "health-analyzer"
+    IO.println "Analyzing with LLM..."
+    let prompt = buildAnalysisPrompt report
+    analysisResult <- Task.result (tool client prompt)
+    case analysisResult of
+      Err e ->
+        IO.println (Str.join "" ["Analysis failed: ", Nova.showError e])
+
+      Ok analysisJson ->
+        case D.decodeValue decodeHealthAnalysis analysisJson of
+          Err decodeErr ->
+            IO.println (Str.join "" ["Failed to decode analysis: ", decodeErr.message])
+
+          Ok analysis ->
+            do
+              IO.println ""
+              IO.println (showIssues analysis.issues)
+              IO.println ""
+              case analysis.actions of
+                [] ->
+                  IO.println "No remediation actions proposed."
+
+                _ ->
+                  do
+                    let actionCount = List.length analysis.actions
+                    let msg = Str.join "" ["Proposed ", Str.fromInt actionCount, " remediation actions:"]
+                    IO.println msg
+                    IO.println ""
+                    processActions actionCount analysis.actions
