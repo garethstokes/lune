@@ -91,7 +91,7 @@ type alias HealthAnalysis =
 -- Agent error type for unified error handling
 
 type AgentError =
-  LlmError Core.Error
+  LlmError Error
   | DecodeError String
 
 -- JSON encoders for health report
@@ -144,6 +144,41 @@ encodeHealthReport r =
     , { key = "memory", value = encodeMemoryUsage r.memory }
     , { key = "topProcesses", value = E.list encodeProcessInfo r.topProcesses }
     , { key = "services", value = E.list encodeServiceStatus r.services }
+    ]
+
+-- JSON encoders for LLM response types
+
+encodeSeverity : Severity -> Json
+encodeSeverity sev =
+  case sev of
+    Critical -> E.string "critical"
+    Warning -> E.string "warning"
+    Info -> E.string "info"
+
+encodeIssue : Issue -> Json
+encodeIssue iss =
+  E.object
+    [ { key = "severity", value = encodeSeverity iss.severity }
+    , { key = "summary", value = E.string iss.summary }
+    , { key = "details", value = E.string iss.details }
+    ]
+
+encodeProposedAction : ProposedAction -> Json
+encodeProposedAction act =
+  E.object
+    [ { key = "id", value = E.int act.id }
+    , { key = "issue", value = E.string act.issue }
+    , { key = "action", value = E.string act.action }
+    , { key = "command", value = E.string act.command }
+    , { key = "risk", value = E.string act.risk }
+    , { key = "expectedOutcome", value = E.string act.expectedOutcome }
+    ]
+
+encodeHealthAnalysis : HealthAnalysis -> Json
+encodeHealthAnalysis analysis =
+  E.object
+    [ { key = "issues", value = E.list encodeIssue analysis.issues }
+    , { key = "actions", value = E.list encodeProposedAction analysis.actions }
     ]
 
 -- JSON decoders for LLM response
@@ -269,50 +304,31 @@ showSeverity sev =
 
 showIssue : Issue -> String
 showIssue iss =
-  Str.join ""
-    [ "  * ["
-    , showSeverity iss.severity
-    , "] "
-    , iss.summary
-    ]
+  render "  * [${showSeverity iss.severity}] ${iss.summary}"
+
+showIssuesHeader : String
+showIssuesHeader = "Issues found:"
 
 showIssues : List Issue -> String
 showIssues issues =
   case issues of
     [] -> "No issues found."
-    _ ->
-      Str.join ""
-        [ "Issues found:\n"
-        , Str.join "\n" (List.map showIssue issues)
-        ]
+    _ -> Str.join "\n" (Cons showIssuesHeader (List.map showIssue issues))
 
 showAction : Int -> Int -> ProposedAction -> String
 showAction current total act =
-  Str.join ""
-    [ "+-------------------------------------------------+\n"
-    , "| Action "
-    , Str.fromInt current
-    , " of "
-    , Str.fromInt total
-    , " ["
-    , act.risk
-    , " risk]\n"
-    , "|\n"
-    , "| Issue: "
-    , act.issue
-    , "\n"
-    , "|\n"
-    , "| Proposed: "
-    , act.action
-    , "\n"
-    , "| Command:  "
-    , act.command
-    , "\n"
-    , "| Expected: "
-    , act.expectedOutcome
-    , "\n"
-    , "+-------------------------------------------------+"
-    ]
+  render
+    ''
+    +-------------------------------------------------+
+    | Action ${Str.fromInt current} of ${Str.fromInt total} [${act.risk} risk]
+    |
+    | Issue: ${act.issue}
+    |
+    | Proposed: ${act.action}
+    | Command:  ${act.command}
+    | Expected: ${act.expectedOutcome}
+    +-------------------------------------------------+
+    ''
 
 -- Mock LLM provider for deterministic testing
 
@@ -327,48 +343,43 @@ mockHealthCall _ _ _ =
       , usage = Just { inputTokens = 100, outputTokens = 50, totalTokens = 150 }
       }
 
-mockHealthAnalysisJson : String
-mockHealthAnalysisJson =
-  render
-    ''
-    {
-      "issues": [
-        {
-          "severity": "critical",
-          "summary": "Disk /var is 94% full",
-          "details": "Only 1.2GB remaining on /var partition"
-        },
-        {
-          "severity": "warning",
-          "summary": "High memory usage",
-          "details": "Process 'node' using 78% of available memory"
-        },
-        {
-          "severity": "warning",
-          "summary": "Service redis is down",
-          "details": "Redis service is not running"
+mockHealthAnalysis : HealthAnalysis
+mockHealthAnalysis =
+  { issues =
+      [ { severity = Critical
+        , summary = "Disk /var is 94% full"
+        , details = "Only 1.2GB remaining on /var partition"
         }
-      ],
-      "actions": [
-        {
-          "id": 1,
-          "issue": "Disk /var is 94% full",
-          "action": "Clear journal logs older than 7 days",
-          "command": "journalctl --vacuum-time=7d",
-          "risk": "low",
-          "expectedOutcome": "Free approximately 1-2GB"
-        },
-        {
-          "id": 2,
-          "issue": "Service redis is down",
-          "action": "Restart redis service",
-          "command": "systemctl restart redis",
-          "risk": "medium",
-          "expectedOutcome": "Redis service will be available"
+      , { severity = Warning
+        , summary = "High memory usage"
+        , details = "Process 'node' using 78% of available memory"
+        }
+      , { severity = Warning
+        , summary = "Service redis is down"
+        , details = "Redis service is not running"
         }
       ]
-    }
-    ''
+  , actions =
+      [ { id = 1
+        , issue = "Disk /var is 94% full"
+        , action = "Clear journal logs older than 7 days"
+        , command = "journalctl --vacuum-time=7d"
+        , risk = "low"
+        , expectedOutcome = "Free approximately 1-2GB"
+        }
+      , { id = 2
+        , issue = "Service redis is down"
+        , action = "Restart redis service"
+        , command = "systemctl restart redis"
+        , risk = "medium"
+        , expectedOutcome = "Redis service will be available"
+        }
+      ]
+  }
+
+mockHealthAnalysisJson : String
+mockHealthAnalysisJson =
+  RawJson.stringify (encodeHealthAnalysis mockHealthAnalysis)
 
 mockHealthProviderImpl : Core.ProviderImpl
 mockHealthProviderImpl =
@@ -402,11 +413,13 @@ analysisSystemPrompt =
 
 buildAnalysisPrompt : HealthReport -> String
 buildAnalysisPrompt report =
-  Str.join ""
-    [ analysisSystemPrompt
-    , "\n\nHealth Report:\n"
-    , RawJson.stringify (encodeHealthReport report)
-    ]
+  render
+    ''
+    ${analysisSystemPrompt}
+
+    Health Report:
+    ${RawJson.stringify (encodeHealthReport report)}
+    ''
 
 -- Nova client setup
 
@@ -428,10 +441,12 @@ analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
 analyzeHealth report =
   do
     let prompt = buildAnalysisPrompt report
-    analysisJson <- Task.mapError LlmError (tool makeClient prompt)
-    case D.decodeValue decodeHealthAnalysis analysisJson of
-      Err decodeErr -> Task.fail (DecodeError decodeErr.message)
-      Ok analysis -> Task.succeed analysis
+    analysisJson <-
+      tool makeClient prompt
+        |> Task.mapError LlmError
+    D.decodeValue decodeHealthAnalysis analysisJson
+      |> Task.fromResult
+      |> Task.mapError (\d -> DecodeError d.message)
 
 -- Display results
 
@@ -446,7 +461,7 @@ displayAnalysis analysis =
       _ ->
         do
           let count = List.length analysis.actions
-          IO.println (Str.join "" ["Proposed ", Str.fromInt count, " remediation actions:"])
+          IO.println (render "Proposed ${Str.fromInt count} remediation actions:")
           IO.println ""
           processActions count analysis.actions
 
@@ -455,8 +470,8 @@ displayAnalysis analysis =
 showAgentError : AgentError -> String
 showAgentError err =
   case err of
-    LlmError e -> Str.join "" ["LLM analysis failed: ", Nova.showError e]
-    DecodeError msg -> Str.join "" ["Failed to decode response: ", msg]
+    LlmError e -> render "LLM analysis failed: ${Nova.showError e}"
+    DecodeError msg -> render "Failed to decode response: ${msg}"
 
 -- Approval loop
 
@@ -481,7 +496,7 @@ promptForApproval =
 
 mockExecuteCommand : String -> Task e String
 mockExecuteCommand cmd =
-  Task.succeed (Str.join "" ["[MOCK] Would execute: ", cmd])
+  Task.succeed (render "[MOCK] Would execute: ${cmd}")
 
 processActions : Int -> List ProposedAction -> Task e Unit
 processActions total actions =

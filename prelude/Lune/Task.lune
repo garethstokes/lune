@@ -2,6 +2,7 @@ module Lune.Task exposing (
   succeed,
   fail,
   fromIO,
+  fromResult,
   map,
   andThen,
   then,
@@ -31,6 +32,12 @@ fail e =
 fromIO : IO a -> Task e a
 fromIO io =
   Task (IO.andThen io (\a -> IO.pure (Ok a)))
+
+fromResult : Result e a -> Task e a
+fromResult r =
+  case r of
+    Ok a -> succeed a
+    Err e -> fail e
 
 map : (a -> b) -> Task e a -> Task e b
 map f task =
