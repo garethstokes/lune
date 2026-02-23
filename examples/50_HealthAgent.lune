@@ -3,10 +3,11 @@ module HealthAgent exposing (main)
 {-| System health monitoring agent using Nova LLM analysis.
 
     Demonstrates:
+    - Composable Task pipelines with unified error handling
     - Structured tool outputs with Nova.tool
     - JSON decoding of LLM responses
     - User approval workflows
-    - RuntimeConfig guards for tool execution
+    - Clean separation of concerns: collect -> analyze -> display -> execute
 -}
 
 import Lune.IO as IO
@@ -86,6 +87,12 @@ type alias HealthAnalysis =
   { issues : List Issue
   , actions : List ProposedAction
   }
+
+-- Agent error type for unified error handling
+
+type AgentError =
+  LlmError Core.Error
+  | DecodeError String
 
 -- JSON encoders for health report
 
@@ -401,6 +408,56 @@ buildAnalysisPrompt report =
     , RawJson.stringify (encodeHealthReport report)
     ]
 
+-- Nova client setup
+
+mockProviderRegistry : Core.ProviderRegistry
+mockProviderRegistry =
+  Core.dictInsert
+    Nova.providerEq
+    mockHealthProvider
+    mockHealthProviderImpl
+    Core.defaultProviderRegistry
+
+makeClient : Nova.Client
+makeClient =
+  newClient mockProviderRegistry mockHealthProvider "health-analyzer"
+
+-- Core analysis pipeline
+
+analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
+analyzeHealth report =
+  do
+    let prompt = buildAnalysisPrompt report
+    analysisJson <- Task.mapError LlmError (tool makeClient prompt)
+    case D.decodeValue decodeHealthAnalysis analysisJson of
+      Err decodeErr -> Task.fail (DecodeError decodeErr.message)
+      Ok analysis -> Task.succeed analysis
+
+-- Display results
+
+displayAnalysis : HealthAnalysis -> Task e Unit
+displayAnalysis analysis =
+  do
+    IO.println ""
+    IO.println (showIssues analysis.issues)
+    IO.println ""
+    case analysis.actions of
+      [] -> IO.println "No remediation actions proposed."
+      _ ->
+        do
+          let count = List.length analysis.actions
+          IO.println (Str.join "" ["Proposed ", Str.fromInt count, " remediation actions:"])
+          IO.println ""
+          processActions count analysis.actions
+
+-- Error display
+
+showAgentError : AgentError -> String
+showAgentError err =
+  case err of
+    LlmError e -> Str.join "" ["LLM analysis failed: ", Nova.showError e]
+    DecodeError msg -> Str.join "" ["Failed to decode response: ", msg]
+
 -- Approval loop
 
 type ApprovalResult =
@@ -460,48 +517,27 @@ processActionsGo current total actions =
               IO.println "Action completed."
               processActionsGo (Int.add current 1) total rest
 
+-- The agent pipeline: collect -> analyze -> display -> execute
+
+runAgent : Task AgentError Unit
+runAgent =
+  do
+    IO.println "Collecting system health data..."
+    report <- Task.mapError (\_ -> DecodeError "unreachable") collectHealthReport
+    IO.println "Health data collected."
+    IO.println ""
+    IO.println "Analyzing with LLM..."
+    analysis <- analyzeHealth report
+    displayAnalysis analysis
+
+-- Entry point with error handling at the boundary
+
 main : Task Unit Unit
 main =
   do
     IO.println "=== Health Agent ==="
     IO.println ""
-    IO.println "Collecting system health data..."
-    report <- collectHealthReport
-    IO.println "Health data collected."
-    IO.println ""
-    let providers =
-      Core.dictInsert
-        Nova.providerEq
-        mockHealthProvider
-        mockHealthProviderImpl
-        Core.defaultProviderRegistry
-    let client =
-      newClient providers mockHealthProvider "health-analyzer"
-    IO.println "Analyzing with LLM..."
-    let prompt = buildAnalysisPrompt report
-    analysisResult <- Task.result (tool client prompt)
-    case analysisResult of
-      Err e ->
-        IO.println (Str.join "" ["Analysis failed: ", Nova.showError e])
-
-      Ok analysisJson ->
-        case D.decodeValue decodeHealthAnalysis analysisJson of
-          Err decodeErr ->
-            IO.println (Str.join "" ["Failed to decode analysis: ", decodeErr.message])
-
-          Ok analysis ->
-            do
-              IO.println ""
-              IO.println (showIssues analysis.issues)
-              IO.println ""
-              case analysis.actions of
-                [] ->
-                  IO.println "No remediation actions proposed."
-
-                _ ->
-                  do
-                    let actionCount = List.length analysis.actions
-                    let msg = Str.join "" ["Proposed ", Str.fromInt actionCount, " remediation actions:"]
-                    IO.println msg
-                    IO.println ""
-                    processActions actionCount analysis.actions
+    result <- Task.result runAgent
+    case result of
+      Ok _ -> Task.succeed unit
+      Err e -> IO.println (showAgentError e)
