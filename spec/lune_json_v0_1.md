@@ -241,6 +241,51 @@ JSON decoding failures must never produce `EvalError`.
 
 ---
 
+## 6. Compiler Derive: `@derive(Json)`
+
+The Lune compiler supports a templating/derive feature `@derive(Json)` which can
+generate JSON encoders and decoders for common data shapes.
+
+### 6.1 Supported Forms
+
+`@derive(Json)` is supported for:
+
+- **Record type aliases** (product types)
+- **ADTs / sum types** (e.g. `type Model = A | B Int | C { ... }`)
+
+It is not supported for other declaration forms.
+
+### 6.2 Generated Names
+
+Given a type name `Product` or `Model`, the compiler generates:
+
+- `productDecoder : D.Decoder Product`
+- `productEncoder : Product -> E.Value`
+- `modelDecoder : D.Decoder Model`
+- `modelEncoder : Model -> E.Value`
+
+### 6.3 Encoding Rules
+
+**Records**
+
+- Encoded as JSON objects with one key per record field.
+
+**ADTs**
+
+- Encoded as a JSON object with:
+  - `"tag"`: the constructor name as a string
+  - `"fields"`: a JSON array of constructor arguments (positional), possibly empty
+
+Examples:
+
+```json
+{ "tag": "Echo", "fields": [] }
+{ "tag": "Add", "fields": [1, 2] }
+{ "tag": "User", "fields": [ { "id": 1, "name": "A" } ] }
+```
+
+---
+
 ## 6. Conformance Requirements
 
 An implementation must ensure:
