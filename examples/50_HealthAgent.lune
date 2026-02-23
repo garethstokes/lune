@@ -1,18 +1,9 @@
 module HealthAgent exposing (main)
 
-{-| System health monitoring agent using Nova LLM analysis.
-
-    Demonstrates:
-    - Composable Task pipelines with unified error handling
-    - Structured tool outputs with Nova.tool
-    - JSON decoding of LLM responses
-    - User approval workflows
-    - Clean separation of concerns: collect -> analyze -> display -> execute
--}
-
 import Lune.IO as IO
 import Lune.Task as Task
 import Lune.String as Str
+import Lune.Char as Char
 import Lune.Int as Int
 import Lune.Float as Float
 import Lune.List as List
@@ -24,56 +15,34 @@ import Nova exposing (newClient, provider, withModel, tool)
 import Nova.Core as Core exposing (Error(..), Provider, Response)
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
-
--- Health check result types
-
+@derive(Json)
 type alias DiskUsage =
-  { mountPoint : String
-  , totalGb : Float
-  , usedGb : Float
-  , percentUsed : Int
-  }
-
+  { mountPoint : String, totalGb : Float, usedGb : Float, percentUsed : Int }
+@derive(Json)
 type alias MemoryUsage =
-  { totalMb : Int
-  , usedMb : Int
-  , availableMb : Int
-  , swapUsedMb : Int
-  }
-
+  { totalMb : Int, usedMb : Int, availableMb : Int, swapUsedMb : Int }
+@derive(Json)
 type alias ProcessInfo =
-  { pid : Int
-  , name : String
-  , cpuPercent : Float
-  , memoryPercent : Float
-  }
-
+  { pid : Int, name : String, cpuPercent : Float, memoryPercent : Float }
+@derive(Json)
 type alias ServiceStatus =
-  { name : String
-  , isRunning : Bool
-  , uptime : Maybe String
-  }
-
+  { name : String, isRunning : Bool, uptime : Maybe String }
+@derive(Json)
 type alias HealthReport =
   { disks : List DiskUsage
   , memory : MemoryUsage
   , topProcesses : List ProcessInfo
   , services : List ServiceStatus
   }
-
--- LLM analysis response types
-
+@derive(Json)
 type Severity =
   Critical
   | Warning
   | Info
-
+@derive(Json)
 type alias Issue =
-  { severity : Severity
-  , summary : String
-  , details : String
-  }
-
+  { severity : Severity, summary : String, details : String }
+@derive(Json)
 type alias ProposedAction =
   { id : Int
   , issue : String
@@ -82,347 +51,487 @@ type alias ProposedAction =
   , risk : String
   , expectedOutcome : String
   }
-
+@derive(Json)
 type alias HealthAnalysis =
-  { issues : List Issue
-  , actions : List ProposedAction
-  }
-
--- Agent error type for unified error handling
-
+  { issues : List Issue, actions : List ProposedAction }
 type AgentError =
   LlmError Error
   | DecodeError String
+  | SystemError String
+procReadFile : String -> Task AgentError String
+procReadFile path =
+  IO.readFile path
+    |> Task.mapError (\_ -> SystemError (Str.append "Failed to read " path))
+diskCheck : Task AgentError (List DiskUsage)
+diskCheck = Task.succeed []
+memoryCheck : Task AgentError MemoryUsage
+memoryCheck =
+  do
+    contents <- procReadFile "/proc/meminfo"
+    case parseMeminfo contents of
+      Err msg ->
+        Task.fail (SystemError msg)
+      Ok m ->
+        Task.succeed m
+processCheck : Task AgentError (List ProcessInfo)
+processCheck =
+  do
+    meminfo <- procReadFile "/proc/meminfo"
+    memTotalKb <-
+      case meminfoValueKb "MemTotal" meminfo of
+        Nothing ->
+          Task.fail (SystemError "meminfo: missing MemTotal")
+        Just kb ->
+          Task.succeed kb
 
--- JSON encoders for health report
+    name <- procReadFile "/proc/self/comm" |> Task.map Str.trim
 
-encodeDiskUsage : DiskUsage -> Json
-encodeDiskUsage d =
-  E.object
-    [ { key = "mountPoint", value = E.string d.mountPoint }
-    , { key = "totalGb", value = E.float d.totalGb }
-    , { key = "usedGb", value = E.float d.usedGb }
-    , { key = "percentUsed", value = E.int d.percentUsed }
-    ]
+    status <- procReadFile "/proc/self/status"
+    let rssKb =
+      case lineFirstInt "VmRSS:" status of
+        Nothing ->
+          0
+        Just kb ->
+          kb
 
-encodeMemoryUsage : MemoryUsage -> Json
-encodeMemoryUsage m =
-  E.object
-    [ { key = "totalMb", value = E.int m.totalMb }
-    , { key = "usedMb", value = E.int m.usedMb }
-    , { key = "availableMb", value = E.int m.availableMb }
-    , { key = "swapUsedMb", value = E.int m.swapUsedMb }
-    ]
+    sample0 <- sampleSelfCpu
+    _ <- IO.sleepMs 200
+    sample1 <- sampleSelfCpu
 
-encodeProcessInfo : ProcessInfo -> Json
-encodeProcessInfo p =
-  E.object
-    [ { key = "pid", value = E.int p.pid }
-    , { key = "name", value = E.string p.name }
-    , { key = "cpuPercent", value = E.float p.cpuPercent }
-    , { key = "memoryPercent", value = E.float p.memoryPercent }
-    ]
+    let cpuPercent = cpuPercentFromSamples sample0 sample1
 
-encodeUptime : Maybe String -> Json
-encodeUptime maybeUptime =
-  case maybeUptime of
-    Nothing -> E.null
-    Just u -> E.string u
+    let memoryPercent = percentOf rssKb memTotalKb
 
-encodeServiceStatus : ServiceStatus -> Json
-encodeServiceStatus s =
-  E.object
-    [ { key = "name", value = E.string s.name }
-    , { key = "isRunning", value = E.bool s.isRunning }
-    , { key = "uptime", value = encodeUptime s.uptime }
-    ]
-
-encodeHealthReport : HealthReport -> Json
-encodeHealthReport r =
-  E.object
-    [ { key = "disks", value = E.list encodeDiskUsage r.disks }
-    , { key = "memory", value = encodeMemoryUsage r.memory }
-    , { key = "topProcesses", value = E.list encodeProcessInfo r.topProcesses }
-    , { key = "services", value = E.list encodeServiceStatus r.services }
-    ]
-
--- JSON encoders for LLM response types
-
-encodeSeverity : Severity -> Json
-encodeSeverity sev =
-  case sev of
-    Critical -> E.string "critical"
-    Warning -> E.string "warning"
-    Info -> E.string "info"
-
-encodeIssue : Issue -> Json
-encodeIssue iss =
-  E.object
-    [ { key = "severity", value = encodeSeverity iss.severity }
-    , { key = "summary", value = E.string iss.summary }
-    , { key = "details", value = E.string iss.details }
-    ]
-
-encodeProposedAction : ProposedAction -> Json
-encodeProposedAction act =
-  E.object
-    [ { key = "id", value = E.int act.id }
-    , { key = "issue", value = E.string act.issue }
-    , { key = "action", value = E.string act.action }
-    , { key = "command", value = E.string act.command }
-    , { key = "risk", value = E.string act.risk }
-    , { key = "expectedOutcome", value = E.string act.expectedOutcome }
-    ]
-
-encodeHealthAnalysis : HealthAnalysis -> Json
-encodeHealthAnalysis analysis =
-  E.object
-    [ { key = "issues", value = E.list encodeIssue analysis.issues }
-    , { key = "actions", value = E.list encodeProposedAction analysis.actions }
-    ]
-
--- JSON decoders for LLM response
-
-decodeSeverity : D.Decoder Severity
-decodeSeverity =
-  D.andThen
-    (\s ->
-      case s of
-        "critical" -> D.succeed Critical
-        "warning" -> D.succeed Warning
-        "info" -> D.succeed Info
-        _ -> D.fail (Str.append "Unknown severity: " s)
-    )
-    D.string
-
-decodeIssue : D.Decoder Issue
-decodeIssue =
-  D.map3
-    (\sev sum det -> { severity = sev, summary = sum, details = det })
-    (D.field "severity" decodeSeverity)
-    (D.field "summary" D.string)
-    (D.field "details" D.string)
-
-decodeProposedAction : D.Decoder ProposedAction
-decodeProposedAction =
-  D.andThen
-    (\exp ->
-      D.map5
-        (\id iss act cmd risk ->
-          { id = id
-          , issue = iss
-          , action = act
-          , command = cmd
-          , risk = risk
-          , expectedOutcome = exp
-          })
-        (D.field "id" D.int)
-        (D.field "issue" D.string)
-        (D.field "action" D.string)
-        (D.field "command" D.string)
-        (D.field "risk" D.string)
-    )
-    (D.field "expectedOutcome" D.string)
-
-decodeHealthAnalysis : D.Decoder HealthAnalysis
-decodeHealthAnalysis =
-  D.map2
-    (\iss acts -> { issues = iss, actions = acts })
-    (D.field "issues" (D.list decodeIssue))
-    (D.field "actions" (D.list decodeProposedAction))
-
--- Mock health check functions (would use shell commands in production)
-
-mockDiskCheck : Task e (List DiskUsage)
-mockDiskCheck =
-  Task.succeed
-    [ { mountPoint = "/"
-      , totalGb = 50.0
-      , usedGb = 35.0
-      , percentUsed = 70
+    Task.succeed
+      [ { pid = sample0.pid
+      , name = name
+      , cpuPercent = cpuPercent
+      , memoryPercent = memoryPercent
       }
-    , { mountPoint = "/var"
-      , totalGb = 20.0
-      , usedGb = 18.8
-      , percentUsed = 94
-      }
-    ]
-
-mockMemoryCheck : Task e MemoryUsage
-mockMemoryCheck =
-  Task.succeed
-    { totalMb = 16384
-    , usedMb = 12800
-    , availableMb = 3584
-    , swapUsedMb = 512
-    }
-
-mockProcessCheck : Task e (List ProcessInfo)
-mockProcessCheck =
-  Task.succeed
-    [ { pid = 1234
-      , name = "node"
-      , cpuPercent = 45.2
-      , memoryPercent = 78.0
-      }
-    , { pid = 5678
-      , name = "postgres"
-      , cpuPercent = 12.5
-      , memoryPercent = 15.3
-      }
-    ]
-
-mockServiceCheck : Task e (List ServiceStatus)
-mockServiceCheck =
-  Task.succeed
-    [ { name = "nginx", isRunning = True, uptime = Just "3d 12h" }
-    , { name = "redis", isRunning = False, uptime = Nothing }
-    ]
-
-collectHealthReport : Task e HealthReport
+      ]
+serviceCheck : Task AgentError (List ServiceStatus)
+serviceCheck = Task.succeed []
+collectHealthReport : Task AgentError HealthReport
 collectHealthReport =
   do
-    disks <- mockDiskCheck
-    memory <- mockMemoryCheck
-    processes <- mockProcessCheck
-    services <- mockServiceCheck
+    disks <- diskCheck
+    memory <- memoryCheck
+    processes <- processCheck
+    services <- serviceCheck
     Task.succeed
       { disks = disks
       , memory = memory
       , topProcesses = processes
       , services = services
       }
+type alias CpuSample =
+  { pid : Int, procJiffies : Int, totalJiffies : Int, cpuCount : Int }
+sampleSelfCpu : Task AgentError CpuSample
+sampleSelfCpu =
+  do
+    sys <- procReadFile "/proc/stat"
+    self <- procReadFile "/proc/self/stat"
 
--- Display functions
+    totalJiffies <-
+      case procTotalJiffies sys of
+        Err msg ->
+          Task.fail (SystemError msg)
+        Ok n ->
+          Task.succeed n
 
+    pidAndJiffies <-
+      case procPidAndJiffies self of
+        Err msg ->
+          Task.fail (SystemError msg)
+        Ok r ->
+          Task.succeed r
+
+    case pidAndJiffies of
+      (pid, procJiffies) ->
+        Task.succeed
+          { pid = pid
+          , procJiffies = procJiffies
+          , totalJiffies = totalJiffies
+          , cpuCount = ensureAtLeast1 (procCpuCount sys)
+          }
+cpuPercentFromSamples : CpuSample -> CpuSample -> Float
+cpuPercentFromSamples a b =
+  let
+    dp = clampNonNegative (Int.sub b.procJiffies a.procJiffies)
+    dt = clampNonNegative (Int.sub b.totalJiffies a.totalJiffies)
+  in
+    case Int.lte dt 0 of
+      True ->
+        0.0
+      False ->
+        let
+          ratio = Float.div (Float.fromInt dp) (Float.fromInt dt)
+        in
+          Float.mul (Float.fromInt a.cpuCount) (Float.mul 100.0 ratio)
+percentOf : Int -> Int -> Float
+percentOf part total =
+  case Int.lte total 0 of
+    True ->
+      0.0
+    False ->
+      Float.mul
+        100.0
+        (Float.div
+          (Float.fromInt (clampNonNegative part))
+          (Float.fromInt total))
+parseMeminfo : String -> Result String MemoryUsage
+parseMeminfo contents =
+  case meminfoValueKb "MemTotal" contents of
+    Nothing ->
+      Err "meminfo: missing MemTotal"
+    Just totalKb ->
+      case meminfoValueKb "MemAvailable" contents of
+        Nothing ->
+          Err "meminfo: missing MemAvailable"
+        Just availableKb ->
+          case meminfoValueKb "SwapTotal" contents of
+            Nothing ->
+              Err "meminfo: missing SwapTotal"
+            Just swapTotalKb ->
+              case meminfoValueKb "SwapFree" contents of
+                Nothing ->
+                  Err "meminfo: missing SwapFree"
+                Just swapFreeKb ->
+                  let
+                    totalMb = Int.div totalKb 1024
+                    availableMb = Int.div availableKb 1024
+                    usedMb = clampNonNegative (Int.sub totalMb availableMb)
+                    swapUsedMb =
+                      clampNonNegative
+                        (Int.div (Int.sub swapTotalKb swapFreeKb) 1024)
+                  in
+                    Ok
+                      { totalMb = totalMb
+                      , usedMb = usedMb
+                      , availableMb = availableMb
+                      , swapUsedMb = swapUsedMb
+                      }
+meminfoValueKb : String -> String -> Maybe Int
+meminfoValueKb key contents =
+  let
+    prefix = Str.append key ":"
+  in
+    lineFirstInt prefix contents
+lineFirstInt : String -> String -> Maybe Int
+lineFirstInt prefix contents =
+  case findFirst (\line -> Str.startsWith prefix line) (Str.lines contents) of
+    Nothing ->
+      Nothing
+    Just line ->
+      extractFirstInt line
+extractFirstInt : String -> Maybe Int
+extractFirstInt s =
+  let
+    chars = Str.toChars s
+    after = dropWhile (\c -> not (isDigit c)) chars
+  in
+    case after of
+      [] ->
+        Nothing
+      _ ->
+        let
+          digits = takeWhile isDigit after
+        in
+          case Str.toInt (Str.fromChars digits) of
+            Err _ ->
+              Nothing
+            Ok n ->
+              Just n
+procTotalJiffies : String -> Result String Int
+procTotalJiffies sys =
+  case Str.lines sys of
+    [] ->
+      Err "proc/stat: empty"
+    Cons first _ ->
+      case words first of
+        [] ->
+          Err "proc/stat: malformed cpu line"
+        Cons _ rest ->
+          sumInts rest
+procCpuCount : String -> Int
+procCpuCount sys = List.foldl countCpuCoreLine 0 (Str.lines sys)
+countCpuCoreLine : Int -> String -> Int
+countCpuCoreLine n line =
+  case isCpuCoreLine line of
+    True ->
+      Int.add n 1
+    False ->
+      n
+isCpuCoreLine : String -> Bool
+isCpuCoreLine line =
+  case Str.startsWith "cpu" line of
+    False ->
+      False
+    True ->
+      case Str.toChars (Str.drop 3 line) of
+        Cons c _ ->
+          isDigit c
+        _ ->
+          False
+procPidAndJiffies : String -> Result String (Int, Int)
+procPidAndJiffies statLine =
+  case words statLine of
+    [] ->
+      Err "proc/self/stat: missing pid"
+    Cons pidToken _ ->
+      case Str.toInt pidToken of
+        Err msg ->
+          Err (Str.append "proc/self/stat: invalid pid: " msg)
+        Ok pid ->
+          case Str.indexOf ") " statLine of
+            Nothing ->
+              Err "proc/self/stat: missing ') ' delimiter"
+            Just idx ->
+              let
+                rest = Str.drop (Int.add idx 2) statLine
+                fields = words rest
+              in
+                case (listGet 11 fields, listGet 12 fields) of
+                  (Just ut, Just st) ->
+                    case (Str.toInt ut, Str.toInt st) of
+                      (Ok utime, Ok stime) ->
+                        Ok (pid, Int.add utime stime)
+                      _ ->
+                        Err "proc/self/stat: invalid utime/stime"
+                  _ ->
+                    Err "proc/self/stat: missing utime/stime fields"
+sumInts : List String -> Result String Int
+sumInts xs = List.foldl sumIntsStep (Ok 0) xs
+sumIntsStep : Result String Int -> String -> Result String Int
+sumIntsStep acc s =
+  case acc of
+    Err msg ->
+      Err msg
+    Ok n ->
+      case Str.toInt s of
+        Err msg ->
+          Err msg
+        Ok m ->
+          Ok (Int.add n m)
+words : String -> List String
+words s = wordsFromChars (Str.toChars s) [] []
+wordsFromChars : List Char -> List Char -> List String -> List String
+wordsFromChars chars currentRev accRev =
+  case chars of
+    [] ->
+      case currentRev of
+        [] ->
+          List.reverse accRev
+        _ ->
+          List.reverse (Cons (Str.fromChars (List.reverse currentRev)) accRev)
+    Cons c rest ->
+      case Char.isSpace c of
+        True ->
+          case currentRev of
+            [] ->
+              wordsFromChars rest [] accRev
+            _ ->
+              wordsFromChars
+                rest
+                []
+                (Cons (Str.fromChars (List.reverse currentRev)) accRev)
+        False ->
+          wordsFromChars rest (Cons c currentRev) accRev
+findFirst : (a -> Bool) -> List a -> Maybe a
+findFirst pred xs =
+  case xs of
+    [] ->
+      Nothing
+    Cons x rest ->
+      case pred x of
+        True ->
+          Just x
+        False ->
+          findFirst pred rest
+listGet : Int -> List a -> Maybe a
+listGet n xs =
+  case Int.lte n 0 of
+    True ->
+      case xs of
+        [] ->
+          Nothing
+        Cons x _ ->
+          Just x
+    False ->
+      case xs of
+        [] ->
+          Nothing
+        Cons _ rest ->
+          listGet (Int.sub n 1) rest
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile pred xs =
+  case xs of
+    [] ->
+      []
+    Cons x rest ->
+      case pred x of
+        True ->
+          Cons x (takeWhile pred rest)
+        False ->
+          []
+dropWhile : (a -> Bool) -> List a -> List a
+dropWhile pred xs =
+  case xs of
+    [] ->
+      []
+    Cons x rest ->
+      case pred x of
+        True ->
+          dropWhile pred rest
+        False ->
+          xs
+not : Bool -> Bool
+not b =
+  case b of
+    True ->
+      False
+    False ->
+      True
+isDigit : Char -> Bool
+isDigit c =
+  let
+    n = Char.toInt c
+  in
+    case Int.gte n 48 of
+      False ->
+        False
+      True ->
+        Int.lte n 57
+clampNonNegative : Int -> Int
+clampNonNegative n =
+  case Int.gte n 0 of
+    True ->
+      n
+    False ->
+      0
+ensureAtLeast1 : Int -> Int
+ensureAtLeast1 n =
+  case Int.gte n 1 of
+    True ->
+      n
+    False ->
+      1
 showSeverity : Severity -> String
 showSeverity sev =
   case sev of
-    Critical -> "CRITICAL"
-    Warning -> "WARNING"
-    Info -> "INFO"
-
+    Critical ->
+      "CRITICAL"
+    Warning ->
+      "WARNING"
+    Info ->
+      "INFO"
 showIssue : Issue -> String
-showIssue iss =
-  render "  * [${showSeverity iss.severity}] ${iss.summary}"
-
+showIssue iss = render "  * [${showSeverity iss.severity}] ${iss.summary}"
 showIssuesHeader : String
 showIssuesHeader = "Issues found:"
-
 showIssues : List Issue -> String
 showIssues issues =
   case issues of
-    [] -> "No issues found."
-    _ -> Str.join "\n" (Cons showIssuesHeader (List.map showIssue issues))
-
+    [] ->
+      "No issues found."
+    _ ->
+      Str.join "\n" (Cons showIssuesHeader (List.map showIssue issues))
 showAction : Int -> Int -> ProposedAction -> String
 showAction current total act =
   render
     ''
-    +-------------------------------------------------+
-    | Action ${Str.fromInt current} of ${Str.fromInt total} [${act.risk} risk]
-    |
-    | Issue: ${act.issue}
-    |
-    | Proposed: ${act.action}
-    | Command:  ${act.command}
-    | Expected: ${act.expectedOutcome}
-    +-------------------------------------------------+
+      +-------------------------------------------------+
+      | Action ${Str.fromInt current} of ${Str.fromInt total} [${act.risk} risk]
+      |
+      | Issue: ${act.issue}
+      |
+      | Proposed: ${act.action}
+      | Command:  ${act.command}
+      | Expected: ${act.expectedOutcome}
+      +-------------------------------------------------+
     ''
-
--- Mock LLM provider for deterministic testing
-
 mockHealthProvider : Provider
 mockHealthProvider = provider "mock-health"
-
-mockHealthCall : Core.ProviderConfig -> String -> String -> IO (Result Core.Error Response)
+mockHealthCall :
+    Core.ProviderConfig -> String -> String -> IO (Result Core.Error Response)
 mockHealthCall _ _ _ =
   IO.pure
     <| Ok
       { text = mockHealthAnalysisJson
-      , usage = Just { inputTokens = 100, outputTokens = 50, totalTokens = 150 }
+      , usage = Just
+          { inputTokens = 100, outputTokens = 50, totalTokens = 150 }
       }
-
 mockHealthAnalysis : HealthAnalysis
 mockHealthAnalysis =
   { issues =
-      [ { severity = Critical
-        , summary = "Disk /var is 94% full"
-        , details = "Only 1.2GB remaining on /var partition"
-        }
-      , { severity = Warning
-        , summary = "High memory usage"
-        , details = "Process 'node' using 78% of available memory"
-        }
-      , { severity = Warning
-        , summary = "Service redis is down"
-        , details = "Redis service is not running"
-        }
-      ]
+    [ { severity = Critical
+    , summary = "Disk /var is 94% full"
+    , details = "Only 1.2GB remaining on /var partition"
+    }
+    , { severity = Warning
+    , summary = "High memory usage"
+    , details = "Process 'node' using 78% of available memory"
+    }
+    , { severity = Warning
+    , summary = "Service redis is down"
+    , details = "Redis service is not running"
+    }
+    ]
   , actions =
-      [ { id = 1
-        , issue = "Disk /var is 94% full"
-        , action = "Clear journal logs older than 7 days"
-        , command = "journalctl --vacuum-time=7d"
-        , risk = "low"
-        , expectedOutcome = "Free approximately 1-2GB"
-        }
-      , { id = 2
-        , issue = "Service redis is down"
-        , action = "Restart redis service"
-        , command = "systemctl restart redis"
-        , risk = "medium"
-        , expectedOutcome = "Redis service will be available"
-        }
-      ]
+    [ { id = 1
+    , issue = "Disk /var is 94% full"
+    , action = "Clear journal logs older than 7 days"
+    , command = "journalctl --vacuum-time=7d"
+    , risk = "low"
+    , expectedOutcome = "Free approximately 1-2GB"
+    }
+    , { id = 2
+    , issue = "Service redis is down"
+    , action = "Restart redis service"
+    , command = "systemctl restart redis"
+    , risk = "medium"
+    , expectedOutcome = "Redis service will be available"
+    }
+    ]
   }
-
 mockHealthAnalysisJson : String
 mockHealthAnalysisJson =
-  RawJson.stringify (encodeHealthAnalysis mockHealthAnalysis)
-
+  RawJson.stringify (healthAnalysisEncoder mockHealthAnalysis)
 mockHealthProviderImpl : Core.ProviderImpl
 mockHealthProviderImpl =
   { id = mockHealthProvider
   , call = mockHealthCall
   , capabilities = Core.setEmpty
   }
-
--- LLM analysis
-
 analysisSystemPrompt : String
 analysisSystemPrompt =
   render
     ''
-    You are a Linux sysadmin assistant. Analyze these system
-    health metrics and identify issues that need attention.
-
-    Severity guidelines:
-    - Critical: System at risk of failure (disk >90%, OOM imminent)
-    - Warning: Degraded performance or trending toward critical
-    - Info: Notable but not actionable
-
-    For each issue, propose a concrete remediation action with
-    the exact command to run. Assess risk level:
-    - low: Safe, no service impact (clear caches, rotate logs)
-    - medium: Brief impact (restart service, kill process)
-    - high: Potential data loss or extended downtime
-
-    Return actions in priority order (most urgent first).
+      You are a Linux sysadmin assistant. Analyze these system
+      health metrics and identify issues that need attention.
+      
+      Severity guidelines:
+      - Critical: System at risk of failure (disk >90%, OOM imminent)
+      - Warning: Degraded performance or trending toward critical
+      - Info: Notable but not actionable
+      
+      For each issue, propose a concrete remediation action with
+      the exact command to run. Assess risk level:
+      - low: Safe, no service impact (clear caches, rotate logs)
+      - medium: Brief impact (restart service, kill process)
+      - high: Potential data loss or extended downtime
+      
+      Return actions in priority order (most urgent first).
     ''
-
 buildAnalysisPrompt : HealthReport -> String
 buildAnalysisPrompt report =
   render
     ''
-    ${analysisSystemPrompt}
-
-    Health Report:
-    ${RawJson.stringify (encodeHealthReport report)}
+      ${analysisSystemPrompt}
+      
+      Health Report:
+      ${RawJson.stringify (healthReportEncoder report)}
     ''
-
--- Nova client setup
-
 mockProviderRegistry : Core.ProviderRegistry
 mockProviderRegistry =
   Core.dictInsert
@@ -430,26 +539,20 @@ mockProviderRegistry =
     mockHealthProvider
     mockHealthProviderImpl
     Core.defaultProviderRegistry
-
 makeClient : Nova.Client
-makeClient =
-  newClient mockProviderRegistry mockHealthProvider "health-analyzer"
-
--- Core analysis pipeline
-
+makeClient = newClient mockProviderRegistry mockHealthProvider "health-analyzer"
 analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
 analyzeHealth report =
   do
     let prompt = buildAnalysisPrompt report
     analysisJson <-
-      tool makeClient prompt
-        |> Task.mapError LlmError
-    D.decodeValue decodeHealthAnalysis analysisJson
+      tool
+        makeClient
+        prompt
+      |> Task.mapError LlmError
+    D.decodeValue healthAnalysisDecoder analysisJson
       |> Task.fromResult
       |> Task.mapError (\d -> DecodeError d.message)
-
--- Display results
-
 displayAnalysis : HealthAnalysis -> Task e Unit
 displayAnalysis analysis =
   do
@@ -457,51 +560,66 @@ displayAnalysis analysis =
     IO.println (showIssues analysis.issues)
     IO.println ""
     case analysis.actions of
-      [] -> IO.println "No remediation actions proposed."
+      [] ->
+        IO.println "No remediation actions proposed."
       _ ->
         do
           let count = List.length analysis.actions
-          IO.println (render "Proposed ${Str.fromInt count} remediation actions:")
+          IO.println
+            (render "Proposed ${Str.fromInt count} remediation actions:")
           IO.println ""
           processActions count analysis.actions
-
--- Error display
-
 showAgentError : AgentError -> String
 showAgentError err =
   case err of
-    LlmError e -> render "LLM analysis failed: ${Nova.showError e}"
-    DecodeError msg -> render "Failed to decode response: ${msg}"
-
--- Approval loop
-
+    LlmError e ->
+      render "LLM analysis failed: ${Nova.showError e}"
+    DecodeError msg ->
+      render "Failed to decode response: ${msg}"
+    SystemError msg ->
+      render "System check failed: ${msg}"
 type ApprovalResult =
   Approved
   | Skipped
   | Quit
-
 promptForApproval : Task e ApprovalResult
 promptForApproval =
   do
-    IO.println "Execute this action? [y/n/q] "
+    IO.println
+      "Approve this action (record command to approved-commands.sh)? [y/n/q] "
     input <- IO.readLine
     case input of
-      "y" -> Task.succeed Approved
-      "n" -> Task.succeed Skipped
-      "q" -> Task.succeed Quit
+      "y" ->
+        Task.succeed Approved
+      "n" ->
+        Task.succeed Skipped
+      "q" ->
+        Task.succeed Quit
       _ ->
         do
           IO.println "Please enter y, n, or q"
           promptForApproval
-
-mockExecuteCommand : String -> Task e String
-mockExecuteCommand cmd =
-  Task.succeed (render "[MOCK] Would execute: ${cmd}")
-
+approvedCommandsPath : String
+approvedCommandsPath = "approved-commands.sh"
+recordApprovedCommand : String -> Task e String
+recordApprovedCommand cmd =
+  do
+    existing <-
+      Task.onError (IO.readFile approvedCommandsPath) (\_ -> Task.succeed "")
+    let line = Str.append cmd "\n"
+    let updated =
+      case Str.isEmpty existing of
+        True ->
+          Str.append "#!/usr/bin/env sh\n\n" line
+        False ->
+          Str.append existing line
+    _ <-
+      Task.onError
+        (IO.writeFile approvedCommandsPath updated)
+        (\_ -> Task.succeed unit)
+    Task.succeed (render "Recorded: ${cmd}")
 processActions : Int -> List ProposedAction -> Task e Unit
-processActions total actions =
-  processActionsGo 1 total actions
-
+processActions total actions = processActionsGo 1 total actions
 processActionsGo : Int -> Int -> List ProposedAction -> Task e Unit
 processActionsGo current total actions =
   case actions of
@@ -509,7 +627,6 @@ processActionsGo current total actions =
       do
         IO.println "All actions processed."
         Task.succeed unit
-
     Cons act rest ->
       do
         IO.println (showAction current total act)
@@ -519,34 +636,26 @@ processActionsGo current total actions =
             do
               IO.println "Quitting. Remaining actions skipped."
               Task.succeed unit
-
           Skipped ->
             do
               IO.println "Action skipped."
               processActionsGo (Int.add current 1) total rest
-
           Approved ->
             do
-              result <- mockExecuteCommand act.command
+              result <- recordApprovedCommand act.command
               IO.println result
-              IO.println "Action completed."
+              IO.println "Action recorded."
               processActionsGo (Int.add current 1) total rest
-
--- The agent pipeline: collect -> analyze -> display -> execute
-
 runAgent : Task AgentError Unit
 runAgent =
   do
     IO.println "Collecting system health data..."
-    report <- Task.mapError (\_ -> DecodeError "unreachable") collectHealthReport
+    report <- collectHealthReport
     IO.println "Health data collected."
     IO.println ""
     IO.println "Analyzing with LLM..."
     analysis <- analyzeHealth report
     displayAnalysis analysis
-
--- Entry point with error handling at the boundary
-
 main : Task Unit Unit
 main =
   do
@@ -554,5 +663,19 @@ main =
     IO.println ""
     result <- Task.result runAgent
     case result of
-      Ok _ -> Task.succeed unit
-      Err e -> IO.println (showAgentError e)
+      Ok _ ->
+        Task.succeed unit
+      Err e ->
+        IO.println (showAgentError e)
+
+{-| System health monitoring agent using Nova LLM analysis.
+
+    Demonstrates:
+    - Composable Task pipelines with unified error handling
+    - Structured tool outputs with Nova.tool
+    - JSON decoding of LLM responses
+    - User approval workflows
+    - Clean separation of concerns: collect -> analyze -> display -> execute
+-}
+
+-- Health check result types
