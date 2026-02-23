@@ -1,0 +1,28 @@
+module HealthAgent exposing (main)
+
+{-| System health monitoring agent using Nova LLM analysis.
+
+    Demonstrates:
+    - Structured tool outputs with Nova.tool
+    - JSON decoding of LLM responses
+    - User approval workflows
+    - RuntimeConfig guards for tool execution
+-}
+
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.String as Str
+import Lune.Int as Int
+import Lune.Float as Float
+import Lune.List as List
+import Lune.Json as RawJson exposing (Json)
+import Lune.Json.Decode as D
+import Lune.Json.Encode as E
+import Nova exposing (newClient, provider, withModel, tool)
+import Nova.Core as Core exposing (Error(..), Provider, Response)
+import Nova.Tool as Tool
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+
+main : Task Unit Unit
+main =
+  IO.println "Health Agent placeholder"
