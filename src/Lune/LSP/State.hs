@@ -42,6 +42,7 @@ data OpenDocInfo = OpenDocInfo
 data SemanticInfo = SemanticInfo
   { siModuleName :: Text
   , siPath :: FilePath
+  , siVersion :: Int
   , siTypesAt :: [(Span, Check.TypeScheme)]
   , siValueEnv :: Map Text Check.TypeScheme
   , siDocs :: Map Text Text

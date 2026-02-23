@@ -72,21 +72,24 @@ import qualified Lune.Resolve as Resolve
 import qualified Lune.Syntax as S
 import Lune.Validate (validateModule)
 import Lune.LSP.Convert
-  ( Span
+  ( Span (..)
   , filePathToUri'
   , fullDocumentRange
   , spanFromSourcePos
   , spanToRange
+  , utf16ColToCodepoints
   , uriToFilePath'
   )
 import Lune.LSP.State
   ( LspState
   , OpenDocInfo (..)
   , SemanticInfo (..)
+  , checkVersion
   , clearLastDiagnostics
   , clearSemanticInfoByModule
   , clearSemanticInfoByPath
   , getAffectedFiles
+  , incrementCheckVersion
   , lookupLastDiagnostics
   , lookupOpenDoc
   , lookupOpenDocText
@@ -97,6 +100,7 @@ import Lune.LSP.State
   , setSemanticInfo
   , setOpenDoc
   )
+import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 import Text.Megaparsec
   ( ParseErrorBundle
@@ -145,12 +149,8 @@ handleDidOpen stateRef (TNotificationMessage _ _ (DidOpenTextDocumentParams docI
             }
       liftIO $
         atomicModifyIORef' stateRef $ \st ->
-          let oldMod = odiModuleName =<< lookupOpenDoc path st
-              st1 = setOpenDoc path info st
-              st2 = clearSemanticInfoByPath path st1
-              st3 = maybe st2 (`clearSemanticInfoByModule` st2) oldMod
-              st4 = maybe st3 (`clearSemanticInfoByModule` st3) modName
-           in (st4, ())
+          let st1 = setOpenDoc path info st
+           in (st1, ())
       publishWorkspaceDiagnostics stateRef path
 
 handleDidChange :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidChange -> LspM () ()
@@ -177,12 +177,8 @@ handleDidChange stateRef (TNotificationMessage _ _ (DidChangeTextDocumentParams 
                 }
           liftIO $
             atomicModifyIORef' stateRef $ \st ->
-              let oldMod = odiModuleName =<< lookupOpenDoc path st
-                  st1 = setOpenDoc path info st
-                  st2 = clearSemanticInfoByPath path st1
-                  st3 = maybe st2 (`clearSemanticInfoByModule` st2) oldMod
-                  st4 = maybe st3 (`clearSemanticInfoByModule` st3) modName
-               in (st4, ())
+              let st1 = setOpenDoc path info st
+               in (st1, ())
           publishWorkspaceDiagnostics stateRef path
 
 handleDidClose :: IORef LspState -> TNotificationMessage 'Method_TextDocumentDidClose -> LspM () ()
@@ -208,8 +204,14 @@ publishCheckedDiagnostics stateRef path contents = do
   liftIO $
     atomicModifyIORef' stateRef $ \st ->
       let st1 = setLastDiagnostics path lspDiags st
-          st2 = foldr setSemanticInfo st1 semantics
-       in (st2, ())
+       in case semantics of
+            [] ->
+              (st1, ())
+            _ ->
+              let (st2, ver) = incrementCheckVersion st1
+                  semantics' = map (\s -> s {siVersion = ver}) semantics
+                  st3 = foldr setSemanticInfo st2 semantics'
+               in (st3, ())
   sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- | Publish diagnostics for the changed file and all files that import it.
@@ -235,8 +237,14 @@ publishWorkspaceDiagnostics stateRef changedPath = do
           liftIO $
             atomicModifyIORef' stateRef $ \st' ->
               let st1 = setLastDiagnostics path lspDiags st'
-                  st2 = foldr setSemanticInfo st1 semantics
-               in (st2, ())
+               in case semantics of
+                    [] ->
+                      (st1, ())
+                    _ ->
+                      let (st2, ver) = incrementCheckVersion st1
+                          semantics' = map (\s -> s {siVersion = ver}) semantics
+                          st3 = foldr setSemanticInfo st2 semantics'
+                       in (st3, ())
           sendNotification SMethod_TextDocumentPublishDiagnostics (PublishDiagnosticsParams uri Nothing lspDiags)
 
 -- =============================================================================
@@ -321,6 +329,11 @@ handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier
       responder (Right (InR Null))
     Just path -> do
       st <- liftIO (readIORef stateRef)
+      dbg <- liftIO (lookupEnv "LUNE_LSP_DEBUG")
+      let debugLog msg =
+            case dbg of
+              Nothing -> pure ()
+              Just _ -> liftIO (hPutStrLn stderr msg)
       -- Prefer open buffers; fall back to disk.
       docOrErr <- liftIO $ do
         case lookupOpenDoc path st of
@@ -343,10 +356,25 @@ handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier
           let tokenAndRange = wordAtPosition docText pos
 
           case tokenAndRange of
-            Nothing ->
+            Nothing -> do
+              debugLog $
+                "lune: hover: uri="
+                  <> show uri
+                  <> " pos="
+                  <> show pos
+                  <> " token=<none>"
+                  <> " semanticFound=false"
+                  <> " semanticVersion=<none>"
+                  <> " checkVersion="
+                  <> show (checkVersion st)
               responder (Right (InR Null))
             Just (range, tok) -> do
               let mTarget = resolveHoverTarget st path modName importAliases tok
+                  mSem = fst <$> mTarget
+                  (semanticFound, semanticVer) =
+                    case mSem of
+                      Nothing -> (False, "<none>")
+                      Just sem -> (True, show (siVersion sem))
                   (mScheme, mDoc) =
                     case mTarget of
                       Nothing ->
@@ -392,6 +420,19 @@ handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier
                       , _range = Just range
                       }
 
+              debugLog $
+                "lune: hover: uri="
+                  <> show uri
+                  <> " pos="
+                  <> show pos
+                  <> " token="
+                  <> T.unpack tok
+                  <> " semanticFound="
+                  <> show semanticFound
+                  <> " semanticVersion="
+                  <> semanticVer
+                  <> " checkVersion="
+                  <> show (checkVersion st)
               responder (Right (InL hover))
   where
     resolveHoverTarget st path modName importAliases tok =
@@ -442,8 +483,6 @@ handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier
 --
 -- Token characters: A-Z a-z 0-9 _ .
 --
--- TODO: LSP positions use UTF-16 code units; for Hover v1 we assume the
--- character index aligns with 'Text' indexing for ASCII.
 wordAtPosition :: Text -> Position -> Maybe (Range, Text)
 wordAtPosition doc (Position line0 char0) = do
   let ls = T.splitOn "\n" doc
@@ -451,7 +490,8 @@ wordAtPosition doc (Position line0 char0) = do
   lineText <- if li < 0 || li >= length ls then Nothing else Just (ls !! li)
 
   let len = T.length lineText
-      ci = fromIntegral char0 :: Int
+      ciUtf16 = fromIntegral char0 :: Int
+      ci = utf16ColToCodepoints lineText ciUtf16
       isTokenChar ch =
         isAlphaNum ch || ch == '_' || ch == '.'
       charInBounds i = i >= 0 && i < len
@@ -480,11 +520,14 @@ wordAtPosition doc (Position line0 char0) = do
       left = goLeft ix
       right = goRight (ix + 1)
       tok = T.take (right - left) (T.drop left lineText)
-      range =
-        Range
-          { _start = Position line0 (fromIntegral left)
-          , _end = Position line0 (fromIntegral right)
+      sp =
+        Span
+          { spanStartLine = li + 1
+          , spanStartCol = left + 1
+          , spanEndLine = li + 1
+          , spanEndCol = right + 1
           }
+      range = spanToRange doc sp
 
   if T.null tok then Nothing else Just (range, tok)
 
@@ -605,9 +648,10 @@ checkFileWithSemantic stateRef path contents =
 
                             let semantics =
                                   [ let table = Map.findWithDefault (Docs.DocTable Nothing Map.empty) modName docsByModule
-                                     in SemanticInfo
+                                    in SemanticInfo
                                           { siModuleName = modName
                                           , siPath = MG.lmPath lm
+                                          , siVersion = 0
                                           , siTypesAt = []
                                           , siValueEnv = Map.filterWithKey (\k _ -> (modName <> ".") `T.isPrefixOf` k) valueEnv
                                           , siDocs = Docs.dtDeclDocs table

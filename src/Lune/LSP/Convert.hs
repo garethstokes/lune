@@ -5,6 +5,7 @@ module Lune.LSP.Convert
   , spanFromSourcePos
   , spanToRange
   , fullDocumentRange
+  , utf16ColToCodepoints
   , filePathToUri'
   , uriToFilePath'
   ) where
@@ -101,6 +102,32 @@ codePointsToUtf16Col line codePointCol0 =
   where
     utf16Len ch =
       if ord ch <= 0xFFFF then 1 else 2
+
+-- | Convert a 0-based UTF-16 code unit column (as used by LSP) into a 0-based
+-- Unicode code point column (as used by 'Text' indexing).
+--
+-- This clamps safely:
+--   - If the requested column is <= 0, returns 0.
+--   - If the requested column is beyond end-of-line, returns 'T.length line'.
+--
+-- If the requested column falls inside a surrogate pair (shouldn't happen with
+-- valid LSP positions), this returns the next code point boundary.
+utf16ColToCodepoints :: Text -> Int -> Int
+utf16ColToCodepoints line utf16Col
+  | utf16Col <= 0 = 0
+  | otherwise = go 0 0 line
+  where
+    go codePointsSoFar utf16SoFar rest
+      | utf16SoFar >= utf16Col =
+          codePointsSoFar
+      | otherwise =
+          case T.uncons rest of
+            Nothing ->
+              codePointsSoFar
+            Just (ch, rest') ->
+              let utf16SoFar' =
+                    utf16SoFar + if ord ch <= 0xFFFF then 1 else 2
+               in go (codePointsSoFar + 1) utf16SoFar' rest'
 
 clamp0 :: Int -> Int -> Int -> Int
 clamp0 x lo hi =

@@ -21,12 +21,12 @@ import Data.Aeson.Types (parseMaybe, (.:))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.List (isSuffixOf, sort)
-import Data.Char (isSpace, toLower)
+import Data.Char (isSpace, toLower, ord)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import System.Directory (listDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
-import System.Directory (getTemporaryDirectory, removeFile)
+import System.Directory (getTemporaryDirectory, removeFile, getCurrentDirectory)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeBaseName)
@@ -75,7 +75,7 @@ main = do
     , testGroup "Fmt" (map fmtGoldenTest fmtCases)
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
     , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
-    , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, vfsImportPropagationTest]
+    , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, unicodeHoverIntegrationTest, hoverRetentionIntegrationTest, vfsImportPropagationTest]
     ]
 
 -- | Discover .lune files in a directory, sorted for determinism.
@@ -769,6 +769,290 @@ typedHoverIntegrationTest =
             , "params" .= Null
             ]
 
+unicodeHoverIntegrationTest :: TestTree
+unicodeHoverIntegrationTest =
+  testCase "HoverUtf16Unicode" $ do
+    logMsg "starting unicode hover test"
+    luneBin <- getLuneBin
+    cwd <- getCurrentDirectory
+    let fixturePath = cwd </> "tests" </> "lsp" </> "test_unicode.lune"
+    fixtureText <- TIO.readFile fixturePath
+
+    withLspServer luneBin $ \hin hout _ph -> do
+      -- Initialize handshake
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (1 :: Int)
+          , "method" .= ("initialize" :: T.Text)
+          , "params"
+              .= object
+                [ "processId" .= (Nothing :: Maybe Int)
+                , "rootUri" .= (Nothing :: Maybe T.Text)
+                , "capabilities" .= object []
+                ]
+          ]
+
+      _ <- waitForResponseId 1 hout
+
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("initialized" :: T.Text)
+          , "params" .= object []
+          ]
+
+      let uri = fileUri fixturePath
+
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("textDocument/didOpen" :: T.Text)
+          , "params"
+              .= object
+                [ "textDocument"
+                    .= object
+                      [ "uri" .= uri
+                      , "languageId" .= ("lune" :: T.Text)
+                      , "version" .= (0 :: Int)
+                      , "text" .= fixtureText
+                      ]
+                ]
+          ]
+
+      diags <- waitForPublishDiagnostics uri hout
+      assertEqual "unicode file has no errors" 0 (length diags)
+
+      let ls = T.splitOn "\n" fixtureText
+          mainLine =
+            case [(ix, l) | (ix, l) <- zip [0 :: Int ..] ls, "module " `T.isPrefixOf` l] of
+              (x : _) -> x
+              [] -> error "missing module header line in test_unicode.lune"
+          (mainLineIx, mainLineText) = mainLine
+          (prefix, rest) = T.breakOn "main" mainLineText
+          mainStartCp =
+            if T.null rest
+              then error "missing token `main` on module header line"
+              else T.length prefix
+          -- Hover at the start of the final character in `main` so an incorrect
+          -- UTF-16/codepoint conversion lands outside the token.
+          hoverCharUtf16 = codePointsToUtf16Col mainLineText (mainStartCp + 3)
+
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (2 :: Int)
+          , "method" .= ("textDocument/hover" :: T.Text)
+          , "params"
+              .= object
+                [ "textDocument" .= object ["uri" .= uri]
+                , "position" .= object ["line" .= mainLineIx, "character" .= hoverCharUtf16]
+                ]
+          ]
+
+      hoverRes <- waitForResponseId 2 hout
+      let md = fromMaybe "" (extractHoverMarkdown hoverRes)
+      assertEqual "unicode hover includes type block" True ("```lune" `T.isInfixOf` md)
+      assertEqual "unicode hover includes `main : String`" True ("main : String" `T.isInfixOf` md)
+
+      -- Shutdown/exit
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "id" .= (3 :: Int)
+          , "method" .= ("shutdown" :: T.Text)
+          , "params" .= Null
+          ]
+      _ <- waitForResponseId 3 hout
+      sendLsp hin $
+        object
+          [ "jsonrpc" .= ("2.0" :: T.Text)
+          , "method" .= ("exit" :: T.Text)
+          , "params" .= Null
+          ]
+
+hoverRetentionIntegrationTest :: TestTree
+hoverRetentionIntegrationTest =
+  testCase "HoverRetentionAcrossSyntaxError" $ do
+    logMsg "starting hover retention test"
+    luneBin <- getLuneBin
+    withTempFile "lune-lsp-hover-retain" ".lune" $ \tmpPath -> do
+      let uri = fileUri tmpPath
+          goodText =
+            T.unlines
+              [ "module A exposing (main)"
+              , ""
+              , "main : String"
+              , "main = \"ok\""
+              , ""
+              , "other = 1"
+              ]
+          brokenText =
+            T.unlines
+              [ "module A exposing (main)"
+              , ""
+              , "main : String"
+              , "main = \"ok\""
+              , ""
+              , "other = ("
+              ]
+
+          mainLineIx =
+            case [ix | (ix, l) <- zip [0 :: Int ..] (T.splitOn "\n" goodText), "main =" `T.isPrefixOf` l] of
+              (ix : _) -> ix
+              [] -> error "missing `main =` line in hover retention test"
+
+          hoverPos = object ["line" .= mainLineIx, "character" .= (1 :: Int)]
+
+      withLspServer luneBin $ \hin hout _ph -> do
+        -- Initialize handshake
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (1 :: Int)
+            , "method" .= ("initialize" :: T.Text)
+            , "params"
+                .= object
+                  [ "processId" .= (Nothing :: Maybe Int)
+                  , "rootUri" .= (Nothing :: Maybe T.Text)
+                  , "capabilities" .= object []
+                  ]
+            ]
+
+        _ <- waitForResponseId 1 hout
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("initialized" :: T.Text)
+            , "params" .= object []
+            ]
+
+        -- Open good document and verify hover works.
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didOpen" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uri
+                        , "languageId" .= ("lune" :: T.Text)
+                        , "version" .= (0 :: Int)
+                        , "text" .= goodText
+                        ]
+                  ]
+            ]
+
+        diags0 <- waitForPublishDiagnostics uri hout
+        assertEqual "good doc has no errors" 0 (length diags0)
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (2 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uri]
+                  , "position" .= hoverPos
+                  ]
+            ]
+
+        hoverGood <- waitForResponseId 2 hout
+        let hoverGoodMd = fromMaybe "" (extractHoverMarkdown hoverGood)
+        assertEqual "initial hover includes type block" True ("```lune" `T.isInfixOf` hoverGoodMd)
+        assertEqual "initial hover includes `main : String`" True ("main : String" `T.isInfixOf` hoverGoodMd)
+
+        -- Introduce a syntax error elsewhere and ensure hover still uses last-good semantics.
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didChange" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uri
+                        , "version" .= (1 :: Int)
+                        ]
+                  , "contentChanges" .= [object ["text" .= brokenText]]
+                  ]
+            ]
+
+        diagsBroken <- waitForPublishDiagnostics uri hout
+        assertEqual "broken doc publishes diagnostics" True (length diagsBroken > 0)
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (3 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uri]
+                  , "position" .= hoverPos
+                  ]
+            ]
+
+        hoverBroken <- waitForResponseId 3 hout
+        let hoverBrokenMd = fromMaybe "" (extractHoverMarkdown hoverBroken)
+        assertEqual "hover still includes type block after syntax error" True ("```lune" `T.isInfixOf` hoverBrokenMd)
+        assertEqual "hover still includes `main : String` after syntax error" True ("main : String" `T.isInfixOf` hoverBrokenMd)
+
+        -- Fix the syntax error and ensure hover still works.
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("textDocument/didChange" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument"
+                      .= object
+                        [ "uri" .= uri
+                        , "version" .= (2 :: Int)
+                        ]
+                  , "contentChanges" .= [object ["text" .= goodText]]
+                  ]
+            ]
+
+        diagsFixed <- waitForPublishDiagnostics uri hout
+        assertEqual "fixed doc is clean again" 0 (length diagsFixed)
+
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (4 :: Int)
+            , "method" .= ("textDocument/hover" :: T.Text)
+            , "params"
+                .= object
+                  [ "textDocument" .= object ["uri" .= uri]
+                  , "position" .= hoverPos
+                  ]
+            ]
+
+        hoverFixed <- waitForResponseId 4 hout
+        let hoverFixedMd = fromMaybe "" (extractHoverMarkdown hoverFixed)
+        assertEqual "hover includes type block after fix" True ("```lune" `T.isInfixOf` hoverFixedMd)
+        assertEqual "hover includes `main : String` after fix" True ("main : String" `T.isInfixOf` hoverFixedMd)
+
+        -- Shutdown/exit
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "id" .= (5 :: Int)
+            , "method" .= ("shutdown" :: T.Text)
+            , "params" .= Null
+            ]
+        _ <- waitForResponseId 5 hout
+        sendLsp hin $
+          object
+            [ "jsonrpc" .= ("2.0" :: T.Text)
+            , "method" .= ("exit" :: T.Text)
+            , "params" .= Null
+            ]
+
 logMsg :: String -> IO ()
 logMsg msg = do
   dbg <- lookupEnv "LUNE_LSP_TEST_DEBUG"
@@ -961,6 +1245,10 @@ extractHoverMarkdown =
       Object c -> pure c
       _ -> fail "hover.contents not an object"
     c .: "value"
+
+codePointsToUtf16Col :: T.Text -> Int -> Int
+codePointsToUtf16Col line codePointCol0 =
+  T.foldl' (\acc ch -> acc + if ord ch <= 0xFFFF then 1 else 2) 0 (T.take codePointCol0 line)
 
 fileUri :: FilePath -> T.Text
 fileUri path =

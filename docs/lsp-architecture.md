@@ -59,6 +59,7 @@ data OpenDocInfo = OpenDocInfo
 data SemanticInfo = SemanticInfo
   { siModuleName :: Text
   , siPath       :: FilePath
+  , siVersion    :: Int                  -- checkVersion when computed (last-good)
   , siTypesAt    :: [(Span, TypeScheme)]    -- **ALWAYS EMPTY** - span-indexed types
   , siValueEnv   :: Map Text TypeScheme     -- Qualified name -> type scheme
   , siDocs       :: Map Text Text           -- Decl name -> doc comment
@@ -85,9 +86,6 @@ parseModuleInfo(path, contents)
     │ Extract module name, imports, aliases
     │ Store in openDocs[path]
     ▼
-clearSemanticInfoByPath + clearSemanticInfoByModule
-    │ Invalidate stale semantic info
-    ▼
 publishWorkspaceDiagnostics(path)
     │
     ├── getAffectedFiles(path)  # Changed file + files that import it
@@ -107,7 +105,13 @@ publishWorkspaceDiagnostics(path)
         └── Extract docs (extractDocTable per module)
         │
         ▼
-    Store SemanticInfo for each module in program
+    If check succeeded:
+        │ bump checkVersion
+        │ stamp siVersion = checkVersion
+        ▼
+    Store SemanticInfo for each module in program (replaces last-good)
+        │
+        └── If check failed: do NOT overwrite semantic info (hover can use last-good)
         │
         ▼
     publishDiagnostics to client
@@ -169,7 +173,8 @@ Get document info:
     ▼
 wordAtPosition(docText, position)
     │ Extract token under cursor (alphanumeric + _ + .)
-    │ **Uses Text indexing, not UTF-16 conversion**
+    │ Convert LSP UTF-16 columns → Text codepoint indices
+    │ Compute hover Range via Span → Range (UTF-16-safe)
     │
     ▼
 resolveHoverTarget(st, path, modName, importAliases, tok)
@@ -198,12 +203,12 @@ Render hover:
 | # | Symptom | Trigger | Root Cause | Location | How to Confirm | Fix Idea |
 |---|---------|---------|------------|----------|----------------|----------|
 | 1 | **No type shown for local binding** | Hover on `let x = ...` or function parameter | `siValueEnv` only contains top-level declarations with qualified names | `Handlers.hs:612` | Log `siValueEnv` keys; won't include local names | Implement span-indexed types in `siTypesAt` |
-| 2 | **Stale type after edit** | Edit function body, hover immediately | Semantic info cleared on change, but hover reads old state before recheck completes | `Handlers.hs:178-185` clears, but `handleHover` reads state immediately | Add logging at hover start showing checkVersion | Queue hover behind diagnostics or recheck on hover |
-| 3 | **UTF-16 position mismatch** | Hover on line with emoji/CJK before cursor | `wordAtPosition` uses `T.index` (codepoint-based) but LSP sends UTF-16 positions | `Handlers.hs:445-446` TODO comment | Create file with `😀foo`, hover on `foo` | Convert UTF-16 position to codepoint before indexing |
+| 2 | **Type temporarily stale after edit** | Edit function body, hover immediately | Hover uses last-good semantic info until the next successful check finishes | `Handlers.hs:handleHover` | Enable `LUNE_LSP_DEBUG`, observe `semanticVersion` lagging `checkVersion` | Wait for diagnostics to refresh, then re-hover |
+| 3 | **UTF-16 position mismatch** | Hover on line with emoji/CJK before cursor | (Fixed) `wordAtPosition` now converts UTF-16 → codepoints before indexing | `Convert.hs:utf16ColToCodepoints` + `Handlers.hs:wordAtPosition` | Run `HoverUtf16Unicode` LSP test | - |
 | 4 | **Qualified name not found** | Hover on `Module.foo` where alias differs | `lookupQualifiedSemantic` checks module name OR alias, but order matters | `Handlers.hs:412-417` | Hover on aliased import like `import Foo as F`, then `F.bar` | Ensure both lookups succeed |
 | 5 | **Type missing for derived code** | Hover on field accessor from `deriving (Table)` | Derive expansion happens before resolve; generated names may not match source positions | `ModuleGraph.hs:82-85` | Hover on derived accessor, check if found | Map derived spans back to source |
 | 6 | **Type missing for constructors** | Hover on `Just` or custom ADT constructor | `siValueEnv` from `typecheckModuleEnv` may not include constructors in expected format | `Check.hs` | Log valueEnv keys for module with ADT | Ensure constructors are in valueEnv with correct qualified names |
-| 7 | **Hover fails on syntax error** | Parse error anywhere in file | `checkFileWithSemantic` returns early on parse failure, no semantic info stored | `Handlers.hs:540-541` | Introduce syntax error, hover elsewhere | Cache last-good semantic info |
+| 7 | **Hover fails on syntax error** | Parse error anywhere in file | (Mostly fixed) hover keeps using last-good semantic info; only fails if the file has never typechecked successfully | `Handlers.hs:publishWorkspaceDiagnostics` + `Handlers.hs:handleHover` | Introduce syntax error, hover a previously-checked top-level | Ensure file checks successfully at least once |
 | 8 | **Hover on imported but not typechecked module** | Open file A, hover on B.foo without opening B | SemanticInfo for B may not be cached if B was loaded from disk during A's check | `Handlers.hs:606-618` | Check if B's info is in `semanticByModule` | Ensure all program modules get SemanticInfo |
 
 ### Critical Issue: `siTypesAt` is Never Populated
@@ -218,21 +223,11 @@ The design includes `siTypesAt :: [(Span, TypeScheme)]` for span-indexed type lo
 - Only top-level declarations in `siValueEnv` can be looked up
 - Type information is lost for sub-expressions
 
-### UTF-16 Position Bug
+### UTF-16 Position Handling
 
-```haskell
--- src/Lune/LSP/Handlers.hs:445-446
--- TODO: LSP positions use UTF-16 code units; for Hover v1 we assume the
--- character index aligns with 'Text' indexing for ASCII.
-```
-
-`wordAtPosition` directly uses the LSP character position as a `Text` index:
-```haskell
-ci = fromIntegral char0 :: Int
-at i = T.index lineText i
-```
-
-But `Text.index` uses codepoints, while LSP uses UTF-16 code units. For characters outside BMP (emoji, some CJK), this causes off-by-one or more errors.
+The codebase now does UTF-16 ↔︎ codepoint conversion in both directions:
+- `spanToRange` converts codepoint `Span` columns into UTF-16 `Position.character` for LSP.
+- `wordAtPosition` converts LSP UTF-16 `Position.character` into a codepoint index before using `Text` operations.
 
 ## Recommended Fixes
 
@@ -259,47 +254,13 @@ handleHover = do
     Nothing -> -- fall back to siValueEnv lookup
 ```
 
-### 2. Fix UTF-16 Position Handling (Medium Impact, Low Effort)
+### 2. Fix UTF-16 Position Handling (Implemented)
 
-**Problem**: Hover fails on lines with multi-byte characters.
+`Convert.utf16ColToCodepoints` walks a line counting UTF-16 units (BMP=1, non-BMP=2) and clamps safely. `Handlers.wordAtPosition` uses it before token extraction, and uses `spanToRange` to return UTF-16-correct hover ranges.
 
-**Solution**: Convert UTF-16 column to codepoint column before indexing.
+### 3. Cache Last-Good Semantic Info (Implemented)
 
-```haskell
--- In Handlers.hs, add:
-utf16ColToCodepoints :: Text -> Int -> Int
-utf16ColToCodepoints line utf16Col =
-  go 0 0
-  where
-    go cpIdx utf16Idx
-      | utf16Idx >= utf16Col = cpIdx
-      | cpIdx >= T.length line = cpIdx
-      | otherwise =
-          let ch = T.index line cpIdx
-              units = if ord ch > 0xFFFF then 2 else 1
-          in go (cpIdx + 1) (utf16Idx + units)
-
--- Then in wordAtPosition:
-let ci = utf16ColToCodepoints lineText (fromIntegral char0)
-```
-
-### 3. Cache Last-Good Semantic Info (Medium Impact, Medium Effort)
-
-**Problem**: Hover fails completely when there are parse/type errors.
-
-**Solution**: Keep previous semantic info until a new successful check replaces it.
-
-```haskell
--- In State.hs, add:
-data SemanticCache = SemanticCache
-  { scCurrent :: Maybe SemanticInfo   -- Latest successful
-  , scVersion :: Int                   -- When it was computed
-  }
-
--- In Handlers.hs, on check failure:
--- Don't clear semantic info, keep stale version
--- On check success: update with new info
-```
+The LSP server no longer clears `semanticByPath`/`semanticByModule` on `didChange`. Semantics are only replaced on successful checks; failures publish diagnostics but keep the last-good semantic info for hover. `checkVersion` increments only when semantics are stored, and each `SemanticInfo` is stamped with `siVersion`.
 
 ## Known Limitations / TODOs
 
@@ -321,40 +282,9 @@ For LSP tests:
 LUNE_LSP_TEST_DEBUG=1 cabal test
 ```
 
-### Add Hover Debug Logging
+### Hover Debug Logging
 
-To trace hover failures, add at `Handlers.hs:318`:
-
-```haskell
-handleHover stateRef (TRequestMessage _ _ _ (HoverParams (TextDocumentIdentifier uri) pos _token)) responder = do
-  liftIO $ whenDebug $ do
-    hPutStrLn stderr $ "[hover] uri=" ++ show uri ++ " pos=" ++ show pos
-  case uriToFilePath' uri of
-    ...
-    Just path -> do
-      st <- liftIO (readIORef stateRef)
-      liftIO $ whenDebug $ do
-        hPutStrLn stderr $ "[hover] semanticByPath keys=" ++ show (Map.keys (semanticByPath st))
-        hPutStrLn stderr $ "[hover] semanticByModule keys=" ++ show (Map.keys (semanticByModule st))
-      ...
-      Just (range, tok) -> do
-        liftIO $ whenDebug $ do
-          hPutStrLn stderr $ "[hover] token=" ++ show tok
-          case mTarget of
-            Nothing -> hPutStrLn stderr "[hover] no semantic target found"
-            Just (sem, name) -> do
-              hPutStrLn stderr $ "[hover] target module=" ++ show (siModuleName sem)
-              hPutStrLn stderr $ "[hover] valueEnv keys=" ++ show (Map.keys (siValueEnv sem))
-              hPutStrLn stderr $ "[hover] lookup name=" ++ show name
-        ...
-
-whenDebug :: IO () -> IO ()
-whenDebug action = do
-  dbg <- lookupEnv "LUNE_LSP_DEBUG"
-  case dbg of
-    Just _ -> action
-    Nothing -> pure ()
-```
+Set `LUNE_LSP_DEBUG=1` when launching the server to log hover requests to stderr (uri, pos, extracted token, whether semantic info was found, `semanticVersion`, and current `checkVersion`).
 
 ### Manual Reproduction
 
@@ -365,15 +295,4 @@ whenDebug action = do
 
 ### Test for UTF-16 Bug
 
-Create `test_unicode.lune`:
-```lune
-module TestUnicode exposing (main)
-
--- 😀 is 2 UTF-16 code units
-emoji : String
-emoji = "😀"
-
-main = emoji
-```
-
-Hover on `main` (after the emoji comment) - if UTF-16 handling is broken, hover will fail or return wrong result.
+Run the regression test `HoverUtf16Unicode` (fixture: `tests/lsp/test_unicode.lune`).

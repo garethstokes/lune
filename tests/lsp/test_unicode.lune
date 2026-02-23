@@ -1,0 +1,7 @@
+module TestUnicode exposing ({- 😀😀 -} main)
+
+-- 😀 is 2 UTF-16 code units
+emoji : String
+emoji = "😀"
+
+main = emoji
