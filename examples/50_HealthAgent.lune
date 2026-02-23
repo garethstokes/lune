@@ -370,6 +370,37 @@ mockHealthProviderImpl =
   , capabilities = Core.setEmpty
   }
 
+-- LLM analysis
+
+analysisSystemPrompt : String
+analysisSystemPrompt =
+  render
+    ''
+    You are a Linux sysadmin assistant. Analyze these system
+    health metrics and identify issues that need attention.
+
+    Severity guidelines:
+    - Critical: System at risk of failure (disk >90%, OOM imminent)
+    - Warning: Degraded performance or trending toward critical
+    - Info: Notable but not actionable
+
+    For each issue, propose a concrete remediation action with
+    the exact command to run. Assess risk level:
+    - low: Safe, no service impact (clear caches, rotate logs)
+    - medium: Brief impact (restart service, kill process)
+    - high: Potential data loss or extended downtime
+
+    Return actions in priority order (most urgent first).
+    ''
+
+buildAnalysisPrompt : HealthReport -> String
+buildAnalysisPrompt report =
+  Str.join ""
+    [ analysisSystemPrompt
+    , "\n\nHealth Report:\n"
+    , RawJson.stringify (encodeHealthReport report)
+    ]
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
