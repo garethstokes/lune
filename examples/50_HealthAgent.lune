@@ -86,6 +86,58 @@ type alias HealthAnalysis =
   , actions : List ProposedAction
   }
 
+-- JSON encoders for health report
+
+encodeDiskUsage : DiskUsage -> Json
+encodeDiskUsage d =
+  E.object
+    [ { key = "mountPoint", value = E.string d.mountPoint }
+    , { key = "totalGb", value = E.float d.totalGb }
+    , { key = "usedGb", value = E.float d.usedGb }
+    , { key = "percentUsed", value = E.int d.percentUsed }
+    ]
+
+encodeMemoryUsage : MemoryUsage -> Json
+encodeMemoryUsage m =
+  E.object
+    [ { key = "totalMb", value = E.int m.totalMb }
+    , { key = "usedMb", value = E.int m.usedMb }
+    , { key = "availableMb", value = E.int m.availableMb }
+    , { key = "swapUsedMb", value = E.int m.swapUsedMb }
+    ]
+
+encodeProcessInfo : ProcessInfo -> Json
+encodeProcessInfo p =
+  E.object
+    [ { key = "pid", value = E.int p.pid }
+    , { key = "name", value = E.string p.name }
+    , { key = "cpuPercent", value = E.float p.cpuPercent }
+    , { key = "memoryPercent", value = E.float p.memoryPercent }
+    ]
+
+encodeUptime : Maybe String -> Json
+encodeUptime maybeUptime =
+  case maybeUptime of
+    Nothing -> E.null
+    Just u -> E.string u
+
+encodeServiceStatus : ServiceStatus -> Json
+encodeServiceStatus s =
+  E.object
+    [ { key = "name", value = E.string s.name }
+    , { key = "isRunning", value = E.bool s.isRunning }
+    , { key = "uptime", value = encodeUptime s.uptime }
+    ]
+
+encodeHealthReport : HealthReport -> Json
+encodeHealthReport r =
+  E.object
+    [ { key = "disks", value = E.list encodeDiskUsage r.disks }
+    , { key = "memory", value = encodeMemoryUsage r.memory }
+    , { key = "topProcesses", value = E.list encodeProcessInfo r.topProcesses }
+    , { key = "services", value = E.list encodeServiceStatus r.services }
+    ]
+
 main : Task Unit Unit
 main =
   IO.println "Health Agent placeholder"
