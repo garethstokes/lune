@@ -1,0 +1,29 @@
+module ProcessCaptureStderrPosix exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.Bytes as Bytes
+import Lune.Process as Process exposing (ExitStatus(..))
+import Lune.String as String
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+unsafe : Task e a -> Task Unit a
+unsafe t =
+  do
+    r <- Task.fromIO (Task.attempt t)
+    case r of
+      Ok a -> Task.succeed a
+
+main : Task Unit Unit
+main =
+  do
+    r <- unsafe (Process.runCapture (Process.cmd "sh" |> Process.args ["-c", "echo err 1>&2"]))
+    case r.status of
+      Exited code -> do
+        _ <- assertTrue (prim_eqInt code 0)
+        _ <- assertTrue (String.contains "err" (Bytes.toString r.stderr))
+        Task.succeed unit

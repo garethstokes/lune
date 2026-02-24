@@ -1,0 +1,26 @@
+module ProcessBasicRun exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.Process as Process exposing (ExitStatus(..))
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+unsafe : Task e a -> Task Unit a
+unsafe t =
+  do
+    r <- Task.fromIO (Task.attempt t)
+    case r of
+      Ok a -> Task.succeed a
+
+main : Task Unit Unit
+main =
+  do
+    status <- unsafe (Process.run (Process.cmd "echo" |> Process.args ["hello"]))
+    case status of
+      Exited code -> do
+        _ <- assertTrue (prim_eqInt code 0)
+        Task.succeed unit

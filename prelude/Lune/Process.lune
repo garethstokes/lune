@@ -1,0 +1,210 @@
+module Lune.Process exposing (
+  Cmd,
+  Process,
+  ExitStatus(..),
+  Signal(..),
+  ProcessError(..),
+
+  cmd,
+  arg,
+  args,
+  cwd,
+  env,
+  clearEnv,
+
+  run,
+  runOk,
+
+  runCapture,
+  runInputCapture,
+
+  spawn,
+  writeStdin,
+  closeStdin,
+  readStdout,
+  readStderr,
+  wait,
+  kill
+)
+
+{-| External process execution.
+
+This module provides:
+
+- One-shot execution (`run`, `runOk`)
+- Safe capture (`runCapture`, `runInputCapture`)
+- Streaming IO (`spawn`, `readStdout`, `writeStdin`, `wait`, `kill`, etc.)
+
+See `docs/process.md` for the policy/semantics.
+-}
+
+import Lune.Prelude exposing (Bool(..), Int, List(..), Maybe(..), Pair(..), Result(..), String, Task(..), Unit, unit)
+import Lune.Bytes as Bytes exposing (Bytes)
+import Lune.List as List
+import Lune.Task as Task
+
+-- =============================================================================
+-- Public Types
+-- =============================================================================
+
+type alias Cmd =
+  { program : String
+  , args : List String
+  , cwd : Maybe String
+  , env : List (String, String)
+  , clearEnv : Bool
+  }
+
+type Process =
+  Process#
+
+type ExitStatus =
+  Exited Int
+
+type Signal =
+  SigTerm
+  | SigKill
+  | SigInt
+
+type ProcessError =
+  NotFound String
+  | PermissionDenied String
+  | SpawnFailed String
+  | IoError String
+  | NonZeroExit ExitStatus { program : String, args : List String }
+
+-- =============================================================================
+-- Cmd builders
+-- =============================================================================
+
+cmd : String -> Cmd
+cmd program =
+  { program = program
+  , args = []
+  , cwd = Nothing
+  , env = []
+  , clearEnv = False
+  }
+
+arg : String -> Cmd -> Cmd
+arg a c =
+  { c | args = listAppend c.args [a] }
+
+args : List String -> Cmd -> Cmd
+args moreArgs c =
+  { c | args = listAppend c.args moreArgs }
+
+cwd : String -> Cmd -> Cmd
+cwd path c =
+  { c | cwd = Just path }
+
+env : String -> String -> Cmd -> Cmd
+env k v c =
+  { c | env = Cons (k, v) c.env }
+
+clearEnv : Cmd -> Cmd
+clearEnv c =
+  { c | clearEnv = True }
+
+listAppend : List a -> List a -> List a
+listAppend xs ys =
+  case xs of
+    [] -> ys
+    Cons x rest -> Cons x (listAppend rest ys)
+
+-- =============================================================================
+-- One-shot execution
+-- =============================================================================
+
+run : Cmd -> Task ProcessError ExitStatus
+run c =
+  Task (prim_process_run c)
+
+runOk : Cmd -> Task ProcessError Unit
+runOk c =
+  Task.andThen (run c) (\status ->
+    case status of
+      Exited code ->
+        case prim_eqInt code 0 of
+          True -> Task.succeed unit
+          False -> Task.fail (NonZeroExit status { program = c.program, args = c.args })
+  )
+
+-- =============================================================================
+-- Capture
+-- =============================================================================
+
+runCapture : Cmd -> Task ProcessError { status : ExitStatus, stdout : Bytes, stderr : Bytes }
+runCapture c =
+  do
+    p <- spawn c
+    _ <- closeStdin p
+    out <- readAllStdout p
+    err <- readAllStderr p
+    status <- wait p
+    Task.succeed { status = status, stdout = out, stderr = err }
+
+runInputCapture : Cmd -> Bytes -> Task ProcessError { status : ExitStatus, stdout : Bytes, stderr : Bytes }
+runInputCapture c input =
+  do
+    p <- spawn c
+    _ <- writeStdin p input
+    _ <- closeStdin p
+    out <- readAllStdout p
+    err <- readAllStderr p
+    status <- wait p
+    Task.succeed { status = status, stdout = out, stderr = err }
+
+readAllStdout : Process -> Task ProcessError Bytes
+readAllStdout p =
+  readAll (\n -> readStdout p n)
+
+readAllStderr : Process -> Task ProcessError Bytes
+readAllStderr p =
+  readAll (\n -> readStderr p n)
+
+readAll : (Int -> Task ProcessError (Maybe Bytes)) -> Task ProcessError Bytes
+readAll readChunk =
+  readAllHelp readChunk 4096 []
+
+readAllHelp : (Int -> Task ProcessError (Maybe Bytes)) -> Int -> List Bytes -> Task ProcessError Bytes
+readAllHelp readChunk chunkSize revChunks =
+  do
+    mbs <- readChunk chunkSize
+    case mbs of
+      Nothing ->
+        Task.succeed (List.foldl Bytes.concat Bytes.empty (List.reverse revChunks))
+      Just bs ->
+        readAllHelp readChunk chunkSize (Cons bs revChunks)
+
+-- =============================================================================
+-- Streaming
+-- =============================================================================
+
+spawn : Cmd -> Task ProcessError Process
+spawn c =
+  Task (prim_process_spawn c)
+
+writeStdin : Process -> Bytes -> Task ProcessError Unit
+writeStdin p bs =
+  Task (prim_process_stdin_write p bs)
+
+closeStdin : Process -> Task ProcessError Unit
+closeStdin p =
+  Task (prim_process_stdin_close p)
+
+readStdout : Process -> Int -> Task ProcessError (Maybe Bytes)
+readStdout p n =
+  Task (prim_process_stdout_read p n)
+
+readStderr : Process -> Int -> Task ProcessError (Maybe Bytes)
+readStderr p n =
+  Task (prim_process_stderr_read p n)
+
+wait : Process -> Task ProcessError ExitStatus
+wait p =
+  Task (prim_process_wait p)
+
+kill : Process -> Signal -> Task ProcessError Unit
+kill p sig =
+  Task (prim_process_kill p sig)

@@ -1,0 +1,29 @@
+module ProcessNotFound exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Task, Unit, unit)
+import Lune.Process as Process exposing (ProcessError(..))
+import Lune.Task as Task
+
+assertNotFound : Process.ProcessError -> Task e Unit
+assertNotFound err =
+  case err of
+    NotFound _ -> Task.succeed unit
+
+crash : Task e Unit
+crash =
+  case prim_eqInt 0 0 of
+    False -> Task.succeed unit
+
+main : Task Unit Unit
+main =
+  Task.onError
+    (do
+      _ <- Process.run (Process.cmd "__definitely_not_a_real_program__")
+      crash
+      Task.succeed unit
+    )
+    (\e ->
+      do
+        _ <- assertNotFound e
+        Task.succeed unit
+    )
