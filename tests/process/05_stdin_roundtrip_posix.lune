@@ -1,0 +1,68 @@
+module ProcessStdinRoundtripPosix exposing (main)
+
+import Lune.Prelude exposing (Bool(..), List(..), Maybe(..), Result(..), Task, Unit, unit)
+import Lune.Bytes as Bytes
+import Lune.Process as Process exposing (ExitStatus(..), Process)
+import Lune.String as String
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+unsafe : Task e a -> Task Unit a
+unsafe t =
+  do
+    r <- Task.fromIO (Task.attempt t)
+    case r of
+      Ok a -> Task.succeed a
+
+main : Task Unit Unit
+main =
+  do
+    p <- unsafe (Process.spawn (Process.cmd "cat"))
+    _ <- unsafe (Process.writeStdin p (Bytes.fromString "hello\nworld\n"))
+    _ <- unsafe (Process.closeStdin p)
+    out <- unsafe (readAll p)
+    status <- unsafe (Process.wait p)
+    case status of
+      Exited code -> do
+        _ <- assertTrue (prim_eqInt code 0)
+        _ <- assertTrue (String.contains "hello" (Bytes.toString out))
+        _ <- assertTrue (String.contains "world" (Bytes.toString out))
+        Task.succeed unit
+
+readAll : Process -> Task Process.ProcessError Bytes.Bytes
+readAll p =
+  readAllHelp p []
+
+readAllHelp : Process -> List Bytes.Bytes -> Task Process.ProcessError Bytes.Bytes
+readAllHelp p rev =
+  do
+    m <- Process.readStdout p 4096
+    case m of
+      Nothing ->
+        Task.succeed (concatRev rev)
+      Just bs ->
+        readAllHelp p (Cons bs rev)
+
+concatRev : List Bytes.Bytes -> Bytes.Bytes
+concatRev rev =
+  foldl Bytes.concat Bytes.empty (reverse rev)
+
+-- Minimal local list helpers to avoid extra imports.
+reverse : List a -> List a
+reverse xs = reverseHelp xs []
+
+reverseHelp : List a -> List a -> List a
+reverseHelp xs acc =
+  case xs of
+    [] -> acc
+    Cons x rest -> reverseHelp rest (Cons x acc)
+
+foldl : (b -> a -> b) -> b -> List a -> b
+foldl f acc xs =
+  case xs of
+    [] -> acc
+    Cons x rest -> foldl f (f acc x) rest
