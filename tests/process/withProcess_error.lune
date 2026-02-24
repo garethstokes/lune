@@ -1,0 +1,65 @@
+module WithProcessError exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.IO as IO
+import Lune.Process as Process exposing (ExitStatus(..), ProcessError(..))
+import Lune.Task as Task
+
+assertTrue : Bool -> Task e Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+unsafe : Task e a -> Task Unit a
+unsafe t =
+  do
+    r <- Task.fromIO (Task.attempt t)
+    case r of
+      Ok a -> Task.succeed a
+
+crash : Task e Unit
+crash =
+  assertTrue False
+
+assertDead : Task Unit Unit
+assertDead =
+  do
+    status <-
+      unsafe
+        ( Process.run
+            ( Process.cmd "sh"
+                |> Process.args ["-c", "pid=$(cat /tmp/lune_withProcess_error_pid); kill -0 $pid 2>/dev/null"]
+            )
+        )
+    case status of
+      Exited code ->
+        case prim_eqInt code 0 of
+          True -> crash
+          False -> Task.succeed unit
+
+main : Task Unit Unit
+main =
+  Task.onError
+    (do
+      _ <-
+        Process.withProcess
+          ( Process.cmd "sh"
+              |> Process.args ["-c", "echo $$ > /tmp/lune_withProcess_error_pid; exec sleep 10"]
+          )
+          (\_ ->
+            do
+              _ <- IO.sleepMs 50
+              Task.fail (IoError "boom")
+          )
+      crash
+      Task.succeed unit
+    )
+    (\err ->
+      case err of
+        IoError _ ->
+          do
+            _ <- assertDead
+            Task.succeed unit
+        _ ->
+          crash
+    )
