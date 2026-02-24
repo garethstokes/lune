@@ -1,0 +1,262 @@
+module Lune.System.Linux.Process exposing (processMetrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Pair(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.Task as Task
+
+processMetrics :
+    Task
+      String
+      { processes : List
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+      , notes : List String
+      }
+processMetrics =
+  do
+    upper <- pidUpperBound
+    let maxPid = Int.min upper pidScanMax
+    top <- scanPidsTopByRss 1 maxPid 25 []
+    let notes = [Str.append "scanned_pids=1.." (Str.fromInt maxPid)]
+    Task.succeed
+      { processes = top, notes = notes }
+
+pidScanMax : Int
+pidScanMax = 8192
+
+pidUpperBound : Task String Int
+pidUpperBound =
+  do
+    load <- Proc.readFileOptional "/proc/loadavg"
+    case load of
+      Nothing ->
+        Task.succeed 32768
+      Just s ->
+        case lastWord (Str.words s) of
+          Nothing ->
+            Task.succeed 32768
+          Just w ->
+            case Proc.parseInt w of
+              Ok n ->
+                case Int.lte n 0 of
+                  True ->
+                    Task.succeed 32768
+                  False ->
+                    Task.succeed n
+              Err _ ->
+                Task.succeed 32768
+
+lastWord : List String -> Maybe String
+lastWord ws =
+  case ws of
+    [] ->
+      Nothing
+    Cons w rest ->
+      case rest of
+        [] ->
+          Just w
+        _ ->
+          lastWord rest
+
+scanPidsTopByRss :
+    Int
+      -> Int
+      -> Int
+      -> List
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+      -> Task
+        String
+        (List
+          { pid : Int
+          , comm : String
+          , utime : Int
+          , stime : Int
+          , rssBytes : Maybe Int
+          })
+scanPidsTopByRss pid maxPid limit top =
+  case Int.gte pid maxPid of
+    True ->
+      case Int.eq pid maxPid of
+        True ->
+          do
+            top2 <- scanOne pid limit top
+            Task.succeed top2
+        False ->
+          Task.succeed top
+    False ->
+      do
+        top2 <- scanOne pid limit top
+        scanPidsTopByRss (Int.add pid 1) maxPid limit top2
+
+scanOne :
+    Int
+      -> Int
+      -> List
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+      -> Task
+        String
+        (List
+          { pid : Int
+          , comm : String
+          , utime : Int
+          , stime : Int
+          , rssBytes : Maybe Int
+          })
+scanOne pid limit top =
+  do
+    stat <- Proc.readFileOptional (procStatPath pid)
+    case stat of
+      Nothing ->
+        Task.succeed top
+      Just line ->
+        case parseProcStat pid line of
+          Nothing ->
+            Task.succeed top
+          Just p ->
+            Task.succeed (take limit (insertByRss p top))
+
+procStatPath : Int -> String
+procStatPath pid = Str.append "/proc/" (Str.append (Str.fromInt pid) "/stat")
+
+parseProcStat :
+    Int
+      -> String
+      -> Maybe
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+parseProcStat pid line =
+  case Proc.splitOnce "(" line of
+    Nothing ->
+      Nothing
+    Just (_, afterLParen) ->
+      case Proc.splitOnce ")" afterLParen of
+        Nothing ->
+          Nothing
+        Just (comm, afterRParen) ->
+          let
+            rest = Str.trim afterRParen
+            ws = Str.words rest
+          in
+            case List.get 11 ws of
+              Nothing ->
+                Nothing
+              Just utimeStr ->
+                case List.get 12 ws of
+                  Nothing ->
+                    Nothing
+                  Just stimeStr ->
+                    case List.get 21 ws of
+                      Nothing ->
+                        Nothing
+                      Just rssStr ->
+                        case Proc.parseInt utimeStr of
+                          Err _ ->
+                            Nothing
+                          Ok ut ->
+                            case Proc.parseInt stimeStr of
+                              Err _ ->
+                                Nothing
+                              Ok st ->
+                                case Proc.parseInt rssStr of
+                                  Err _ ->
+                                    Just
+                                      { pid = pid
+                                      , comm = comm
+                                      , utime = ut
+                                      , stime = st
+                                      , rssBytes = Nothing
+                                      }
+                                  Ok rssPages ->
+                                    Just
+                                      { pid = pid
+                                      , comm = comm
+                                      , utime = ut
+                                      , stime = st
+                                      , rssBytes =
+                                        Just (Int.mul rssPages pageSizeBytes)
+                                      }
+
+pageSizeBytes : Int
+pageSizeBytes = 4096
+
+insertByRss :
+    { pid : Int
+    , comm : String
+    , utime : Int
+    , stime : Int
+    , rssBytes : Maybe Int
+    }
+      -> List
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+      -> List
+        { pid : Int
+        , comm : String
+        , utime : Int
+        , stime : Int
+        , rssBytes : Maybe Int
+        }
+insertByRss p ps =
+  case ps of
+    [] ->
+      [p]
+    Cons q rest ->
+      case Int.gte (rssOrZero p.rssBytes) (rssOrZero q.rssBytes) of
+        True ->
+          Cons p ps
+        False ->
+          Cons q (insertByRss p rest)
+
+rssOrZero : Maybe Int -> Int
+rssOrZero m =
+  case m of
+    Nothing ->
+      0
+    Just n ->
+      n
+
+take : Int -> List a -> List a
+take n xs =
+  case Int.lte n 0 of
+    True ->
+      []
+    False ->
+      case xs of
+        [] ->
+          []
+        Cons x rest ->
+          Cons x (take (Int.sub n 1) rest)

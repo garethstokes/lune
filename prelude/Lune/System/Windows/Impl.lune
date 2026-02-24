@@ -1,0 +1,10 @@
+module Lune.System.Windows.Impl exposing (inventory, sample)
+
+import Lune.Prelude exposing (Task)
+import Lune.Task as Task
+
+inventory : Task String a
+inventory = Task.fail "not implemented: windows"
+
+sample : Task String a
+sample = Task.fail "not implemented: windows"

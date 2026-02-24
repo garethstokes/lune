@@ -1,0 +1,391 @@
+module Lune.System.Linux.GpuAmd exposing (inventory, metrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Float
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Float as Float
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.System.Linux.Sysfs as Sysfs
+import Lune.Task as Task
+
+inventory :
+    Task
+      String
+      (List
+        { name : Maybe String
+        , pci : Maybe { domain : Int
+          , bus : Int
+          , device : Int
+          , function : Int
+          }
+        , driver : Maybe String
+        , vramTotalBytes : Maybe Int
+        })
+inventory = scanCardsInventory 0 maxCards []
+
+metrics :
+    Task
+      String
+      { devices : List
+        { pci : Maybe { domain : Int
+          , bus : Int
+          , device : Int
+          , function : Int
+          }
+        , busyPercent : Maybe Int
+        , tempC : Maybe Float
+        , powerW : Maybe Float
+        , vramUsedBytes : Maybe Int
+        , notes : List String
+        }
+      }
+metrics =
+  do
+    devs <- scanCardsMetrics 0 maxCards []
+    Task.succeed
+      { devices = List.reverse devs }
+
+maxCards : Int
+maxCards = 16
+
+amdVendorId : Int
+amdVendorId = 4098
+-- 0x1002
+
+scanCardsInventory :
+    Int
+      -> Int
+      -> List
+        { name : Maybe String
+        , pci : Maybe { domain : Int
+          , bus : Int
+          , device : Int
+          , function : Int
+          }
+        , driver : Maybe String
+        , vramTotalBytes : Maybe Int
+        }
+      -> Task
+        String
+        (List
+          { name : Maybe String
+          , pci : Maybe { domain : Int
+            , bus : Int
+            , device : Int
+            , function : Int
+            }
+          , driver : Maybe String
+          , vramTotalBytes : Maybe Int
+          })
+scanCardsInventory idx limit accRev =
+  case Int.gte idx limit of
+    True ->
+      Task.succeed (List.reverse accRev)
+    False ->
+      do
+        vendor <- Sysfs.readHexIntOptional (vendorPath idx)
+        case vendor of
+          Just v ->
+            case Int.eq v amdVendorId of
+              True ->
+                do
+                  pci <- pciAddress idx
+                  vramTotal <- Sysfs.readIntOptional (vramTotalPath idx)
+                  let info =
+                    { name = Nothing
+                    , pci = pci
+                    , driver = Just "amdgpu"
+                    , vramTotalBytes = vramTotal
+                    }
+                  scanCardsInventory (Int.add idx 1) limit (Cons info accRev)
+              False ->
+                scanCardsInventory (Int.add idx 1) limit accRev
+          Nothing ->
+            scanCardsInventory (Int.add idx 1) limit accRev
+
+scanCardsMetrics :
+    Int
+      -> Int
+      -> List
+        { pci : Maybe { domain : Int
+          , bus : Int
+          , device : Int
+          , function : Int
+          }
+        , busyPercent : Maybe Int
+        , tempC : Maybe Float
+        , powerW : Maybe Float
+        , vramUsedBytes : Maybe Int
+        , notes : List String
+        }
+      -> Task
+        String
+        (List
+          { pci : Maybe { domain : Int
+            , bus : Int
+            , device : Int
+            , function : Int
+            }
+          , busyPercent : Maybe Int
+          , tempC : Maybe Float
+          , powerW : Maybe Float
+          , vramUsedBytes : Maybe Int
+          , notes : List String
+          })
+scanCardsMetrics idx limit accRev =
+  case Int.gte idx limit of
+    True ->
+      Task.succeed accRev
+    False ->
+      do
+        vendor <- Sysfs.readHexIntOptional (vendorPath idx)
+        case vendor of
+          Just v ->
+            case Int.eq v amdVendorId of
+              True ->
+                do
+                  pci <- pciAddress idx
+                  busySys <- Sysfs.readIntOptional (busyPath idx)
+                  busyDebug <- debugfsBusyPercent idx
+                  let busy =
+                    case busySys of
+                      Just n ->
+                        Just n
+                      Nothing ->
+                        busyDebug
+
+                  tempMilli <- probeHwmonInt idx "temp1_input" 0 maxHwmon
+                  powerMicro <- probeHwmonInt idx "power1_average" 0 maxHwmon
+                  vramUsed <- Sysfs.readIntOptional (vramUsedPath idx)
+
+                  let tempC =
+                    case tempMilli of
+                      Nothing ->
+                        Nothing
+                      Just n ->
+                        Just (Float.div (Float.fromInt n) (Float.fromInt 1000))
+
+                  let powerW =
+                    case powerMicro of
+                      Nothing ->
+                        Nothing
+                      Just n ->
+                        Just
+                          (Float.div (Float.fromInt n) (Float.fromInt 1000000))
+
+                  let notes =
+                    notesFor busySys busyDebug tempMilli powerMicro vramUsed idx
+
+                  let m =
+                    { pci = pci
+                    , busyPercent = busy
+                    , tempC = tempC
+                    , powerW = powerW
+                    , vramUsedBytes = vramUsed
+                    , notes = notes
+                    }
+
+                  scanCardsMetrics (Int.add idx 1) limit (Cons m accRev)
+              False ->
+                scanCardsMetrics (Int.add idx 1) limit accRev
+          Nothing ->
+            scanCardsMetrics (Int.add idx 1) limit accRev
+
+maxHwmon : Int
+maxHwmon = 32
+
+notesFor :
+    Maybe Int
+      -> Maybe Int
+      -> Maybe Int
+      -> Maybe Int
+      -> Maybe Int
+      -> Int
+      -> List String
+notesFor busySys busyDebug tempMilli powerMicro vramUsed idx =
+  let
+    n0 =
+      case busySys of
+        Just _ ->
+          []
+        Nothing ->
+          case busyDebug of
+            Just _ ->
+              []
+            Nothing ->
+              [Str.append "debugfs_unavailable:" (debugfsPmInfoPath idx)]
+    n1 =
+      case tempMilli of
+        Nothing ->
+          Cons "temp_unavailable" n0
+        Just _ ->
+          n0
+    n2 =
+      case powerMicro of
+        Nothing ->
+          Cons "power_unavailable" n1
+        Just _ ->
+          n1
+    n3 =
+      case vramUsed of
+        Nothing ->
+          n2
+        Just _ ->
+          n2
+  in
+    n3
+
+vendorPath : Int -> String
+vendorPath idx =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append (Str.fromInt idx) "/device/vendor")
+
+ueventPath : Int -> String
+ueventPath idx =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append (Str.fromInt idx) "/device/uevent")
+
+busyPath : Int -> String
+busyPath idx =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append (Str.fromInt idx) "/device/gpu_busy_percent")
+
+vramTotalPath : Int -> String
+vramTotalPath idx =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append (Str.fromInt idx) "/device/mem_info_vram_total")
+
+vramUsedPath : Int -> String
+vramUsedPath idx =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append (Str.fromInt idx) "/device/mem_info_vram_used")
+
+hwmonPath : Int -> Int -> String -> String
+hwmonPath cardIdx hwmonIdx file =
+  Str.append
+    "/sys/class/drm/card"
+    (Str.append
+      (Str.fromInt cardIdx)
+      (Str.append
+        "/device/hwmon/hwmon"
+        (Str.append (Str.fromInt hwmonIdx) (Str.append "/" file))))
+
+pciAddress :
+    Int
+      -> Task
+        String
+        (Maybe { domain : Int
+          , bus : Int
+          , device : Int
+          , function : Int
+          })
+pciAddress idx =
+  do
+    uevent <- Sysfs.readOptional (ueventPath idx)
+    case uevent of
+      Nothing ->
+        Task.succeed Nothing
+      Just s ->
+        case pciSlotNameFromUevent (Str.lines s) of
+          Nothing ->
+            Task.succeed Nothing
+          Just slot ->
+            case Proc.parsePciAddress slot of
+              Ok pci ->
+                Task.succeed (Just pci)
+              Err _ ->
+                Task.succeed Nothing
+
+pciSlotNameFromUevent : List String -> Maybe String
+pciSlotNameFromUevent lines =
+  case lines of
+    [] ->
+      Nothing
+    Cons line rest ->
+      case Str.startsWith "PCI_SLOT_NAME=" line of
+        True ->
+          Just (Str.drop 14 line)
+        False ->
+          pciSlotNameFromUevent rest
+
+probeHwmonInt : Int -> String -> Int -> Int -> Task String (Maybe Int)
+probeHwmonInt cardIdx file idx limit =
+  case Int.gte idx limit of
+    True ->
+      Task.succeed Nothing
+    False ->
+      do
+        v <-
+          hwmonPath
+            cardIdx
+            idx
+            file
+          |> Sysfs.readIntOptional
+        case v of
+          Just n ->
+            Task.succeed (Just n)
+          Nothing ->
+            probeHwmonInt cardIdx file (Int.add idx 1) limit
+
+debugfsBusyPercent : Int -> Task String (Maybe Int)
+debugfsBusyPercent idx =
+  do
+    pm <- Proc.readFileOptional (debugfsPmInfoPath idx)
+    case pm of
+      Nothing ->
+        Task.succeed Nothing
+      Just s ->
+        Task.succeed (parseBusyFromPmInfo (Str.lines s))
+
+debugfsPmInfoPath : Int -> String
+debugfsPmInfoPath idx =
+  Str.append
+    "/sys/kernel/debug/dri/"
+    (Str.append (Str.fromInt idx) "/amdgpu_pm_info")
+
+parseBusyFromPmInfo : List String -> Maybe Int
+parseBusyFromPmInfo lines =
+  case lines of
+    [] ->
+      Nothing
+    Cons line rest ->
+      case Str.contains "GPU Load" line of
+        True ->
+          busyFromLine (Str.words line)
+        False ->
+          parseBusyFromPmInfo rest
+
+busyFromLine : List String -> Maybe Int
+busyFromLine ws =
+  case ws of
+    [] ->
+      Nothing
+    Cons w rest ->
+      case Proc.parseInt (stripPercent w) of
+        Ok n ->
+          Just n
+        Err _ ->
+          busyFromLine rest
+
+stripPercent : String -> String
+stripPercent s =
+  case Str.endsWith "%" s of
+    True ->
+      Str.take (Int.sub (Str.length s) 1) s
+    False ->
+      s

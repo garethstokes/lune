@@ -1,0 +1,171 @@
+module Lune.System.Linux.Net exposing (interfaces, netMetrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Pair(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.System.Linux.Sysfs as Sysfs
+import Lune.Task as Task
+
+interfaces :
+    Task String (List { name : String
+        , mac : Maybe String
+        , mtu : Maybe Int
+        })
+interfaces =
+  do
+    contents <- Proc.readFile "/proc/net/dev"
+    let names = uniqueStrings (parseInterfaceNames contents) []
+    gatherInterfaces names
+
+netMetrics :
+    Task
+      String
+      { interfaces : List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+      }
+netMetrics =
+  do
+    contents <- Proc.readFile "/proc/net/dev"
+    Task.succeed
+      { interfaces = parseInterfaceCounters contents }
+
+gatherInterfaces :
+    List String
+      -> Task
+        String
+        (List { name : String
+          , mac : Maybe String
+          , mtu : Maybe Int
+          })
+gatherInterfaces names =
+  case names of
+    [] ->
+      Task.succeed []
+    Cons name rest ->
+      do
+        mac <- Sysfs.readOptional (sysfsAddressPath name)
+        mtu <- Sysfs.readIntOptional (sysfsMtuPath name)
+        xs <- gatherInterfaces rest
+        Task.succeed (Cons { name = name, mac = mac, mtu = mtu } xs)
+
+sysfsAddressPath : String -> String
+sysfsAddressPath name =
+  Str.append "/sys/class/net/" (Str.append name "/address")
+
+sysfsMtuPath : String -> String
+sysfsMtuPath name = Str.append "/sys/class/net/" (Str.append name "/mtu")
+
+parseInterfaceNames : String -> List String
+parseInterfaceNames contents = parseNamesFromLines (Str.lines contents)
+
+parseNamesFromLines : List String -> List String
+parseNamesFromLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case Proc.splitOnce ":" line of
+        Nothing ->
+          parseNamesFromLines rest
+        Just (left, _) ->
+          let
+            name = Str.trim left
+          in
+            case Str.isEmpty name of
+              True ->
+                parseNamesFromLines rest
+              False ->
+                Cons name (parseNamesFromLines rest)
+
+parseInterfaceCounters :
+    String -> List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+parseInterfaceCounters contents = parseCountersFromLines (Str.lines contents)
+
+parseCountersFromLines :
+    List String -> List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+parseCountersFromLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case parseCountersLine line of
+        Nothing ->
+          parseCountersFromLines rest
+        Just c ->
+          Cons c (parseCountersFromLines rest)
+
+parseCountersLine :
+    String -> Maybe { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+parseCountersLine line =
+  case Proc.splitOnce ":" line of
+    Nothing ->
+      Nothing
+    Just (left, right) ->
+      let
+        name = Str.trim left
+        ws = Str.words right
+      in
+        case List.get 0 ws of
+          Nothing ->
+            Nothing
+          Just rxStr ->
+            case List.get 8 ws of
+              Nothing ->
+                Nothing
+              Just txStr ->
+                case Proc.parseInt rxStr of
+                  Err _ ->
+                    Nothing
+                  Ok rx ->
+                    case Proc.parseInt txStr of
+                      Err _ ->
+                        Nothing
+                      Ok tx ->
+                        Just
+                          { name = name, rxBytes = rx, txBytes = tx }
+
+uniqueStrings : List String -> List String -> List String
+uniqueStrings remaining seenRev =
+  case remaining of
+    [] ->
+      List.reverse seenRev
+    Cons x rest ->
+      case hasString x seenRev of
+        True ->
+          uniqueStrings rest seenRev
+        False ->
+          uniqueStrings rest (Cons x seenRev)
+
+hasString : String -> List String -> Bool
+hasString s xs =
+  case xs of
+    [] ->
+      False
+    Cons x rest ->
+      case Str.eq s x of
+        True ->
+          True
+        False ->
+          hasString s rest

@@ -1,0 +1,120 @@
+module Lune.System.Linux.Mem exposing (memInfo, memMetrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.Task as Task
+
+memInfo : Task String { totalBytes : Int
+      }
+memInfo =
+  do
+    contents <- Proc.readFile "/proc/meminfo"
+    case parseEntries contents of
+      Err msg ->
+        Task.fail msg
+      Ok entries ->
+        case findBytes "MemTotal" entries of
+          Nothing ->
+            Task.fail "parse:/proc/meminfo: missing MemTotal"
+          Just total ->
+            Task.succeed
+              { totalBytes = total }
+
+memMetrics :
+    Task
+      String
+      { totalBytes : Int
+      , availableBytes : Maybe Int
+      , freeBytes : Maybe Int
+      , buffersBytes : Maybe Int
+      , cachedBytes : Maybe Int
+      , swapTotalBytes : Maybe Int
+      , swapFreeBytes : Maybe Int
+      }
+memMetrics =
+  do
+    contents <- Proc.readFile "/proc/meminfo"
+    case parseEntries contents of
+      Err msg ->
+        Task.fail msg
+      Ok entries ->
+        case findBytes "MemTotal" entries of
+          Nothing ->
+            Task.fail "parse:/proc/meminfo: missing MemTotal"
+          Just total ->
+            Task.succeed
+              { totalBytes = total
+              , availableBytes = findBytes "MemAvailable" entries
+              , freeBytes = findBytes "MemFree" entries
+              , buffersBytes = findBytes "Buffers" entries
+              , cachedBytes = findBytes "Cached" entries
+              , swapTotalBytes = findBytes "SwapTotal" entries
+              , swapFreeBytes = findBytes "SwapFree" entries
+              }
+
+type alias Entry =
+  { key : String
+  , bytes : Int
+  }
+
+parseEntries : String -> Result String (List Entry)
+parseEntries contents = Ok (parseLines (Str.lines contents))
+
+parseLines : List String -> List Entry
+parseLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case Proc.parseKeyValueLine line of
+        Nothing ->
+          parseLines rest
+        Just kv ->
+          case parseValueBytes kv.value of
+            Nothing ->
+              parseLines rest
+            Just b ->
+              Cons { key = kv.key, bytes = b } (parseLines rest)
+
+parseValueBytes : String -> Maybe Int
+parseValueBytes s =
+  case Str.words s of
+    [] ->
+      Nothing
+    Cons nStr rest ->
+      case Proc.parseInt nStr of
+        Err _ ->
+          Nothing
+        Ok n ->
+          case rest of
+            [] ->
+              Just n
+            Cons unit _ ->
+              case Str.eq unit "kB" of
+                True ->
+                  Just (Int.mul n 1024)
+                False ->
+                  Just n
+
+findBytes : String -> List Entry -> Maybe Int
+findBytes key entries =
+  case entries of
+    [] ->
+      Nothing
+    Cons e rest ->
+      case Str.eq e.key key of
+        True ->
+          Just e.bytes
+        False ->
+          findBytes key rest

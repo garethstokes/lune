@@ -1,0 +1,131 @@
+module Main exposing (main)
+
+import Lune.IO as IO
+import Lune.List as List
+import Lune.String as Str
+import Lune.Task as Task
+import Lune.System as System exposing (Error(..), OS(..))
+
+main : Task Unit Unit
+main =
+  do
+    r1 <- Task.result System.sample
+    case r1 of
+      Err e ->
+        IO.println (Str.append "sample error: " (errorToString e))
+      Ok s1 ->
+        do
+          _ <- IO.sleepMs 500
+          r2 <- Task.result System.sample
+          case r2 of
+            Err e ->
+              IO.println (Str.append "sample error: " (errorToString e))
+            Ok s2 ->
+              do
+                let d = System.diff s1 s2
+                IO.println (Str.append "dt_ms=" (Str.fromInt d.dtMs))
+                IO.println
+                  (Str.append
+                    "cpu_usage_percent="
+                    (Str.fromInt d.cpu.usagePercent))
+                IO.println
+                  (Str.append
+                    "net_rx_bytes_per_sec="
+                    (Str.fromInt d.net.rxBytesPerSec))
+                IO.println
+                  (Str.append
+                    "net_tx_bytes_per_sec="
+                    (Str.fromInt d.net.txBytesPerSec))
+                IO.println
+                  (Str.append
+                    "disk_read_bytes_per_sec="
+                    (Str.fromInt d.disk.readBytesPerSec))
+                IO.println
+                  (Str.append
+                    "disk_write_bytes_per_sec="
+                    (Str.fromInt d.disk.writeBytesPerSec))
+                printGpuMetrics d.gpu.devices
+
+errorToString : System.Error -> String
+errorToString err =
+  case err of
+    NotImplemented os ->
+      Str.append "NotImplemented(" (Str.append (osToString os) ")")
+    ReadError msg ->
+      Str.append "ReadError(" (Str.append msg ")")
+    ParseError msg ->
+      Str.append "ParseError(" (Str.append msg ")")
+    PermissionDenied msg ->
+      Str.append "PermissionDenied(" (Str.append msg ")")
+
+osToString : System.OS -> String
+osToString os =
+  case os of
+    Linux ->
+      "linux"
+    Darwin ->
+      "darwin"
+    Windows ->
+      "windows"
+
+printGpuMetrics : List System.GpuDeviceMetrics -> Task Unit Unit
+printGpuMetrics devs =
+  case devs of
+    [] ->
+      IO.println "gpu_metrics=[]"
+    _ ->
+      do
+        IO.println "gpu_metrics="
+        printGpuLines devs
+
+printGpuLines : List System.GpuDeviceMetrics -> Task Unit Unit
+printGpuLines devs =
+  case devs of
+    [] ->
+      Task.succeed unit
+    Cons d rest ->
+      do
+        IO.println (formatGpuDevice d)
+        printGpuLines rest
+
+formatGpuDevice : System.GpuDeviceMetrics -> String
+formatGpuDevice d =
+  Str.join
+    " "
+    [ "gpu"
+    , Str.append "pci=" (pciToString d.pci)
+    , Str.append "busy_percent=" (maybeInt "-" d.busyPercent)
+    , Str.append "temp_c=" (maybeFloat "-" d.tempC)
+    , Str.append "power_w=" (maybeFloat "-" d.powerW)
+    ]
+
+pciToString : Maybe System.PciAddress -> String
+pciToString mpci =
+  case mpci of
+    Nothing ->
+      "-"
+    Just p ->
+      Str.join
+        ":"
+        [ Str.fromInt p.domain
+        , Str.fromInt p.bus
+        , Str.append
+          (Str.fromInt p.device)
+          (Str.append "." (Str.fromInt p.function))
+        ]
+
+maybeInt : String -> Maybe Int -> String
+maybeInt def m =
+  case m of
+    Nothing ->
+      def
+    Just n ->
+      Str.fromInt n
+
+maybeFloat : String -> Maybe Float -> String
+maybeFloat def m =
+  case m of
+    Nothing ->
+      def
+    Just f ->
+      Str.fromFloat f

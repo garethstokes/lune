@@ -1,0 +1,30 @@
+module Lune.System.Linux.Sysfs exposing (
+  readOptional
+  , readIntOptional
+  , readHexIntOptional
+)
+
+import Lune.Prelude exposing (Int, Maybe(..), Result(..), Task)
+import Lune.System.Linux.Proc as Proc
+import Lune.Task as Task
+
+readOptional : String -> Task x (Maybe String)
+readOptional = Proc.readFileOptional
+
+readIntOptional : String -> Task x (Maybe Int)
+readIntOptional = Proc.readIntFileOptional
+
+readHexIntOptional : String -> Task x (Maybe Int)
+readHexIntOptional path =
+  Task.map
+    (\ms ->
+      case ms of
+        Nothing ->
+          Nothing
+        Just s ->
+          case Proc.parseHexInt s of
+            Ok n ->
+              Just n
+            Err _ ->
+              Nothing)
+    (Proc.readFileOptional path)

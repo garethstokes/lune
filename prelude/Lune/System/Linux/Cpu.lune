@@ -1,0 +1,567 @@
+module Lune.System.Linux.Cpu exposing (cpuInfo, cpuMetrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Float
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Pair(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.Task as Task
+
+cpuInfo :
+    Task
+      String
+      { model : Maybe String
+      , vendor : Maybe String
+      , logicalCores : Int
+      , physicalCores : Maybe Int
+      , flags : List String
+      , mhz : Maybe Int
+      }
+cpuInfo =
+  do
+    contents <- Proc.readFile "/proc/cpuinfo"
+    Task.succeed (cpuInfoFromCpuinfo contents)
+
+cpuInfoFromCpuinfo :
+    String
+      -> { model : Maybe String
+      , vendor : Maybe String
+      , logicalCores : Int
+      , physicalCores : Maybe Int
+      , flags : List String
+      , mhz : Maybe Int
+      }
+cpuInfoFromCpuinfo contents =
+  let
+    blocks = splitBlocks (Str.lines contents)
+    logicalCores = List.length blocks
+    kvBlocks = List.map parseBlock blocks
+    firstBlock =
+      case kvBlocks of
+        [] ->
+          []
+        Cons b _ ->
+          b
+    model = firstOfKeys ["model name", "hardware", "processor"] firstBlock
+    vendor = firstOfKeys ["vendor_id", "cpu implementer"] firstBlock
+    flagsStr = firstOfKeys ["flags", "features"] firstBlock
+    flags =
+      case flagsStr of
+        Nothing ->
+          []
+        Just s ->
+          Str.words s
+    mhz =
+      case
+        firstOfKeys ["cpu mhz", "clock", "bogomips"] (lowerKeys firstBlock)
+      of
+        Nothing ->
+          case firstOfKeys ["cpu mhz"] firstBlock of
+            Nothing ->
+              mhzFromField "cpu MHz" firstBlock
+            Just s ->
+              mhzFromString s
+        Just s ->
+          mhzFromString s
+    physicalCores = physicalCoresFromBlocks kvBlocks
+  in
+    { model = model
+    , vendor = vendor
+    , logicalCores = logicalCores
+    , physicalCores = physicalCores
+    , flags = flags
+    , mhz = mhz
+    }
+
+mhzFromField : String -> List { key : String
+        , value : String
+        } -> Maybe Int
+mhzFromField key kvs =
+  case findKey key kvs of
+    Nothing ->
+      Nothing
+    Just v ->
+      mhzFromString v
+
+mhzFromString : String -> Maybe Int
+mhzFromString s =
+  case Proc.splitOnce "." (Str.trim s) of
+    Nothing ->
+      case Proc.parseInt s of
+        Ok n ->
+          Just n
+        Err _ ->
+          Nothing
+    Just (a, _) ->
+      case Proc.parseInt a of
+        Ok n ->
+          Just n
+        Err _ ->
+          Nothing
+
+physicalCoresFromBlocks :
+    List (List { key : String
+        , value : String
+        }) -> Maybe Int
+physicalCoresFromBlocks kvBlocks =
+  let
+    pairs = collectPhysCorePairs kvBlocks
+    uniqueCount = uniquePairCount pairs
+  in
+    case Int.lte uniqueCount 0 of
+      True ->
+        case kvBlocks of
+          [] ->
+            Nothing
+          Cons first _ ->
+            case findKey "cpu cores" first of
+              Nothing ->
+                Nothing
+              Just s ->
+                case Proc.parseInt s of
+                  Ok n ->
+                    Just n
+                  Err _ ->
+                    Nothing
+      False ->
+        Just uniqueCount
+
+collectPhysCorePairs :
+    List (List { key : String
+        , value : String
+        })
+      -> List { phys : Int
+        , core : Int
+        }
+collectPhysCorePairs kvBlocks =
+  case kvBlocks of
+    [] ->
+      []
+    Cons kvs rest ->
+      case pairFromBlock kvs of
+        Nothing ->
+          collectPhysCorePairs rest
+        Just p ->
+          Cons p (collectPhysCorePairs rest)
+
+pairFromBlock :
+    List { key : String
+      , value : String
+      } -> Maybe { phys : Int
+        , core : Int
+        }
+pairFromBlock kvs =
+  case findKey "physical id" kvs of
+    Nothing ->
+      Nothing
+    Just physStr ->
+      case findKey "core id" kvs of
+        Nothing ->
+          Nothing
+        Just coreStr ->
+          case Proc.parseInt physStr of
+            Err _ ->
+              Nothing
+            Ok phys ->
+              case Proc.parseInt coreStr of
+                Err _ ->
+                  Nothing
+                Ok core ->
+                  Just
+                    { phys = phys, core = core }
+
+uniquePairCount : List { phys : Int
+      , core : Int
+      } -> Int
+uniquePairCount pairs = List.length (uniquePairs pairs [])
+
+uniquePairs :
+    List { phys : Int
+      , core : Int
+      }
+      -> List { phys : Int
+        , core : Int
+        }
+      -> List { phys : Int
+        , core : Int
+        }
+uniquePairs remaining seen =
+  case remaining of
+    [] ->
+      seen
+    Cons p rest ->
+      case hasPair p seen of
+        True ->
+          uniquePairs rest seen
+        False ->
+          uniquePairs rest (Cons p seen)
+
+hasPair : { phys : Int
+    , core : Int
+    } -> List { phys : Int
+        , core : Int
+        } -> Bool
+hasPair p ps =
+  case ps of
+    [] ->
+      False
+    Cons q rest ->
+      case Int.eq p.phys q.phys of
+        True ->
+          case Int.eq p.core q.core of
+            True ->
+              True
+            False ->
+              hasPair p rest
+        False ->
+          hasPair p rest
+
+lowerKeys :
+    List { key : String
+      , value : String
+      } -> List { key : String
+        , value : String
+        }
+lowerKeys kvs =
+  List.map (\kv -> { key = Str.toLower kv.key, value = kv.value }) kvs
+
+firstOfKeys :
+    List String -> List { key : String
+        , value : String
+        } -> Maybe String
+firstOfKeys keys kvs =
+  case keys of
+    [] ->
+      Nothing
+    Cons k rest ->
+      case findKey k kvs of
+        Just v ->
+          Just v
+        Nothing ->
+          firstOfKeys rest kvs
+
+findKey : String -> List { key : String
+        , value : String
+        } -> Maybe String
+findKey key kvs =
+  case kvs of
+    [] ->
+      Nothing
+    Cons kv rest ->
+      case Str.eq kv.key key of
+        True ->
+          Just kv.value
+        False ->
+          findKey key rest
+
+parseBlock : List String -> List { key : String
+        , value : String
+        }
+parseBlock lines =
+  case lines of
+    [] ->
+      []
+    Cons l rest ->
+      case Proc.parseKeyValueLine l of
+        Nothing ->
+          parseBlock rest
+        Just kv ->
+          Cons kv (parseBlock rest)
+
+splitBlocks : List String -> List (List String)
+splitBlocks lines = splitBlocksHelp lines [] []
+
+splitBlocksHelp :
+    List String -> List String -> List (List String) -> List (List String)
+splitBlocksHelp remaining currentRev blocksRev =
+  case remaining of
+    [] ->
+      case currentRev of
+        [] ->
+          List.reverse blocksRev
+        _ ->
+          List.reverse (Cons (List.reverse currentRev) blocksRev)
+    Cons line rest ->
+      case Str.isEmpty (Str.trim line) of
+        True ->
+          case currentRev of
+            [] ->
+              splitBlocksHelp rest [] blocksRev
+            _ ->
+              splitBlocksHelp rest [] (Cons (List.reverse currentRev) blocksRev)
+        False ->
+          splitBlocksHelp rest (Cons line currentRev) blocksRev
+
+-- =============================================================================
+-- /proc/stat + loadavg metrics
+-- =============================================================================
+
+cpuMetrics :
+    Task
+      String
+      { total : { user : Int
+      , nice : Int
+      , system : Int
+      , idle : Int
+      , iowait : Int
+      , irq : Int
+      , softirq : Int
+      , steal : Int
+      }
+      , cores : List
+        { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+      , loadAvg1 : Maybe Float
+      , loadAvg5 : Maybe Float
+      , loadAvg15 : Maybe Float
+      }
+cpuMetrics =
+  do
+    stat <- Proc.readFile "/proc/stat"
+    load <- Proc.readFileOptional "/proc/loadavg"
+    case parseStat stat of
+      Err msg ->
+        Task.fail msg
+      Ok parsed ->
+        Task.succeed
+          { total = parsed.total
+          , cores = parsed.cores
+          , loadAvg1 = loadAvgFrom load 0
+          , loadAvg5 = loadAvgFrom load 1
+          , loadAvg15 = loadAvgFrom load 2
+          }
+
+loadAvgFrom : Maybe String -> Int -> Maybe Float
+loadAvgFrom maybeLoad idx =
+  case maybeLoad of
+    Nothing ->
+      Nothing
+    Just s ->
+      case List.get idx (Str.words s) of
+        Nothing ->
+          Nothing
+        Just token ->
+          case Proc.parseFloat token of
+            Ok f ->
+              Just f
+            Err _ ->
+              Nothing
+
+parseStat :
+    String
+      -> Result
+        String
+        { total : { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+        , cores : List
+          { user : Int
+          , nice : Int
+          , system : Int
+          , idle : Int
+          , iowait : Int
+          , irq : Int
+          , softirq : Int
+          , steal : Int
+          }
+        }
+parseStat contents = parseStatLines (Str.lines contents) Nothing []
+
+parseStatLines :
+    List String
+      -> Maybe
+        { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+      -> List
+        { idx : Int
+        , times : { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+        }
+      -> Result
+        String
+        { total : { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+        , cores : List
+          { user : Int
+          , nice : Int
+          , system : Int
+          , idle : Int
+          , iowait : Int
+          , irq : Int
+          , softirq : Int
+          , steal : Int
+          }
+        }
+parseStatLines lines maybeTotal cores =
+  case lines of
+    [] ->
+      case maybeTotal of
+        Nothing ->
+          Err "parse:/proc/stat: missing cpu line"
+        Just total ->
+          Ok
+            { total = total
+            , cores = List.map (\c -> c.times) (sortCores cores)
+            }
+    Cons line rest ->
+      case Str.words line of
+        [] ->
+          parseStatLines rest maybeTotal cores
+        Cons label nums ->
+          case Str.eq label "cpu" of
+            True ->
+              case parseCpuTimes nums of
+                Err msg ->
+                  Err msg
+                Ok t ->
+                  parseStatLines rest (Just t) cores
+            False ->
+              case Str.startsWith "cpu" label of
+                True ->
+                  case Proc.parseInt (Str.drop 3 label) of
+                    Err _ ->
+                      parseStatLines rest maybeTotal cores
+                    Ok idx ->
+                      case parseCpuTimes nums of
+                        Err msg ->
+                          Err msg
+                        Ok t ->
+                          parseStatLines
+                            rest
+                            maybeTotal
+                            (Cons { idx = idx, times = t } cores)
+                False ->
+                  parseStatLines rest maybeTotal cores
+
+parseCpuTimes :
+    List String
+      -> Result
+        String
+        { user : Int
+        , nice : Int
+        , system : Int
+        , idle : Int
+        , iowait : Int
+        , irq : Int
+        , softirq : Int
+        , steal : Int
+        }
+parseCpuTimes nums =
+  case nums of
+    Cons user Cons nice Cons system Cons idle Cons iowait Cons irq Cons softirq Cons steal _ ->
+      case Proc.parseInt user of
+        Err msg ->
+          Err (Str.append "parse:" msg)
+        Ok u ->
+          case Proc.parseInt nice of
+            Err msg ->
+              Err (Str.append "parse:" msg)
+            Ok n ->
+              case Proc.parseInt system of
+                Err msg ->
+                  Err (Str.append "parse:" msg)
+                Ok s ->
+                  case Proc.parseInt idle of
+                    Err msg ->
+                      Err (Str.append "parse:" msg)
+                    Ok i ->
+                      case Proc.parseInt iowait of
+                        Err msg ->
+                          Err (Str.append "parse:" msg)
+                        Ok iw ->
+                          case Proc.parseInt irq of
+                            Err msg ->
+                              Err (Str.append "parse:" msg)
+                            Ok ir ->
+                              case Proc.parseInt softirq of
+                                Err msg ->
+                                  Err (Str.append "parse:" msg)
+                                Ok si ->
+                                  case Proc.parseInt steal of
+                                    Err msg ->
+                                      Err (Str.append "parse:" msg)
+                                    Ok st ->
+                                      Ok
+                                        { user = u
+                                        , nice = n
+                                        , system = s
+                                        , idle = i
+                                        , iowait = iw
+                                        , irq = ir
+                                        , softirq = si
+                                        , steal = st
+                                        }
+    _ ->
+      Err "parse:/proc/stat: expected 8 cpu fields"
+
+sortCores : List { idx : Int
+      , times : a
+      } -> List { idx : Int
+        , times : a
+        }
+sortCores cores = List.foldl insertCore [] cores
+
+insertCore :
+    List { idx : Int
+      , times : a
+      }
+      -> { idx : Int
+      , times : a
+      }
+      -> List { idx : Int
+        , times : a
+        }
+insertCore sorted c =
+  case sorted of
+    [] ->
+      [c]
+    Cons x rest ->
+      case Int.lte c.idx x.idx of
+        True ->
+          Cons c sorted
+        False ->
+          Cons x (insertCore rest c)

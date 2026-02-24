@@ -1,0 +1,247 @@
+module Lune.System.Linux.Proc exposing (
+  readFile
+  , readFileOptional
+  , readIntFileOptional
+  , parseKeyValueLine
+  , splitOnce
+  , parseInt
+  , parseHexInt
+  , parseFloat
+  , parsePciAddress
+  , trimNewline
+)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Float
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Pair(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Char as Char
+import Lune.Float as Float
+import Lune.Int as Int
+import Lune.IO as IO
+import Lune.String as Str
+import Lune.Task as Task
+
+readFile : String -> Task String String
+readFile path = Task.mapError (\_ -> Str.append "read:" path) (IO.readFile path)
+
+readFileOptional : String -> Task x (Maybe String)
+readFileOptional path =
+  Task.map resultToMaybeString (Task.result (IO.readFile path))
+
+resultToMaybeString : Result e String -> Maybe String
+resultToMaybeString r =
+  case r of
+    Ok s ->
+      Just (trimNewline s)
+    Err _ ->
+      Nothing
+
+readIntFileOptional : String -> Task x (Maybe Int)
+readIntFileOptional path =
+  Task.map
+    (\ms ->
+      case ms of
+        Nothing ->
+          Nothing
+        Just s ->
+          case parseInt s of
+            Ok n ->
+              Just n
+            Err _ ->
+              Nothing)
+    (readFileOptional path)
+
+trimNewline : String -> String
+trimNewline s =
+  case Str.endsWith "\n" s of
+    True ->
+      Str.take (Int.sub (Str.length s) 1) s
+    False ->
+      s
+
+splitOnce : String -> String -> Maybe (String, String)
+splitOnce delim s =
+  case Str.indexOf delim s of
+    Nothing ->
+      Nothing
+    Just idx ->
+      Just (Str.take idx s, Str.drop (Int.add idx (Str.length delim)) s)
+
+parseKeyValueLine : String -> Maybe { key : String
+        , value : String
+        }
+parseKeyValueLine line =
+  case splitOnce ":" line of
+    Nothing ->
+      Nothing
+    Just (k, v) ->
+      Just
+        { key = Str.trim k, value = Str.trim v }
+
+parseInt : String -> Result String Int
+parseInt s = Str.toInt (Str.trim s)
+
+parseHexInt : String -> Result String Int
+parseHexInt s = parseHexFromChars (normalizeHex (Str.trim s))
+
+normalizeHex : String -> String
+normalizeHex s =
+  case Str.startsWith "0x" (Str.toLower s) of
+    True ->
+      Str.drop 2 s
+    False ->
+      s
+
+parseHexFromChars : String -> Result String Int
+parseHexFromChars s = parseHexChars (Str.toChars s) 0
+
+parseHexChars : List Char -> Int -> Result String Int
+parseHexChars chars acc =
+  case chars of
+    [] ->
+      Ok acc
+    Cons c rest ->
+      case hexDigit c of
+        Nothing ->
+          Err (Str.append "parse:invalid hex digit: " (Str.fromChar c))
+        Just d ->
+          parseHexChars rest (Int.add (Int.mul acc 16) d)
+
+hexDigit : Char -> Maybe Int
+hexDigit c =
+  let
+    n = Char.toInt c
+  in
+    case Int.gte n 48 of
+      True ->
+        case Int.lte n 57 of
+          True ->
+            Just (Int.sub n 48)
+          False ->
+            hexAlphaDigit (Char.toLower c)
+      False ->
+        hexAlphaDigit (Char.toLower c)
+
+hexAlphaDigit : Char -> Maybe Int
+hexAlphaDigit c =
+  let
+    n = Char.toInt c
+  in
+    case Int.gte n 97 of
+      True ->
+        case Int.lte n 102 of
+          True ->
+            Just (Int.add 10 (Int.sub n 97))
+          False ->
+            Nothing
+      False ->
+        Nothing
+
+parseFloat : String -> Result String Float
+parseFloat s =
+  case splitOnce "." (Str.trim s) of
+    Nothing ->
+      case parseInt s of
+        Ok n ->
+          Ok (Float.fromInt n)
+        Err msg ->
+          Err (Str.append "parse:" msg)
+    Just (a, b) ->
+      case parseInt a of
+        Err msg ->
+          Err (Str.append "parse:" msg)
+        Ok intPart ->
+          case parseInt (digitsOnly b) of
+            Err _ ->
+              Ok (Float.fromInt intPart)
+            Ok fracPart ->
+              let
+                scale = pow10 (Str.length (digitsOnly b))
+                frac = Float.div (Float.fromInt fracPart) (Float.fromInt scale)
+              in
+                Ok (Float.add (Float.fromInt intPart) frac)
+
+digitsOnly : String -> String
+digitsOnly s = Str.fromChars (takeWhileChars isDigit (Str.toChars s))
+
+takeWhileChars : (Char -> Bool) -> List Char -> List Char
+takeWhileChars pred cs =
+  case cs of
+    [] ->
+      []
+    Cons c rest ->
+      case pred c of
+        True ->
+          Cons c (takeWhileChars pred rest)
+        False ->
+          []
+
+isDigit : Char -> Bool
+isDigit c =
+  let
+    n = Char.toInt c
+  in
+    case Int.gte n 48 of
+      True ->
+        Int.lte n 57
+      False ->
+        False
+
+pow10 : Int -> Int
+pow10 n =
+  case Int.lte n 0 of
+    True ->
+      1
+    False ->
+      Int.mul 10 (pow10 (Int.sub n 1))
+
+parsePciAddress :
+    String
+      -> Result String { domain : Int
+        , bus : Int
+        , device : Int
+        , function : Int
+        }
+parsePciAddress s =
+  case splitOnce ":" (Str.trim s) of
+    Nothing ->
+      Err "parse:invalid PCI address"
+    Just (domainStr, rest1) ->
+      case splitOnce ":" rest1 of
+        Nothing ->
+          Err "parse:invalid PCI address"
+        Just (busStr, rest2) ->
+          case splitOnce "." rest2 of
+            Nothing ->
+              Err "parse:invalid PCI address"
+            Just (devStr, fnStr) ->
+              case parseHexInt domainStr of
+                Err msg ->
+                  Err msg
+                Ok domain ->
+                  case parseHexInt busStr of
+                    Err msg ->
+                      Err msg
+                    Ok bus ->
+                      case parseHexInt devStr of
+                        Err msg ->
+                          Err msg
+                        Ok device ->
+                          case parseInt fnStr of
+                            Err msg ->
+                              Err (Str.append "parse:" msg)
+                            Ok fn ->
+                              Ok
+                                { domain = domain
+                                , bus = bus
+                                , device = device
+                                , function = fn
+                                }

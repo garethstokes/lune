@@ -1,0 +1,252 @@
+module Lune.System.Linux.Disk exposing (disks, mounts, diskMetrics)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , String
+  , Task
+)
+import Lune.Int as Int
+import Lune.List as List
+import Lune.String as Str
+import Lune.System.Linux.Proc as Proc
+import Lune.System.Linux.Sysfs as Sysfs
+import Lune.Task as Task
+
+disks :
+    Task
+      String
+      (List { name : String
+        , model : Maybe String
+        , sizeBytes : Maybe Int
+        })
+disks =
+  do
+    contents <- Proc.readFile "/proc/diskstats"
+    let names = uniqueStrings (diskNamesFromDiskstats contents) []
+    gatherDiskInfos names
+
+mounts :
+    Task String (List { device : String
+        , mountpoint : String
+        , fsType : String
+        })
+mounts =
+  do
+    contents <- Proc.readFile "/proc/mounts"
+    Task.succeed (parseMounts contents)
+
+diskMetrics :
+    Task
+      String
+      { devices : List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+      }
+diskMetrics =
+  do
+    contents <- Proc.readFile "/proc/diskstats"
+    let devs = parseDiskstatsDevices contents
+    filtered <- keepBlockDevices devs
+    Task.succeed
+      { devices = filtered }
+
+-- =============================================================================
+-- Inventory helpers
+-- =============================================================================
+
+gatherDiskInfos :
+    List String
+      -> Task
+        String
+        (List { name : String
+          , model : Maybe String
+          , sizeBytes : Maybe Int
+          })
+gatherDiskInfos names =
+  case names of
+    [] ->
+      Task.succeed []
+    Cons name rest ->
+      do
+        sizeSectors <- Sysfs.readIntOptional (sysfsBlockSizePath name)
+        case sizeSectors of
+          Nothing ->
+            gatherDiskInfos rest
+          Just sectors ->
+            do
+              model <- Sysfs.readOptional (sysfsBlockModelPath name)
+              let sizeBytes =
+                Int.mul
+                  sectors
+                  512
+                |> Just
+              infos <- gatherDiskInfos rest
+              Task.succeed
+                (Cons
+                  { name = name, model = model, sizeBytes = sizeBytes }
+                  infos)
+
+sysfsBlockSizePath : String -> String
+sysfsBlockSizePath name = Str.append "/sys/block/" (Str.append name "/size")
+
+sysfsBlockModelPath : String -> String
+sysfsBlockModelPath name =
+  Str.append "/sys/block/" (Str.append name "/device/model")
+
+diskNamesFromDiskstats : String -> List String
+diskNamesFromDiskstats contents = diskNamesFromLines (Str.lines contents)
+
+diskNamesFromLines : List String -> List String
+diskNamesFromLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case List.get 2 (Str.words line) of
+        Nothing ->
+          diskNamesFromLines rest
+        Just name ->
+          Cons name (diskNamesFromLines rest)
+
+uniqueStrings : List String -> List String -> List String
+uniqueStrings remaining seenRev =
+  case remaining of
+    [] ->
+      List.reverse seenRev
+    Cons x rest ->
+      case hasString x seenRev of
+        True ->
+          uniqueStrings rest seenRev
+        False ->
+          uniqueStrings rest (Cons x seenRev)
+
+hasString : String -> List String -> Bool
+hasString s xs =
+  case xs of
+    [] ->
+      False
+    Cons x rest ->
+      case Str.eq s x of
+        True ->
+          True
+        False ->
+          hasString s rest
+
+-- =============================================================================
+-- /proc/mounts
+-- =============================================================================
+
+parseMounts :
+    String -> List { device : String
+        , mountpoint : String
+        , fsType : String
+        }
+parseMounts contents = parseMountLines (Str.lines contents)
+
+parseMountLines :
+    List String -> List { device : String
+        , mountpoint : String
+        , fsType : String
+        }
+parseMountLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case Str.words line of
+        Cons dev Cons mnt Cons fs _ ->
+          Cons
+            { device = dev, mountpoint = mnt, fsType = fs }
+            (parseMountLines rest)
+        _ ->
+          parseMountLines rest
+
+-- =============================================================================
+-- /proc/diskstats parsing
+-- =============================================================================
+
+parseDiskstatsDevices :
+    String -> List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+parseDiskstatsDevices contents = parseDiskstatsLines (Str.lines contents)
+
+parseDiskstatsLines :
+    List String -> List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+parseDiskstatsLines lines =
+  case lines of
+    [] ->
+      []
+    Cons line rest ->
+      case parseDiskstatsLine line of
+        Nothing ->
+          parseDiskstatsLines rest
+        Just d ->
+          Cons d (parseDiskstatsLines rest)
+
+parseDiskstatsLine :
+    String -> Maybe { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+parseDiskstatsLine line =
+  let
+    ws = Str.words line
+  in
+    case List.get 2 ws of
+      Nothing ->
+        Nothing
+      Just name ->
+        case List.get 5 ws of
+          Nothing ->
+            Nothing
+          Just sectorsReadStr ->
+            case List.get 9 ws of
+              Nothing ->
+                Nothing
+              Just sectorsWrittenStr ->
+                case Proc.parseInt sectorsReadStr of
+                  Err _ ->
+                    Nothing
+                  Ok sr ->
+                    case Proc.parseInt sectorsWrittenStr of
+                      Err _ ->
+                        Nothing
+                      Ok sw ->
+                        Just
+                          { name = name
+                          , readBytes = Int.mul sr 512
+                          , writeBytes = Int.mul sw 512
+                          }
+
+keepBlockDevices :
+    List { name : String
+      , readBytes : Int
+      , writeBytes : Int
+      }
+      -> Task String (List { name : String
+          , readBytes : Int
+          , writeBytes : Int
+          })
+keepBlockDevices devs =
+  case devs of
+    [] ->
+      Task.succeed []
+    Cons d rest ->
+      do
+        sizeMaybe <- Sysfs.readIntOptional (sysfsBlockSizePath d.name)
+        kept <- keepBlockDevices rest
+        case sizeMaybe of
+          Nothing ->
+            Task.succeed kept
+          Just _ ->
+            Task.succeed (Cons d kept)

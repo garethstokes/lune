@@ -1,0 +1,822 @@
+module Lune.System exposing (
+  Platform
+  , OS(..)
+  , Arch(..)
+  , Error(..)
+  , Inventory
+  , CpuInfo
+  , MemInfo
+  , DiskInfo
+  , MountInfo
+  , NetInterface
+  , GpuVendor(..)
+  , PciAddress
+  , GpuInfo
+  , ProcessInfo
+  , platform
+  , inventory
+  , Sample
+  , CpuMetrics
+  , MemMetrics
+  , DiskMetrics
+  , NetMetrics
+  , GpuMetrics
+  , GpuDeviceMetrics
+  , ProcessMetrics
+  , Diff
+  , CpuDiff
+  , DiskDiff
+  , NetDiff
+  , GpuDiff
+  , ProcessDiff
+  , sample
+  , diff
+)
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Float
+  , Int
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , String
+  , Task
+  , Unit
+  , unit
+)
+import Lune.Float as Float
+import Lune.Int as Int
+import Lune.IO as IO
+import Lune.List as List
+import Lune.String as Str
+import Lune.Task as Task
+import Lune.Time as Time
+import Lune.System.Linux.Cpu as LinuxCpu
+import Lune.System.Linux.Disk as LinuxDisk
+import Lune.System.Linux.GpuAmd as LinuxGpuAmd
+import Lune.System.Linux.Mem as LinuxMem
+import Lune.System.Linux.Net as LinuxNet
+import Lune.System.Linux.Process as LinuxProcess
+
+{-| System inspection and metrics.
+
+This module separates:
+
+- `inventory` (static-ish facts; can be cached by callers)
+- `sample` (time-varying counters at a point in time)
+- `diff` (rates/percentages computed from two samples)
+
+Sampling note: CPU usage and IO/network rates require two samples. Take two
+samples some time apart (e.g. 500ms) and call `diff`.
+
+Platform support:
+
+- Linux: implemented (v1)
+- Darwin/Windows: API present, `inventory`/`sample` return `Err (NotImplemented …)`
+-}
+
+type OS =
+  Linux
+  | Darwin
+  | Windows
+
+type Arch =
+  X86_64
+  | AArch64
+  | RiscV64
+  | UnknownArch String
+
+type alias Platform =
+  { os : OS
+  , arch : Arch
+  }
+
+type Error =
+  NotImplemented OS
+  | ReadError String
+  | ParseError String
+  | PermissionDenied String
+
+-- =============================================================================
+-- Public inventory types
+-- =============================================================================
+
+type alias CpuInfo =
+  { model : Maybe String
+  , vendor : Maybe String
+  , logicalCores : Int
+  , physicalCores : Maybe Int
+  , flags : List String
+  , mhz : Maybe Int
+  }
+
+type alias MemInfo =
+  { totalBytes : Int
+  }
+
+type alias DiskInfo =
+  { name : String
+  , model : Maybe String
+  , sizeBytes : Maybe Int
+  }
+
+type alias MountInfo =
+  { device : String
+  , mountpoint : String
+  , fsType : String
+  }
+
+type alias NetInterface =
+  { name : String
+  , mac : Maybe String
+  , mtu : Maybe Int
+  }
+
+type GpuVendor =
+  Amd
+  | Nvidia
+  | Intel
+  | UnknownGpuVendor String
+
+type alias PciAddress =
+  { domain : Int
+  , bus : Int
+  , device : Int
+  , function : Int
+  }
+
+type alias GpuInfo =
+  { vendor : GpuVendor
+  , name : Maybe String
+  , pci : Maybe PciAddress
+  , driver : Maybe String
+  , vramTotalBytes : Maybe Int
+  }
+
+type alias ProcessInfo =
+  { pid : Int
+  , comm : String
+  }
+
+type alias Inventory =
+  { platform : Platform
+  , cpu : CpuInfo
+  , memory : MemInfo
+  , disks : List DiskInfo
+  , mounts : List MountInfo
+  , net : List NetInterface
+  , gpus : List GpuInfo
+  }
+
+-- =============================================================================
+-- Public metrics types
+-- =============================================================================
+
+type alias CpuMetrics =
+  { total : { user : Int
+  , nice : Int
+  , system : Int
+  , idle : Int
+  , iowait : Int
+  , irq : Int
+  , softirq : Int
+  , steal : Int
+  }
+  , cores : List
+    { user : Int
+    , nice : Int
+    , system : Int
+    , idle : Int
+    , iowait : Int
+    , irq : Int
+    , softirq : Int
+    , steal : Int
+    }
+  , loadAvg1 : Maybe Float
+  , loadAvg5 : Maybe Float
+  , loadAvg15 : Maybe Float
+  }
+
+type alias MemMetrics =
+  { totalBytes : Int
+  , availableBytes : Maybe Int
+  , freeBytes : Maybe Int
+  , buffersBytes : Maybe Int
+  , cachedBytes : Maybe Int
+  , swapTotalBytes : Maybe Int
+  , swapFreeBytes : Maybe Int
+  }
+
+type alias DiskMetrics =
+  { devices : List { name : String
+    , readBytes : Int
+    , writeBytes : Int
+    }
+  }
+
+type alias NetMetrics =
+  { interfaces : List { name : String
+    , rxBytes : Int
+    , txBytes : Int
+    }
+  }
+
+type alias GpuDeviceMetrics =
+  { pci : Maybe PciAddress
+  , busyPercent : Maybe Int
+  , tempC : Maybe Float
+  , powerW : Maybe Float
+  , vramUsedBytes : Maybe Int
+  , notes : List String
+  }
+
+type alias GpuMetrics =
+  { devices : List GpuDeviceMetrics
+  }
+
+type alias ProcessSample =
+  { pid : Int
+  , comm : String
+  , utime : Int
+  , stime : Int
+  , rssBytes : Maybe Int
+  }
+
+type alias ProcessMetrics =
+  { processes : List ProcessSample
+  , notes : List String
+  }
+
+type alias Sample =
+  { atMs : Int
+  , cpu : CpuMetrics
+  , mem : MemMetrics
+  , disk : DiskMetrics
+  , net : NetMetrics
+  , gpu : GpuMetrics
+  , procs : ProcessMetrics
+  }
+
+type alias CpuDiff =
+  { usagePercent : Int
+  , perCoreUsagePercent : List Int
+  , loadAvg1 : Maybe Float
+  , loadAvg5 : Maybe Float
+  , loadAvg15 : Maybe Float
+  }
+
+type alias DiskDiff =
+  { readBytesPerSec : Int
+  , writeBytesPerSec : Int
+  , devices : List
+    { name : String
+    , readBytesPerSec : Int
+    , writeBytesPerSec : Int
+    }
+  }
+
+type alias NetDiff =
+  { rxBytesPerSec : Int
+  , txBytesPerSec : Int
+  , interfaces : List { name : String
+    , rxBytesPerSec : Int
+    , txBytesPerSec : Int
+    }
+  }
+
+type alias GpuDiff =
+  { devices : List GpuDeviceMetrics
+  }
+
+type alias ProcessDelta =
+  { pid : Int
+  , comm : String
+  , cpuTimeDelta : Int
+  , rssBytes : Maybe Int
+  }
+
+type alias ProcessDiff =
+  { top : List ProcessDelta
+  , notes : List String
+  }
+
+type alias Diff =
+  { dtMs : Int
+  , cpu : CpuDiff
+  , disk : DiskDiff
+  , net : NetDiff
+  , gpu : GpuDiff
+  , procs : ProcessDiff
+  }
+
+-- =============================================================================
+-- Platform detection
+-- =============================================================================
+
+platform : Task Error Platform
+platform =
+  do
+    os <- detectOS
+    arch <-
+      case os of
+        Linux ->
+          linuxArch
+        Darwin ->
+          Task.succeed (UnknownArch "darwin")
+        Windows ->
+          Task.succeed (UnknownArch "windows")
+
+    Task.succeed
+      { os = os, arch = arch }
+
+linuxArch : Task Error Arch
+linuxArch =
+  do
+    contents <-
+      Task.mapError
+        (\_ -> ReadError "/proc/cpuinfo")
+        (IO.readFile "/proc/cpuinfo")
+    Task.succeed (archFromCpuinfo contents)
+
+archFromCpuinfo : String -> Arch
+archFromCpuinfo contents =
+  let
+    lower = Str.toLower contents
+  in
+    case Str.contains "riscv" lower of
+      True ->
+        RiscV64
+      False ->
+        case Str.contains "aarch64" lower of
+          True ->
+            AArch64
+          False ->
+            case Str.contains "x86_64" lower of
+              True ->
+                X86_64
+              False ->
+                case
+                  Str.contains " lm " (Str.append " " (Str.append lower " "))
+                of
+                  True ->
+                    X86_64
+                  False ->
+                    UnknownArch "unknown"
+-- x86_64 often doesn't mention "x86_64" explicitly; long mode (lm) flag is a hint.
+
+detectOS : Task Error OS
+detectOS =
+  do
+    isLinux <- canReadFile "/proc/cpuinfo"
+    case isLinux of
+      True ->
+        Task.succeed Linux
+      False ->
+        do
+          isDarwin <-
+            canReadFile "/System/Library/CoreServices/SystemVersion.plist"
+          case isDarwin of
+            True ->
+              Task.succeed Darwin
+            False ->
+              do
+                isWindows <-
+                  canReadFile
+                    "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts"
+                case isWindows of
+                  True ->
+                    Task.succeed Windows
+                  False ->
+                    Task.succeed Linux
+
+canReadFile : String -> Task Error Bool
+canReadFile path = Task.map resultOk (Task.result (IO.readFile path))
+
+resultOk : Result e a -> Bool
+resultOk r =
+  case r of
+    Ok _ ->
+      True
+    Err _ ->
+      False
+
+-- =============================================================================
+-- Inventory
+-- =============================================================================
+
+inventory : Task Error Inventory
+inventory =
+  do
+    p <- platform
+    case p.os of
+      Linux ->
+        do
+          cpu <- Task.mapError mapLinuxError LinuxCpu.cpuInfo
+          mem <- Task.mapError mapLinuxError LinuxMem.memInfo
+          disks <- Task.mapError mapLinuxError LinuxDisk.disks
+          mounts <- Task.mapError mapLinuxError LinuxDisk.mounts
+          netIfs <- Task.mapError mapLinuxError LinuxNet.interfaces
+          amdGpus <- Task.mapError mapLinuxError LinuxGpuAmd.inventory
+          let gpus =
+            List.map
+              (\g ->
+                { vendor = Amd
+                , name = g.name
+                , pci = g.pci
+                , driver = g.driver
+                , vramTotalBytes = g.vramTotalBytes
+                })
+              amdGpus
+          Task.succeed
+            { platform = p
+            , cpu = cpu
+            , memory = mem
+            , disks = disks
+            , mounts = mounts
+            , net = netIfs
+            , gpus = gpus
+            }
+      Darwin ->
+        Task.fail (NotImplemented Darwin)
+      Windows ->
+        Task.fail (NotImplemented Windows)
+
+-- =============================================================================
+-- Sampling
+-- =============================================================================
+
+sample : Task Error Sample
+sample =
+  do
+    p <- platform
+    case p.os of
+      Linux ->
+        do
+          atMs <- nowMs
+          cpu <- Task.mapError mapLinuxError LinuxCpu.cpuMetrics
+          mem <- Task.mapError mapLinuxError LinuxMem.memMetrics
+          disk <- Task.mapError mapLinuxError LinuxDisk.diskMetrics
+          net <- Task.mapError mapLinuxError LinuxNet.netMetrics
+          gpu <- Task.mapError mapLinuxError LinuxGpuAmd.metrics
+          procs <- Task.mapError mapLinuxError LinuxProcess.processMetrics
+          Task.succeed
+            { atMs = atMs
+            , cpu = cpu
+            , mem = mem
+            , disk = disk
+            , net = net
+            , gpu = gpu
+            , procs = procs
+            }
+      Darwin ->
+        Task.fail (NotImplemented Darwin)
+      Windows ->
+        Task.fail (NotImplemented Windows)
+
+nowMs : Task Error Int
+nowMs =
+  do
+    t <- Time.now
+    Task.succeed (Int.div (Time.toMicros t) 1000)
+
+mapLinuxError : String -> Error
+mapLinuxError msg =
+  case Str.startsWith "parse:" msg of
+    True ->
+      ParseError msg
+    False ->
+      ReadError msg
+
+-- =============================================================================
+-- Diff
+-- =============================================================================
+
+diff : Sample -> Sample -> Diff
+diff a b =
+  let
+    dtMs0 = Int.sub b.atMs a.atMs
+    dtMs =
+      case Int.lte dtMs0 0 of
+        True ->
+          0
+        False ->
+          dtMs0
+    cpuDiff = cpuDiffBetween a.cpu b.cpu
+    diskDiff = diskDiffBetween dtMs a.disk b.disk
+    netDiff = netDiffBetween dtMs a.net b.net
+    gpuDiff = { devices = b.gpu.devices }
+    procsDiff = processDiffBetween a.procs b.procs
+  in
+    { dtMs = dtMs
+    , cpu = cpuDiff
+    , disk = diskDiff
+    , net = netDiff
+    , gpu = gpuDiff
+    , procs = procsDiff
+    }
+
+cpuDiffBetween : CpuMetrics -> CpuMetrics -> CpuDiff
+cpuDiffBetween a b =
+  { usagePercent = cpuUsagePercent a.total b.total
+  , perCoreUsagePercent = listZipWith cpuUsagePercent a.cores b.cores
+  , loadAvg1 = b.loadAvg1
+  , loadAvg5 = b.loadAvg5
+  , loadAvg15 = b.loadAvg15
+  }
+
+cpuUsagePercent :
+    { user : Int
+    , nice : Int
+    , system : Int
+    , idle : Int
+    , iowait : Int
+    , irq : Int
+    , softirq : Int
+    , steal : Int
+    }
+      -> { user : Int
+      , nice : Int
+      , system : Int
+      , idle : Int
+      , iowait : Int
+      , irq : Int
+      , softirq : Int
+      , steal : Int
+      }
+      -> Int
+cpuUsagePercent a b =
+  let
+    idleA = Int.add a.idle a.iowait
+    idleB = Int.add b.idle b.iowait
+    nonIdleA =
+      a.user
+        |> Int.add a.nice
+        |> Int.add a.system
+        |> Int.add a.irq
+        |> Int.add a.softirq
+        |> Int.add a.steal
+    nonIdleB =
+      b.user
+        |> Int.add b.nice
+        |> Int.add b.system
+        |> Int.add b.irq
+        |> Int.add b.softirq
+        |> Int.add b.steal
+    totalA = Int.add idleA nonIdleA
+    totalB = Int.add idleB nonIdleB
+    totalD = Int.sub totalB totalA
+    idleD = Int.sub idleB idleA
+  in
+    case Int.lte totalD 0 of
+      True ->
+        0
+      False ->
+        Int.div (Int.mul (Int.sub totalD idleD) 100) totalD
+
+diskDiffBetween : Int -> DiskMetrics -> DiskMetrics -> DiskDiff
+diskDiffBetween dtMs a b =
+  let
+    perDev = listZipByNameDisk dtMs a.devices b.devices
+    totals =
+      List.foldl
+        (\acc d ->
+          { read = Int.add acc.read d.readBytesPerSec
+          , write = Int.add acc.write d.writeBytesPerSec
+          })
+        { read = 0, write = 0 }
+        perDev
+  in
+    { readBytesPerSec = totals.read
+    , writeBytesPerSec = totals.write
+    , devices = perDev
+    }
+
+netDiffBetween : Int -> NetMetrics -> NetMetrics -> NetDiff
+netDiffBetween dtMs a b =
+  let
+    perIf = listZipByNameNet dtMs a.interfaces b.interfaces
+    totals =
+      List.foldl
+        (\acc d ->
+          { rx = Int.add acc.rx d.rxBytesPerSec
+          , tx = Int.add acc.tx d.txBytesPerSec
+          })
+        { rx = 0, tx = 0 }
+        perIf
+  in
+    { rxBytesPerSec = totals.rx, txBytesPerSec = totals.tx, interfaces = perIf }
+
+processDiffBetween : ProcessMetrics -> ProcessMetrics -> ProcessDiff
+processDiffBetween a b =
+  let
+    deltas = processDeltas a.processes b.processes
+    top = takeTopByCpuDelta 25 deltas
+  in
+    { top = top, notes = listAppend a.notes b.notes }
+
+processDeltas : List ProcessSample -> List ProcessSample -> List ProcessDelta
+processDeltas a b =
+  case b of
+    [] ->
+      []
+    Cons p rest ->
+      case findProcessByPid p.pid a of
+        Nothing ->
+          Cons
+            { pid = p.pid
+            , comm = p.comm
+            , cpuTimeDelta = Int.add p.utime p.stime
+            , rssBytes = p.rssBytes
+            }
+            (processDeltas a rest)
+        Just prev ->
+          let
+            prevCpu = Int.add prev.utime prev.stime
+            nextCpu = Int.add p.utime p.stime
+          in
+            Cons
+              { pid = p.pid
+              , comm = p.comm
+              , cpuTimeDelta = Int.sub nextCpu prevCpu
+              , rssBytes = p.rssBytes
+              }
+              (processDeltas a rest)
+
+findProcessByPid : Int -> List ProcessSample -> Maybe ProcessSample
+findProcessByPid pid ps =
+  case ps of
+    [] ->
+      Nothing
+    Cons p rest ->
+      case Int.eq p.pid pid of
+        True ->
+          Just p
+        False ->
+          findProcessByPid pid rest
+
+takeTopByCpuDelta : Int -> List ProcessDelta -> List ProcessDelta
+takeTopByCpuDelta n ds = take n (sortByCpuDeltaDesc ds)
+
+sortByCpuDeltaDesc : List ProcessDelta -> List ProcessDelta
+sortByCpuDeltaDesc ds = List.foldl insertByCpuDelta [] ds
+
+insertByCpuDelta : List ProcessDelta -> ProcessDelta -> List ProcessDelta
+insertByCpuDelta sorted d =
+  case sorted of
+    [] ->
+      [d]
+    Cons x rest ->
+      case Int.gte d.cpuTimeDelta x.cpuTimeDelta of
+        True ->
+          Cons d sorted
+        False ->
+          Cons x (insertByCpuDelta rest d)
+
+take : Int -> List a -> List a
+take n xs =
+  case Int.lte n 0 of
+    True ->
+      []
+    False ->
+      case xs of
+        [] ->
+          []
+        Cons x rest ->
+          Cons x (take (Int.sub n 1) rest)
+
+bytesPerSec : Int -> Int -> Int
+bytesPerSec dtMs delta =
+  case Int.lte dtMs 0 of
+    True ->
+      0
+    False ->
+      Int.div (Int.mul delta 1000) dtMs
+
+listZipByNameDisk :
+    Int
+      -> List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+      -> List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+      -> List { name : String
+        , readBytesPerSec : Int
+        , writeBytesPerSec : Int
+        }
+listZipByNameDisk dtMs a b =
+  case b of
+    [] ->
+      []
+    Cons d rest ->
+      case findDiskByName d.name a of
+        Nothing ->
+          Cons
+            { name = d.name, readBytesPerSec = 0, writeBytesPerSec = 0 }
+            (listZipByNameDisk dtMs a rest)
+        Just prev ->
+          Cons
+            { name = d.name
+            , readBytesPerSec =
+              bytesPerSec dtMs (Int.sub d.readBytes prev.readBytes)
+            , writeBytesPerSec =
+              bytesPerSec dtMs (Int.sub d.writeBytes prev.writeBytes)
+            }
+            (listZipByNameDisk dtMs a rest)
+
+findDiskByName :
+    String
+      -> List { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+      -> Maybe { name : String
+        , readBytes : Int
+        , writeBytes : Int
+        }
+findDiskByName name ds =
+  case ds of
+    [] ->
+      Nothing
+    Cons d rest ->
+      case Str.eq d.name name of
+        True ->
+          Just d
+        False ->
+          findDiskByName name rest
+
+listZipByNameNet :
+    Int
+      -> List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+      -> List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+      -> List { name : String
+        , rxBytesPerSec : Int
+        , txBytesPerSec : Int
+        }
+listZipByNameNet dtMs a b =
+  case b of
+    [] ->
+      []
+    Cons i rest ->
+      case findIfByName i.name a of
+        Nothing ->
+          Cons
+            { name = i.name, rxBytesPerSec = 0, txBytesPerSec = 0 }
+            (listZipByNameNet dtMs a rest)
+        Just prev ->
+          Cons
+            { name = i.name
+            , rxBytesPerSec = bytesPerSec dtMs (Int.sub i.rxBytes prev.rxBytes)
+            , txBytesPerSec = bytesPerSec dtMs (Int.sub i.txBytes prev.txBytes)
+            }
+            (listZipByNameNet dtMs a rest)
+
+findIfByName :
+    String
+      -> List { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+      -> Maybe { name : String
+        , rxBytes : Int
+        , txBytes : Int
+        }
+findIfByName name ifs =
+  case ifs of
+    [] ->
+      Nothing
+    Cons i rest ->
+      case Str.eq i.name name of
+        True ->
+          Just i
+        False ->
+          findIfByName name rest
+
+listZipWith : (a -> b -> c) -> List a -> List b -> List c
+listZipWith f xs ys =
+  case xs of
+    [] ->
+      []
+    Cons x xt ->
+      case ys of
+        [] ->
+          []
+        Cons y yt ->
+          Cons (f x y) (listZipWith f xt yt)
+
+listAppend : List a -> List a -> List a
+listAppend xs ys =
+  case xs of
+    [] ->
+      ys
+    Cons x rest ->
+      Cons x (listAppend rest ys)
