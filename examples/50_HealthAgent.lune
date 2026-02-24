@@ -4,7 +4,7 @@ An AI agent that collects Linux system health metrics (memory, CPU, processes)
 and uses an LLM to analyze issues and propose remediation actions.
 
 Architecture:
-  1. Data Collection - Reads /proc filesystem for memory, CPU, and process stats
+  1. Data Collection - Uses Lune.System module for metrics
   2. LLM Analysis - Sends metrics to Ollama (qwen3 model) for issue detection
   3. Human-in-the-Loop - Presents proposed actions for user approval
   4. Action Recording - Approved commands are written to approved-commands.sh
@@ -14,7 +14,7 @@ Requirements:
   - qwen3 model pulled: `ollama pull qwen3`
 
 Key types:
-  - HealthReport: Aggregated system metrics (disk, memory, processes, services)
+  - HealthReport: Aggregated system metrics (memory, CPU, disk, network, GPU)
   - HealthAnalysis: LLM output with issues and proposed actions
   - AgentError: Union of LLM, decode, and system errors
 
@@ -25,61 +25,76 @@ module HealthAgent exposing (main)
 import Lune.IO as IO
 import Lune.Task as Task
 import Lune.String as Str
-import Lune.Char as Char
 import Lune.Int as Int
 import Lune.Float as Float
 import Lune.List as List
-import Lune.Maybe as Maybe
-import Lune.Bool as Bool
 import Lune.Json as RawJson exposing (Json)
 import Lune.Json.Decode as D
 import Lune.Json.Encode as E
+import Lune.System as System exposing (Error(..), OS(..))
 import Template exposing (render)
 import Nova exposing (withModel, tool)
 import Nova.Core as Core exposing (Error(..))
-import Nova.Tool as Tool
-import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 
 
 -- Data Types ----------------------------------------------------------------
 
 @derive(Json)
 type alias DiskUsage =
-  { mountPoint : String
-  , totalGb : Float
-  , usedGb : Float
-  , percentUsed : Int
+  { name : String
+  , readBytesPerSec : Int
+  , writeBytesPerSec : Int
   }
 
 @derive(Json)
 type alias MemoryUsage =
   { totalMb : Int
-  , usedMb : Int
   , availableMb : Int
+  , usedMb : Int
   , swapUsedMb : Int
   }
 
 @derive(Json)
-type alias ProcessInfo =
-  { pid : Int
-  , name : String
-  , cpuPercent : Float
-  , memoryPercent : Float
+type alias CpuUsage =
+  { usagePercent : Int
+  , perCorePercent : List Int
+  , loadAvg1 : Maybe Float
+  , loadAvg5 : Maybe Float
+  , loadAvg15 : Maybe Float
   }
 
 @derive(Json)
-type alias ServiceStatus =
-  { name : String
-  , isRunning : Bool
-  , uptime : Maybe String
+type alias NetworkUsage =
+  { rxBytesPerSec : Int
+  , txBytesPerSec : Int
+  , interfaces : List { name : String, rxBytesPerSec : Int, txBytesPerSec : Int }
+  }
+
+@derive(Json)
+type alias GpuUsage =
+  { busyPercent : Maybe Int
+  , tempC : Maybe Float
+  , powerW : Maybe Float
+  , vramUsedBytes : Maybe Int
+  }
+
+@derive(Json)
+type alias ProcessUsage =
+  { pid : Int
+  , name : String
+  , cpuTimeDelta : Int
+  , rssBytes : Maybe Int
   }
 
 @derive(Json)
 type alias HealthReport =
-  { disks : List DiskUsage
+  { cpu : CpuUsage
   , memory : MemoryUsage
-  , topProcesses : List ProcessInfo
-  , services : List ServiceStatus
+  , disks : List DiskUsage
+  , network : NetworkUsage
+  , gpus : List GpuUsage
+  , topProcesses : List ProcessUsage
+  , dtMs : Int
   }
 
 @derive(Json)
@@ -112,274 +127,115 @@ type alias HealthAnalysis =
   }
 
 type AgentError =
-  LlmError Error
+  LlmError Core.Error
   | DecodeError String
-  | SystemError String
+  | SystemError System.Error
 
 
 -- Data Collection -----------------------------------------------------------
 
-procReadFile : String -> Task AgentError String
-procReadFile path =
-  IO.readFile path
-    |> Task.mapError (\_ -> SystemError (Str.append "Failed to read " path))
-
-diskCheck : Task AgentError (List DiskUsage)
-diskCheck = Task.succeed []
-
-memoryCheck : Task AgentError MemoryUsage
-memoryCheck =
-  do
-    contents <- procReadFile "/proc/meminfo"
-    case parseMeminfo contents of
-      Err msg ->
-        Task.fail (SystemError msg)
-      Ok m ->
-        Task.succeed m
-
-processCheck : Task AgentError (List ProcessInfo)
-processCheck =
-  do
-    meminfo <- procReadFile "/proc/meminfo"
-    memTotalKb <-
-      (|>)
-        (Maybe.toResult
-          "meminfo: missing MemTotal"
-          (meminfoValueKb "MemTotal" meminfo))
-        Task.fromResult
-      |> Task.mapError SystemError
-
-    name <- procReadFile "/proc/self/comm" |> Task.map Str.trim
-
-    status <- procReadFile "/proc/self/status"
-    let rssKb =
-      lineFirstInt
-        "VmRSS:"
-        status
-      |> Maybe.withDefault 0
-
-    sample0 <- sampleSelfCpu
-    _ <- IO.sleepMs 200
-    sample1 <- sampleSelfCpu
-
-    let cpuPercent = cpuPercentFromSamples sample0 sample1
-
-    let memoryPercent = Float.percent rssKb memTotalKb
-
-    Task.succeed
-      [ { pid = sample0.pid
-      , name = name
-      , cpuPercent = cpuPercent
-      , memoryPercent = memoryPercent
-      }
-      ]
-
-serviceCheck : Task AgentError (List ServiceStatus)
-serviceCheck = Task.succeed []
-
 collectHealthReport : Task AgentError HealthReport
 collectHealthReport =
   do
-    disks <- diskCheck
-    memory <- memoryCheck
-    processes <- processCheck
-    services <- serviceCheck
-    Task.succeed
-      { disks = disks
-      , memory = memory
-      , topProcesses = processes
-      , services = services
-      }
+    s1 <- System.sample |> Task.mapError SystemError
+    _ <- IO.sleepMs 500
+    s2 <- System.sample |> Task.mapError SystemError
+    let d = System.diff s1 s2
+    Task.succeed (diffToReport s2 d)
 
-type alias CpuSample =
-  { pid : Int
-  , procJiffies : Int
-  , totalJiffies : Int
-  , cpuCount : Int
+diffToReport : System.Sample -> System.Diff -> HealthReport
+diffToReport s d =
+  { cpu = cpuFromDiff d.cpu
+  , memory = memFromSample s.mem
+  , disks = disksFromDiff d.disk
+  , network = netFromDiff d.net
+  , gpus = gpusFromDiff d.gpu
+  , topProcesses = procsFromDiff d.procs
+  , dtMs = d.dtMs
   }
 
-sampleSelfCpu : Task AgentError CpuSample
-sampleSelfCpu =
-  do
-    sys <- procReadFile "/proc/stat"
-    self <- procReadFile "/proc/self/stat"
+cpuFromDiff : System.CpuDiff -> CpuUsage
+cpuFromDiff c =
+  { usagePercent = c.usagePercent
+  , perCorePercent = c.perCoreUsagePercent
+  , loadAvg1 = c.loadAvg1
+  , loadAvg5 = c.loadAvg5
+  , loadAvg15 = c.loadAvg15
+  }
 
-    totalJiffies <-
-      case procTotalJiffies sys of
-        Err msg ->
-          Task.fail (SystemError msg)
-        Ok n ->
-          Task.succeed n
-
-    pidAndJiffies <-
-      case procPidAndJiffies self of
-        Err msg ->
-          Task.fail (SystemError msg)
-        Ok r ->
-          Task.succeed r
-
-    case pidAndJiffies of
-      (pid, procJiffies) ->
-        Task.succeed
-          { pid = pid
-          , procJiffies = procJiffies
-          , totalJiffies = totalJiffies
-          , cpuCount = Int.max 1 (procCpuCount sys)
-          }
-
-cpuPercentFromSamples : CpuSample -> CpuSample -> Float
-cpuPercentFromSamples a b =
+memFromSample : System.MemMetrics -> MemoryUsage
+memFromSample m =
   let
-    dp = Int.max 0 (Int.sub b.procJiffies a.procJiffies)
-    dt = Int.max 0 (Int.sub b.totalJiffies a.totalJiffies)
-  in
-    case Int.lte dt 0 of
-      True ->
-        0.0
-      False ->
-        let
-          ratio = Float.div (Float.fromInt dp) (Float.fromInt dt)
-        in
-          Float.mul (Float.fromInt a.cpuCount) (Float.mul 100.0 ratio)
-
-parseMeminfo : String -> Result String MemoryUsage
-parseMeminfo contents =
-  do
-    totalKb <-
-      meminfoValueKb
-        "MemTotal"
-        contents
-      |> Maybe.toResult "meminfo: missing MemTotal"
-    availableKb <-
-      meminfoValueKb
-        "MemAvailable"
-        contents
-      |> Maybe.toResult "meminfo: missing MemAvailable"
-    swapTotalKb <-
-      meminfoValueKb
-        "SwapTotal"
-        contents
-      |> Maybe.toResult "meminfo: missing SwapTotal"
-    swapFreeKb <-
-      meminfoValueKb
-        "SwapFree"
-        contents
-      |> Maybe.toResult "meminfo: missing SwapFree"
-    let totalMb = Int.div totalKb 1024
-    let availableMb = Int.div availableKb 1024
-    let usedMb =
-      Int.sub
-        totalMb
-        availableMb
-      |> Int.max 0
-    let swapUsedMb =
-      Int.div
-        (Int.sub swapTotalKb swapFreeKb)
-        1024
-      |> Int.max 0
-    Ok
-      { totalMb = totalMb
-      , usedMb = usedMb
-      , availableMb = availableMb
-      , swapUsedMb = swapUsedMb
-      }
-
-meminfoValueKb : String -> String -> Maybe Int
-meminfoValueKb key contents =
-  let
-    prefix = Str.append key ":"
-  in
-    lineFirstInt prefix contents
-
-lineFirstInt : String -> String -> Maybe Int
-lineFirstInt prefix contents =
-  case List.findFirst (\line -> Str.startsWith prefix line) (Str.lines contents) of
-    Nothing ->
-      Nothing
-    Just line ->
-      extractFirstInt line
-
-extractFirstInt : String -> Maybe Int
-extractFirstInt s =
-  let
-    chars = Str.toChars s
-    after = List.dropWhile (\c -> Bool.not (Char.isDigit c)) chars
-  in
-    case after of
-      [] ->
-        Nothing
-      _ ->
-        let
-          digits = List.takeWhile Char.isDigit after
-        in
-          case Str.toInt (Str.fromChars digits) of
-            Err _ ->
-              Nothing
-            Ok n ->
-              Just n
-
-procTotalJiffies : String -> Result String Int
-procTotalJiffies sys =
-  case Str.lines sys of
-    [] ->
-      Err "proc/stat: empty"
-    Cons first _ ->
-      case Str.words first of
-        [] ->
-          Err "proc/stat: malformed cpu line"
-        Cons _ rest ->
-          Str.sumInts rest
-
-procCpuCount : String -> Int
-procCpuCount sys = List.foldl countCpuCoreLine 0 (Str.lines sys)
-
-countCpuCoreLine : Int -> String -> Int
-countCpuCoreLine n line =
-  case isCpuCoreLine line of
-    True ->
-      Int.add n 1
-    False ->
-      n
-
-isCpuCoreLine : String -> Bool
-isCpuCoreLine line =
-  case Str.startsWith "cpu" line of
-    False ->
-      False
-    True ->
-      case Str.toChars (Str.drop 3 line) of
-        Cons c _ ->
-          Char.isDigit c
-        _ ->
-          False
-
-procPidAndJiffies : String -> Result String (Int, Int)
-procPidAndJiffies statLine =
-  case Str.words statLine of
-    [] ->
-      Err "proc/self/stat: missing pid"
-    Cons pidToken _ ->
-      case Str.toInt pidToken of
-        Err msg ->
-          Err (Str.append "proc/self/stat: invalid pid: " msg)
-        Ok pid ->
-          case Str.indexOf ") " statLine of
+    totalMb = Int.div m.totalBytes (Int.mul 1024 1024)
+    availableMb =
+      case m.availableBytes of
+        Just a ->
+          Int.div a (Int.mul 1024 1024)
+        Nothing ->
+          case m.freeBytes of
+            Just f ->
+              Int.div f (Int.mul 1024 1024)
             Nothing ->
-              Err "proc/self/stat: missing ') ' delimiter"
-            Just idx ->
-              let
-                rest = Str.drop (Int.add idx 2) statLine
-                fields = Str.words rest
-              in
-                case (List.get 11 fields, List.get 12 fields) of
-                  (Just ut, Just st) ->
-                    case (Str.toInt ut, Str.toInt st) of
-                      (Ok utime, Ok stime) ->
-                        Ok (pid, Int.add utime stime)
-                      _ ->
-                        Err "proc/self/stat: invalid utime/stime"
-                  _ ->
-                    Err "proc/self/stat: missing utime/stime fields"
+              0
+    usedMb = Int.max 0 (Int.sub totalMb availableMb)
+    swapUsedMb =
+      case (m.swapTotalBytes, m.swapFreeBytes) of
+        (Just total, Just free) ->
+          Int.div (Int.max 0 (Int.sub total free)) (Int.mul 1024 1024)
+        _ ->
+          0
+  in
+    { totalMb = totalMb
+    , availableMb = availableMb
+    , usedMb = usedMb
+    , swapUsedMb = swapUsedMb
+    }
+
+disksFromDiff : System.DiskDiff -> List DiskUsage
+disksFromDiff d =
+  List.map
+    (\dev ->
+      { name = dev.name
+      , readBytesPerSec = dev.readBytesPerSec
+      , writeBytesPerSec = dev.writeBytesPerSec
+      })
+    d.devices
+
+netFromDiff : System.NetDiff -> NetworkUsage
+netFromDiff n =
+  { rxBytesPerSec = n.rxBytesPerSec
+  , txBytesPerSec = n.txBytesPerSec
+  , interfaces =
+    List.map
+      (\i ->
+        { name = i.name
+        , rxBytesPerSec = i.rxBytesPerSec
+        , txBytesPerSec = i.txBytesPerSec
+        })
+      n.interfaces
+  }
+
+gpusFromDiff : System.GpuDiff -> List GpuUsage
+gpusFromDiff g =
+  List.map
+    (\dev ->
+      { busyPercent = dev.busyPercent
+      , tempC = dev.tempC
+      , powerW = dev.powerW
+      , vramUsedBytes = dev.vramUsedBytes
+      })
+    g.devices
+
+procsFromDiff : System.ProcessDiff -> List ProcessUsage
+procsFromDiff p =
+  List.map
+    (\proc ->
+      { pid = proc.pid
+      , name = proc.comm
+      , cpuTimeDelta = proc.cpuTimeDelta
+      , rssBytes = proc.rssBytes
+      })
+    p.top
 
 
 -- Display -------------------------------------------------------------------
@@ -502,8 +358,30 @@ showAgentError err =
       render "LLM analysis failed: ${Nova.showError e}"
     DecodeError msg ->
       render "Failed to decode response: ${msg}"
-    SystemError msg ->
-      render "System check failed: ${msg}"
+    SystemError e ->
+      render "System check failed: ${systemErrorToString e}"
+
+systemErrorToString : System.Error -> String
+systemErrorToString err =
+  case err of
+    NotImplemented os ->
+      Str.append "NotImplemented(" (Str.append (osToString os) ")")
+    ReadError msg ->
+      Str.append "ReadError(" (Str.append msg ")")
+    ParseError msg ->
+      Str.append "ParseError(" (Str.append msg ")")
+    PermissionDenied msg ->
+      Str.append "PermissionDenied(" (Str.append msg ")")
+
+osToString : System.OS -> String
+osToString os =
+  case os of
+    Linux ->
+      "linux"
+    Darwin ->
+      "darwin"
+    Windows ->
+      "windows"
 
 
 -- Human-in-the-Loop ---------------------------------------------------------
@@ -590,13 +468,9 @@ runAgent =
   do
     IO.println "Collecting system health data..."
     report <- collectHealthReport
-
-    IO.println <| render ''
-          Health data collected.
-
-          Analysing with LLM
-        ''
-
+    IO.println (render "Health data collected (sampled over ${Str.fromInt report.dtMs}ms).")
+    IO.println ""
+    IO.println "Analysing with LLM..."
     analysis <- analyzeHealth report
     displayAnalysis analysis
 
