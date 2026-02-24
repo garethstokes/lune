@@ -1,56 +1,91 @@
 module Nova exposing (
-  openrouter,
-  ollama,
-  provider,
-  providerId,
-  providerEq,
-  showProvider,
-  showError,
-  showAskResult,
-  showJsonResult,
-
-  -- Hooks
-  NovaHooks,
-
-  -- Client
-  Client,
-  newClient,
-  defaultClient,
-  withProvider,
-  withModel,
-  withOpenRouterKey,
-  withOpenRouterBaseUrl,
-  withOllamaBaseUrl,
-  withHooks,
-  withoutHooks,
-
-  -- Prompt helpers
-  toolPreamble,
-  toolPostamble,
-  extractJson,
-  composeToolPrompt,
-
-  -- Public API
-  ask,
-  json,
-  tool,
-
-  -- Streaming (architecture only)
-  Stream,
-  StreamStep(..),
-  next,
-  NovaEvent(..),
-  showEvent,
-  showNovaEvent,
-  showStreamStep,
-  showStreamResult,
-  askStream,
-
-  -- Tool execution (guarded + auditable)
-  executeTool,
-  showToolExecResult,
-  showToolExecError
+  openrouter
+  , ollama
+  , provider
+  , providerId
+  , providerEq
+  , showProvider
+  , showError
+  , showAskResult
+  , showJsonResult
+  , NovaHooks
+  , Client
+  , newClient
+  , defaultClient
+  , withProvider
+  , withModel
+  , withOpenRouterKey
+  , withOpenRouterBaseUrl
+  , withOllamaBaseUrl
+  , withHooks
+  , withoutHooks
+  , toolPreamble
+  , toolPostamble
+  , extractJson
+  , composeToolPrompt
+  , ask
+  , json
+  , tool
+  , Stream
+  , StreamStep(..)
+  , next
+  , NovaEvent(..)
+  , showEvent
+  , showNovaEvent
+  , showStreamStep
+  , showStreamResult
+  , askStream
+  , executeTool
+  , showToolExecResult
+  , showToolExecError
 )
+
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , String
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , Unit
+  , unit
+  , Task(..)
+  , Applicative(..)
+  , Monad(..)
+)
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.Int as Int
+import Lune.String as Str
+import Lune.Json as RawJson exposing (Json)
+import Lune.Json.Decode as Decode exposing (DecodeError, PathItem(..))
+import Lune.Json.Encode as Encode
+import Nova.Core as Core exposing (
+  Provider
+  , Usage
+  , Response
+  , Error(..)
+  , Request
+  , ProviderSettings
+  , ProviderConfig
+  , ProviderRegistry
+)
+import Nova.Prompt as Prompt
+import Nova.Tool as Tool exposing (ToolId, ToolSpec)
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+import Json
+
+-- Hooks
+
+-- Client
+
+-- Prompt helpers
+
+-- Public API
+
+-- Streaming (architecture only)
+
+-- Tool execution (guarded + auditable)
 
 {-| Nova (v2): thin LLM decision engine surface for Lune.
 
@@ -67,62 +102,37 @@ Internals are layered into:
 - Streaming is simulated via chunking (no HTTP streaming yet).
 -}
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Unit, unit, Task(..), Applicative(..), Monad(..))
-import Lune.IO as IO
-import Lune.Task as Task
-import Lune.Int as Int
-import Lune.String as Str
-import Lune.Json as RawJson exposing (Json)
-import Lune.Json.Decode as Decode exposing (DecodeError, PathItem(..))
-import Lune.Json.Encode as Encode
-import Nova.Core as Core exposing (Provider, Usage, Response, Error(..), Request, ProviderSettings, ProviderConfig, ProviderRegistry)
-import Nova.Prompt as Prompt
-import Nova.Tool as Tool exposing (ToolId, ToolSpec)
-import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
-import Json
-
 openrouter : Provider
-openrouter =
-  Core.openrouter
+openrouter = Core.openrouter
 
 ollama : Provider
-ollama =
-  Core.ollama
+ollama = Core.ollama
 
 provider : String -> Provider
-provider s =
-  Core.Provider s
+provider s = Core.Provider s
 
 providerId : Provider -> String
-providerId =
-  Core.providerId
+providerId = Core.providerId
 
 providerEq : Provider -> Provider -> Bool
-providerEq =
-  eqProvider
+providerEq = eqProvider
 
 showProvider : Provider -> String
-showProvider =
-  providerId
+showProvider = providerId
 
 showError : Error -> String
 showError e =
   case e of
     NetworkError msg ->
       Str.append "NetworkError " msg
-
     RateLimited ->
       "RateLimited"
-
     Unauthorized ->
       "Unauthorized"
-
     BadRequest msg ->
       Str.append "BadRequest " msg
-
     ProviderError msg ->
       Str.append "ProviderError " msg
-
     DecodeError msg ->
       Str.append "DecodeError " msg
 
@@ -131,7 +141,6 @@ showAskResult r =
   case r of
     Err e ->
       showError e
-
     Ok s ->
       s
 
@@ -140,7 +149,6 @@ showJsonResult r =
   case r of
     Err e ->
       showError e
-
     Ok j ->
       RawJson.stringify j
 
@@ -149,24 +157,17 @@ showJsonResult r =
 --------------------------------------------------------------------------------
 
 type alias NovaHooks =
-  { onTurn :
-      { request : Request
-      , response : Response
-      }
-      -> Task Unit Unit
-
-  , onToolStart :
-      { tool : ToolId
-      , input : Json
-      }
-      -> Task Unit Unit
-
-  , onToolFinish :
-      { tool : ToolId
-      , output : Json
-      , durationMs : Int
-      }
-      -> Task Unit Unit
+  { onTurn : { request : Request
+  , response : Response
+  } -> Task Unit Unit
+  , onToolStart : { tool : ToolId
+  , input : Json
+  } -> Task Unit Unit
+  , onToolFinish : { tool : ToolId
+  , output : Json
+  , durationMs : Int
+  }
+    -> Task Unit Unit
   }
 
 --------------------------------------------------------------------------------
@@ -191,8 +192,7 @@ newClient providers provider model =
   }
 
 defaultClient : Client
-defaultClient =
-  newClient Core.defaultProviderRegistry ollama "llama3"
+defaultClient = newClient Core.defaultProviderRegistry ollama "llama3"
 
 withProvider : Provider -> Client -> Client
 withProvider provider client =
@@ -231,79 +231,67 @@ withoutHooks client =
   }
 
 eqProvider : Provider -> Provider -> Bool
-eqProvider a b =
-  Str.eq (providerId a) (providerId b)
+eqProvider a b = Str.eq (providerId a) (providerId b)
 
 defaultSettings : ProviderSettings
-defaultSettings =
-  { baseUrl = ""
-  , apiKey = Nothing
-  , appName = Nothing
-  }
+defaultSettings = { baseUrl = "", apiKey = Nothing, appName = Nothing }
 
 getSettings : Provider -> ProviderConfig -> ProviderSettings
 getSettings provider cfg =
   case Core.dictGet eqProvider provider cfg of
-    Just s -> s
-    Nothing -> defaultSettings
+    Just s ->
+      s
+    Nothing ->
+      defaultSettings
 
-updateSettings : Provider -> (ProviderSettings -> ProviderSettings) -> Client -> Client
+updateSettings :
+    Provider -> (ProviderSettings -> ProviderSettings) -> Client -> Client
 updateSettings provider f client =
-  let current = getSettings provider client.providerConfig in
-  let next = f current in
-  { provider = client.provider
-  , model = client.model
-  , providerConfig = Core.dictInsert eqProvider provider next client.providerConfig
-  , providers = client.providers
-  , hooks = client.hooks
-  }
+  let
+    current = getSettings provider client.providerConfig
+    next = f current
+  in
+    { provider = client.provider
+    , model = client.model
+    , providerConfig =
+      Core.dictInsert eqProvider provider next client.providerConfig
+    , providers = client.providers
+    , hooks = client.hooks
+    }
 
 withOpenRouterKey : String -> Client -> Client
 withOpenRouterKey key =
-  updateSettings openrouter (\s ->
-    { baseUrl = s.baseUrl
-    , apiKey = Just key
-    , appName = s.appName
-    }
-  )
+  updateSettings
+    openrouter
+    (\s -> { baseUrl = s.baseUrl, apiKey = Just key, appName = s.appName })
 
 withOpenRouterBaseUrl : String -> Client -> Client
 withOpenRouterBaseUrl url =
-  updateSettings openrouter (\s ->
-    { baseUrl = url
-    , apiKey = s.apiKey
-    , appName = s.appName
-    }
-  )
+  updateSettings
+    openrouter
+    (\s -> { baseUrl = url, apiKey = s.apiKey, appName = s.appName })
 
 withOllamaBaseUrl : String -> Client -> Client
 withOllamaBaseUrl url =
-  updateSettings ollama (\s ->
-    { baseUrl = url
-    , apiKey = s.apiKey
-    , appName = s.appName
-    }
-  )
+  updateSettings
+    ollama
+    (\s -> { baseUrl = url, apiKey = s.apiKey, appName = s.appName })
 
 --------------------------------------------------------------------------------
 -- Prompt helpers (public)
 --------------------------------------------------------------------------------
 
 toolPreamble : String
-toolPreamble =
-  Prompt.toolPreamble
+toolPreamble = Prompt.toolPreamble
 
 toolPostamble : String
-toolPostamble =
-  Prompt.toolPostamble
+toolPostamble = Prompt.toolPostamble
 
 extractJson : String -> Result Error String
-extractJson =
-  Prompt.extractJson
+extractJson = Prompt.extractJson
 
 composeToolPrompt : ToolSpec a -> String -> String
-composeToolPrompt =
-  Prompt.composeToolPrompt
+composeToolPrompt = Prompt.composeToolPrompt
 
 --------------------------------------------------------------------------------
 -- Public API
@@ -311,73 +299,81 @@ composeToolPrompt =
 
 askRaw : Client -> String -> Task Error Response
 askRaw client prompt =
-  let request = { provider = client.provider, model = client.model, prompt = prompt } in
-  Task.andThen (liftResult (Core.callProvider client.providers client.providerConfig client.provider client.model prompt)) (\response ->
-    case client.hooks of
-      Nothing ->
-        Task.succeed response
-
-      Just hooks ->
-        Task.andThen (Task.mapError (\_ -> Core.ProviderError "hook failed") (hooks.onTurn { request = request, response = response })) (\_ ->
-          Task.succeed response
-        )
-  )
+  let
+    request =
+      { provider = client.provider, model = client.model, prompt = prompt }
+  in
+    Task.andThen
+      (liftResult
+        (Core.callProvider
+          client.providers
+          client.providerConfig
+          client.provider
+          client.model
+          prompt))
+      (\response ->
+        case client.hooks of
+          Nothing ->
+            Task.succeed response
+          Just hooks ->
+            Task.andThen
+              (Task.mapError
+                (\_ -> Core.ProviderError "hook failed")
+                (hooks.onTurn
+                  { request = request, response = response }))
+              (\_ -> Task.succeed response))
 
 liftResult : IO (Result e a) -> Task e a
-liftResult io =
-  Task (io)
+liftResult io = Task io
 
 ask : Client -> String -> Task Error String
-ask client prompt =
-  Task.map (\response -> response.text) (askRaw client prompt)
+ask client prompt = Task.map (\response -> response.text) (askRaw client prompt)
 
 json : Json.Decode a => Client -> String -> Task Error a
 json client prompt =
-  Task.andThen (askRaw client prompt) (\response ->
-    case Json.decodeDetailed response.text of
-      Ok a ->
-        Task.succeed a
-
-      Err decodeErr ->
-        Task.fail (Core.DecodeError (formatDecodeError decodeErr))
-  )
+  Task.andThen
+    (askRaw client prompt)
+    (\response ->
+      case Json.decodeDetailed response.text of
+        Ok a ->
+          Task.succeed a
+        Err decodeErr ->
+          Task.fail (Core.DecodeError (formatDecodeError decodeErr)))
 
 tool : Json.Decode a => Client -> String -> Task Error a
 tool client prompt =
-  let wrapped = Str.unlines [toolPreamble, "", prompt, "", toolPostamble] in
-  Task.andThen (askRaw client wrapped) (\response ->
-    case extractJson response.text of
-      Err e ->
-        Task.fail e
-
-      Ok rawJson ->
-        case Json.decodeDetailed rawJson of
-          Ok a ->
-            Task.succeed a
-
-          Err decodeErr ->
-            Task.fail (Core.DecodeError (formatDecodeError decodeErr))
-  )
+  let
+    wrapped = Str.unlines [toolPreamble, "", prompt, "", toolPostamble]
+  in
+    Task.andThen
+      (askRaw client wrapped)
+      (\response ->
+        case extractJson response.text of
+          Err e ->
+            Task.fail e
+          Ok rawJson ->
+            case Json.decodeDetailed rawJson of
+              Ok a ->
+                Task.succeed a
+              Err decodeErr ->
+                Task.fail (Core.DecodeError (formatDecodeError decodeErr)))
 
 formatDecodeError : DecodeError -> String
 formatDecodeError err =
   case err.path of
     [] ->
       err.message
-
     _ ->
       Str.append err.message (Str.append " at " (pathToString err.path))
 
 pathToString : List PathItem -> String
-pathToString path =
-  pathToStringGo "$" path
+pathToString path = pathToStringGo "$" path
 
 pathToStringGo : String -> List PathItem -> String
 pathToStringGo acc items =
   case items of
     [] ->
       acc
-
     Cons item rest ->
       pathToStringGo (Str.append acc (pathItemToString item)) rest
 
@@ -386,7 +382,6 @@ pathItemToString item =
   case item of
     Field name ->
       Str.append "." name
-
     Index i ->
       Str.append "[" (Str.append (Str.fromInt i) "]")
 
@@ -395,11 +390,11 @@ pathItemToString item =
 --------------------------------------------------------------------------------
 
 type Stream a =
-  Stream (IO (Result Error (StreamStep a)))
+  Stream IO Result Error (StreamStep a)
 
 type StreamStep a =
   StreamEnd
-  | StreamYield a (Stream a)
+  | StreamYield a Stream a
 
 next : Stream a -> IO (Result Error (StreamStep a))
 next stream =
@@ -408,15 +403,13 @@ next stream =
       io
 
 streamFromList : List a -> Stream a
-streamFromList xs =
-  Stream (IO.pure (Ok (stepFromList xs)))
+streamFromList xs = Stream (IO.pure (Ok (stepFromList xs)))
 
 stepFromList : List a -> StreamStep a
 stepFromList xs =
   case xs of
     [] ->
       StreamEnd
-
     Cons x rest ->
       StreamYield x (streamFromList rest)
 
@@ -431,86 +424,84 @@ showNovaEvent ev =
   case ev of
     TextDelta s ->
       Str.append "TextDelta " s
-
     ToolCallDelta _ ->
       "ToolCallDelta"
-
     ToolCallComplete _ ->
       "ToolCallComplete"
-
     UsageFinal _ ->
       "UsageFinal"
 
 showEvent : NovaEvent -> String
-showEvent =
-  showNovaEvent
+showEvent = showNovaEvent
 
 showStreamStep : (a -> String) -> StreamStep a -> String
 showStreamStep showA step =
   case step of
     StreamEnd ->
       "StreamEnd"
-
     StreamYield a _ ->
       Str.append "StreamYield " (showA a)
 
-showStreamResult : (e -> String) -> (a -> String) -> Result e (StreamStep a) -> String
+showStreamResult :
+    (e -> String) -> (a -> String) -> Result e (StreamStep a) -> String
 showStreamResult showE showA r =
   case r of
     Err e ->
       Str.append "StreamErr " (showE e)
-
     Ok step ->
       showStreamStep showA step
 
 askStream : Client -> String -> Stream NovaEvent
 askStream client prompt =
   Stream
-    ( IO.andThen (Task.attempt (askRaw client prompt)) (\r ->
+    (IO.andThen
+      (Task.attempt (askRaw client prompt))
+      (\r ->
         case r of
           Err e ->
             IO.pure (Err e)
-
           Ok response ->
-            IO.pure (Ok (stepFromList (responseToEvents response)))
-      )
-    )
+            IO.pure (Ok (stepFromList (responseToEvents response)))))
 
 responseToEvents : Response -> List NovaEvent
 responseToEvents response =
-  let chunks = chunkText 24 response.text in
-  let textEvents = listMap TextDelta chunks in
-  case response.usage of
-    Nothing ->
-      textEvents
-
-    Just usage ->
-      listAppend textEvents (Cons (UsageFinal usage) [])
+  let
+    chunks = chunkText 24 response.text
+    textEvents = listMap TextDelta chunks
+  in
+    case response.usage of
+      Nothing ->
+        textEvents
+      Just usage ->
+        listAppend textEvents [UsageFinal usage]
 
 chunkText : Int -> String -> List String
 chunkText chunkSize s =
   case prim_leInt chunkSize 0 of
     True ->
       case Str.isEmpty s of
-        True -> []
-        False -> Cons s []
-
+        True ->
+          []
+        False ->
+          [s]
     False ->
       case prim_leInt (Str.length s) chunkSize of
         True ->
           case Str.isEmpty s of
-            True -> []
-            False -> Cons s []
-
+            True ->
+              []
+            False ->
+              [s]
         False ->
-          Cons (Str.take chunkSize s) (chunkText chunkSize (Str.drop chunkSize s))
+          Cons
+            (Str.take chunkSize s)
+            (chunkText chunkSize (Str.drop chunkSize s))
 
 listMap : (a -> b) -> List a -> List b
 listMap f xs =
   case xs of
     [] ->
       []
-
     Cons x rest ->
       Cons (f x) (listMap f rest)
 
@@ -519,7 +510,6 @@ listAppend xs ys =
   case xs of
     [] ->
       ys
-
     Cons x rest ->
       Cons x (listAppend rest ys)
 
@@ -528,76 +518,73 @@ listAppend xs ys =
 --------------------------------------------------------------------------------
 
 executeTool :
-  Client
-  -> RuntimeConfig
-  -> ToolSpec a
-  -> (a -> Json)
-  -> (b -> Json)
-  -> (a -> Task ToolExecError b)
-  -> a
-  -> Task ToolExecError b
+    Client
+      -> RuntimeConfig
+      -> ToolSpec a
+      -> (a -> Json)
+      -> (b -> Json)
+      -> (a -> Task ToolExecError b)
+      -> a
+      -> Task ToolExecError b
 executeTool client runtimeConfig spec encodeInput encodeOutput exec input =
   do
     let inputJson = encodeInput input
     case client.hooks of
       Nothing ->
         Task.succeed unit
-
       Just hooks ->
-        Task.mapError (\_ -> ToolFailed "hook failed") (hooks.onToolStart { tool = spec.id, input = inputJson })
+        Task.mapError
+          (\_ -> ToolFailed "hook failed")
+          (hooks.onToolStart
+            { tool = spec.id, input = inputJson })
 
     t0 <- Task.fromIO prim_timeNowMicros
-    result <- Task.fromIO (Task.attempt (Runtime.executeWithGuardsUsing runtimeConfig spec exec input))
+    result <-
+      Task.fromIO
+        (Task.attempt
+          (Runtime.executeWithGuardsUsing runtimeConfig spec exec input))
     t1 <- Task.fromIO prim_timeNowMicros
     let durationMs = Int.div (Int.sub t1 t0) 1000
     let outputJson =
       case result of
         Ok b ->
           encodeOutput b
-
         Err e ->
           encodeToolExecError e
 
     case client.hooks of
       Nothing ->
         Task.succeed unit
-
       Just hooks ->
-        Task.mapError (\_ -> ToolFailed "hook failed") (hooks.onToolFinish { tool = spec.id, output = outputJson, durationMs = durationMs })
+        Task.mapError
+          (\_ -> ToolFailed "hook failed")
+          (hooks.onToolFinish
+            { tool = spec.id, output = outputJson, durationMs = durationMs })
 
     case result of
       Ok b ->
         Task.succeed b
-
       Err e ->
         Task.fail e
 
 encodeToolExecError : ToolExecError -> Json
 encodeToolExecError e =
   Encode.object
-    [ { key = "error"
-      , value = Encode.string (toolExecErrorToString e)
-      }
-    ]
+    [{ key = "error", value = Encode.string (toolExecErrorToString e) }]
 
 toolExecErrorToString : ToolExecError -> String
 toolExecErrorToString e =
   case e of
     ToolNotAllowed id ->
       Str.append "ToolNotAllowed " (Tool.toolIdToString id)
-
     ApprovalRequired id ->
       Str.append "ApprovalRequired " (Tool.toolIdToString id)
-
     ToolTimedOut id ->
       Str.append "ToolTimedOut " (Tool.toolIdToString id)
-
     MaxTurnsExceeded n ->
       Str.append "MaxTurnsExceeded " (Str.fromInt n)
-
     ToolNotImplemented id ->
       Str.append "ToolNotImplemented " (Tool.toolIdToString id)
-
     ToolFailed msg ->
       Str.append "ToolFailed " msg
 
@@ -606,10 +593,8 @@ showToolExecResult r =
   case r of
     Ok n ->
       Str.append "Ok " (Str.fromInt n)
-
     Err e ->
       Str.append "Err " (showToolExecError e)
 
 showToolExecError : ToolExecError -> String
-showToolExecError =
-  toolExecErrorToString
+showToolExecError = toolExecErrorToString

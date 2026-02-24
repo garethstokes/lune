@@ -5,9 +5,13 @@ and uses an LLM to analyze issues and propose remediation actions.
 
 Architecture:
   1. Data Collection - Reads /proc filesystem for memory, CPU, and process stats
-  2. LLM Analysis - Sends metrics to Nova (LLM client) for issue detection
+  2. LLM Analysis - Sends metrics to Ollama (qwen3 model) for issue detection
   3. Human-in-the-Loop - Presents proposed actions for user approval
   4. Action Recording - Approved commands are written to approved-commands.sh
+
+Requirements:
+  - Ollama running locally on port 11434
+  - qwen3 model pulled: `ollama pull qwen3`
 
 Key types:
   - HealthReport: Aggregated system metrics (disk, memory, processes, services)
@@ -31,8 +35,8 @@ import Lune.Json as RawJson exposing (Json)
 import Lune.Json.Decode as D
 import Lune.Json.Encode as E
 import Template exposing (render)
-import Nova exposing (newClient, provider, withModel, tool)
-import Nova.Core as Core exposing (Error(..), Provider, Response)
+import Nova exposing (withModel, tool)
+import Nova.Core as Core exposing (Error(..))
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 
@@ -420,65 +424,7 @@ showAction current total act =
     ''
 
 
--- Mock LLM Provider ---------------------------------------------------------
-
-mockHealthProvider : Provider
-mockHealthProvider = provider "mock-health"
-
-mockHealthCall :
-    Core.ProviderConfig -> String -> String -> IO (Result Core.Error Response)
-mockHealthCall _ _ _ =
-  IO.pure
-    <| Ok
-      { text = mockHealthAnalysisJson
-      , usage = Just
-          { inputTokens = 100, outputTokens = 50, totalTokens = 150 }
-      }
-
-mockHealthAnalysis : HealthAnalysis
-mockHealthAnalysis =
-  { issues =
-    [ { severity = Critical
-    , summary = "Disk /var is 94% full"
-    , details = "Only 1.2GB remaining on /var partition"
-    }
-    , { severity = Warning
-    , summary = "High memory usage"
-    , details = "Process 'node' using 78% of available memory"
-    }
-    , { severity = Warning
-    , summary = "Service redis is down"
-    , details = "Redis service is not running"
-    }
-    ]
-  , actions =
-    [ { id = 1
-    , issue = "Disk /var is 94% full"
-    , action = "Clear journal logs older than 7 days"
-    , command = "journalctl --vacuum-time=7d"
-    , risk = "low"
-    , expectedOutcome = "Free approximately 1-2GB"
-    }
-    , { id = 2
-    , issue = "Service redis is down"
-    , action = "Restart redis service"
-    , command = "systemctl restart redis"
-    , risk = "medium"
-    , expectedOutcome = "Redis service will be available"
-    }
-    ]
-  }
-
-mockHealthAnalysisJson : String
-mockHealthAnalysisJson =
-  RawJson.stringify (healthAnalysisEncoder mockHealthAnalysis)
-
-mockHealthProviderImpl : Core.ProviderImpl
-mockHealthProviderImpl =
-  { id = mockHealthProvider
-  , call = mockHealthCall
-  , capabilities = Core.setEmpty
-  }
+-- LLM Configuration ---------------------------------------------------------
 
 analysisSystemPrompt : String
 analysisSystemPrompt =
@@ -511,16 +457,10 @@ buildAnalysisPrompt report =
       ${RawJson.stringify (healthReportEncoder report)}
     ''
 
-mockProviderRegistry : Core.ProviderRegistry
-mockProviderRegistry =
-  Core.dictInsert
-    Nova.providerEq
-    mockHealthProvider
-    mockHealthProviderImpl
-    Core.defaultProviderRegistry
-
 makeClient : Nova.Client
-makeClient = newClient mockProviderRegistry mockHealthProvider "health-analyzer"
+makeClient =
+  Nova.defaultClient
+    |> withModel "qwen3"
 
 
 -- Agent ---------------------------------------------------------------------

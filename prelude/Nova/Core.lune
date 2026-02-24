@@ -30,10 +30,14 @@ module Nova.Core exposing (
   callProvider
 )
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Pair(..))
+import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Pair(..), Unit, unit)
 import Lune.Int as Int
 import Lune.String as Str
 import Lune.IO as IO
+import Lune.Net.Socket as Socket exposing (Connection)
+import Lune.Json as Json
+import Lune.Json.Encode as Encode
+import Lune.Json.Decode as Decode
 
 --------------------------------------------------------------------------------
 -- Collections (minimal, deterministic)
@@ -306,7 +310,126 @@ callOllama cfg modelId prompt =
       IO.pure (mockOllama modelId prompt)
 
     False ->
-      IO.pure (Err (ProviderError "Ollama: HTTP client not implemented (v2)."))
+      callOllamaHttp settings modelId prompt
+
+callOllamaHttp : ProviderSettings -> String -> String -> IO (Result Error Response)
+callOllamaHttp settings modelId prompt =
+  let
+    hostPort = parseHostPort settings.baseUrl
+    requestBody = Encode.object
+      [ { key = "model", value = Encode.string modelId }
+      , { key = "prompt", value = Encode.string prompt }
+      , { key = "stream", value = Encode.bool False }
+      ]
+    bodyStr = Json.stringify requestBody
+    httpRequest = buildHttpPost hostPort.host "/api/generate" bodyStr
+  in
+    IO.andThen (prim_tcpConnect hostPort.host hostPort.port) (\connResult ->
+      case connResult of
+        Err _ ->
+          IO.pure (Err (NetworkError (Str.append "Failed to connect to Ollama at " settings.baseUrl)))
+
+        Ok conn ->
+          IO.andThen (prim_connSend conn httpRequest) (\sendResult ->
+            case sendResult of
+              Err _ ->
+                IO.andThen (prim_connClose conn) (\_ ->
+                  IO.pure (Err (NetworkError "Failed to send request"))
+                )
+
+              Ok _ ->
+                IO.andThen (recvHttpResponse conn "") (\responseStr ->
+                  IO.andThen (prim_connClose conn) (\_ ->
+                    IO.pure (parseOllamaResponse responseStr)
+                  )
+                )
+          )
+    )
+
+parseHostPort : String -> { host : String, port : Int }
+parseHostPort url =
+  let
+    -- Strip http:// or https:// prefix
+    stripped =
+      case Str.startsWith "http://" url of
+        True -> Str.drop 7 url
+        False ->
+          case Str.startsWith "https://" url of
+            True -> Str.drop 8 url
+            False -> url
+    -- Find port separator
+    hostAndPort =
+      case Str.indexOf "/" stripped of
+        Just idx -> Str.take idx stripped
+        Nothing -> stripped
+  in
+    case Str.indexOf ":" hostAndPort of
+      Nothing ->
+        { host = hostAndPort, port = 11434 }
+      Just idx ->
+        let
+          host = Str.take idx hostAndPort
+          portStr = Str.drop (Int.add idx 1) hostAndPort
+        in
+          case Str.toInt portStr of
+            Ok p -> { host = host, port = p }
+            Err _ -> { host = host, port = 11434 }
+
+buildHttpPost : String -> String -> String -> String
+buildHttpPost host path body =
+  let
+    contentLength = Str.length body
+  in
+    Str.join "\r\n"
+      [ Str.append "POST " (Str.append path " HTTP/1.1")
+      , Str.append "Host: " host
+      , "Content-Type: application/json"
+      , Str.append "Content-Length: " (Str.fromInt contentLength)
+      , "Connection: close"
+      , ""
+      , body
+      ]
+
+recvHttpResponse : Connection -> String -> IO String
+recvHttpResponse conn acc =
+  IO.andThen (prim_connRecv conn) (\result ->
+    case result of
+      Err _ ->
+        -- Connection closed or error, return what we have
+        IO.pure acc
+
+      Ok chunk ->
+        case Str.isEmpty chunk of
+          True ->
+            IO.pure acc
+
+          False ->
+            recvHttpResponse conn (Str.append acc chunk)
+  )
+
+parseOllamaResponse : String -> Result Error Response
+parseOllamaResponse raw =
+  -- Find the body (after \r\n\r\n or \n\n)
+  let
+    body =
+      case Str.indexOf "\r\n\r\n" raw of
+        Just idx -> Str.drop (Int.add idx 4) raw
+        Nothing ->
+          case Str.indexOf "\n\n" raw of
+            Just idx -> Str.drop (Int.add idx 2) raw
+            Nothing -> raw
+  in
+    case Json.parse body of
+      Err msg ->
+        Err (DecodeError (Str.append "Failed to parse Ollama response: " msg))
+
+      Ok json ->
+        case Decode.decodeValue (Decode.field "response" Decode.string) json of
+          Err decodeErr ->
+            Err (DecodeError (Str.append "Missing 'response' field: " decodeErr.message))
+
+          Ok responseText ->
+            Ok { text = responseText, usage = Nothing }
 
 mockOllama : String -> String -> Result Error Response
 mockOllama modelId prompt =

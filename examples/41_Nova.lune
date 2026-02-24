@@ -57,42 +57,114 @@ main =
   do
     let baseClient = withOllamaBaseUrl "mock://" defaultClient
     IO.println "routing_openrouter_missing_key:"
-    let openrouterClient = withModel "x" (withProvider openrouter baseClient)
-    r1 <- ask openrouterClient "hi" |> toResult
+    let openrouterClient =
+      withProvider
+        openrouter
+        baseClient
+      |> withModel "x"
+    r1 <-
+      ask
+        openrouterClient
+        "hi"
+      |> toResult
     IO.println <| showAskResult r1
     IO.println "routing_ollama_mock:"
-    let pureClient = withModel "mock-pure" (withProvider ollama baseClient)
-    r2 <- ask pureClient "hi" |> toResult
+    let pureClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-pure"
+    r2 <-
+      ask
+        pureClient
+        "hi"
+      |> toResult
     IO.println <| showAskResult r2
     IO.println "tool_wrapper_counts:"
-    let toolWrapperClient = withModel "mock-tool-wrapper" (withProvider ollama baseClient)
-    countsR <- tool toolWrapperClient "user" |> toResult
+    let toolWrapperClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-tool-wrapper"
+    countsR <-
+      tool
+        toolWrapperClient
+        "user"
+      |> toResult
     IO.println <| showJsonResult countsR
     IO.println "json_pure:"
-    jp <- json pureClient "p" |> toResult
+    jp <-
+      json
+        pureClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult jp
     IO.println "tool_pure:"
-    tp <- tool pureClient "p" |> toResult
+    tp <-
+      tool
+        pureClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult tp
     IO.println "json_prose_prefix:"
-    let prosePrefixClient = withModel "mock-prose-prefix" (withProvider ollama baseClient)
-    jpp <- json prosePrefixClient "p" |> toResult
+    let prosePrefixClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-prose-prefix"
+    jpp <-
+      json
+        prosePrefixClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult jpp
     IO.println "tool_prose_prefix:"
-    tpp <- tool prosePrefixClient "p" |> toResult
+    tpp <-
+      tool
+        prosePrefixClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult tpp
     IO.println "json_prose_suffix:"
-    let proseSuffixClient = withModel "mock-prose-suffix" (withProvider ollama baseClient)
-    jps <- json proseSuffixClient "p" |> toResult
+    let proseSuffixClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-prose-suffix"
+    jps <-
+      json
+        proseSuffixClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult jps
     IO.println "tool_prose_suffix:"
-    tps <- tool proseSuffixClient "p" |> toResult
+    tps <-
+      tool
+        proseSuffixClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult tps
     IO.println "tool_invalid:"
-    let invalidClient = withModel "mock-invalid" (withProvider ollama baseClient)
-    ti <- tool invalidClient "p" |> toResult
+    let invalidClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-invalid"
+    ti <-
+      tool
+        invalidClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult ti
     IO.println "tool_no_json:"
-    let noJsonClient = withModel "mock-no-json" (withProvider ollama baseClient)
-    tn <- tool noJsonClient "p" |> toResult
+    let noJsonClient =
+      withProvider
+        ollama
+        baseClient
+      |> withModel "mock-no-json"
+    tn <-
+      tool
+        noJsonClient
+        "p"
+      |> toResult
     IO.println <| showJsonResult tn
