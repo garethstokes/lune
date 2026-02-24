@@ -18,6 +18,8 @@ module Lune.Process exposing (
   runCapture,
   runInputCapture,
 
+  withProcess,
+
   spawn,
   writeStdin,
   closeStdin,
@@ -72,6 +74,76 @@ type ProcessError =
   | SpawnFailed String
   | IoError String
   | NonZeroExit ExitStatus { program : String, args : List String }
+
+-- =============================================================================
+-- Scoped processes
+-- =============================================================================
+
+withProcess : Cmd -> (Process -> Task ProcessError a) -> Task ProcessError a
+withProcess c f =
+  do
+    p <- spawn c
+    callbackResult <- Task.result (f p)
+    cleanupResult <- Task.result (cleanupProcess p)
+    case callbackResult of
+      Err e ->
+        Task.fail e
+      Ok a ->
+        case cleanupResult of
+          Err e -> Task.fail e
+          Ok _ -> Task.succeed a
+
+cleanupProcess : Process -> Task ProcessError Unit
+cleanupProcess p =
+  do
+    rClose <- Task.result (closeStdin p)
+    rTerm <- Task.result (kill p SigTerm)
+    rWaitTerm <- Task.result (Task.withTimeout 300 (wait p))
+    case rWaitTerm of
+      Ok (Ok _) ->
+        finishCleanup (firstCleanupError Nothing rClose |> firstCleanupErrorFromResult rTerm)
+
+      Ok (Err _) ->
+        do
+          rKill <- Task.result (kill p SigKill)
+          rWait <- Task.result (wait p)
+          finishCleanup
+            ( firstCleanupError Nothing rClose
+                |> firstCleanupErrorFromResult rTerm
+                |> firstCleanupErrorFromResult rKill
+                |> firstCleanupErrorFromResult rWait
+            )
+
+      Err e ->
+        do
+          rKill <- Task.result (kill p SigKill)
+          rWait <- Task.result (wait p)
+          finishCleanup
+            ( firstCleanupError Nothing rClose
+                |> firstCleanupErrorFromResult rTerm
+                |> firstCleanupErrorFromResult (Err e)
+                |> firstCleanupErrorFromResult rKill
+                |> firstCleanupErrorFromResult rWait
+            )
+
+finishCleanup : Maybe ProcessError -> Task ProcessError Unit
+finishCleanup maybeErr =
+  case maybeErr of
+    Nothing -> Task.succeed unit
+    Just e -> Task.fail e
+
+firstCleanupErrorFromResult : Result ProcessError a -> Maybe ProcessError -> Maybe ProcessError
+firstCleanupErrorFromResult r maybeErr =
+  firstCleanupError maybeErr r
+
+firstCleanupError : Maybe ProcessError -> Result ProcessError a -> Maybe ProcessError
+firstCleanupError maybeErr r =
+  case maybeErr of
+    Just e -> Just e
+    Nothing ->
+      case r of
+        Ok _ -> Nothing
+        Err e -> Just e
 
 -- =============================================================================
 -- Cmd builders

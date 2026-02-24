@@ -47,6 +47,37 @@ Streaming primitives:
 - `readStdout`, `readStderr` (incremental reads; `Nothing` means EOF)
 - `wait`, `kill`
 
+## Scoped process management
+
+`withProcess : Cmd -> (Process -> Task ProcessError a) -> Task ProcessError a` is a scoped helper that:
+
+- spawns the process
+- runs the callback
+- always performs cleanup after the callback completes (success or failure)
+
+It is intended for streaming use-cases where you want explicit, bounded process lifetimes without
+changing the behavior of `spawn`.
+
+## Resource lifetime
+
+`withProcess` guarantees:
+
+- stdin is closed (idempotently)
+- the process is not left running accidentally
+- the process is waited/reaped so it does not become a zombie
+
+Stdout/stderr reader threads are allowed to terminate naturally once the process exits and its pipes
+close. `withProcess` does not implicitly read/drain stdout/stderr into user-visible memory.
+
+## Termination policy
+
+Cleanup uses a graceful-then-forceful policy:
+
+1. If the process is still running, send `SigTerm`.
+2. Wait up to 300ms for exit.
+3. If it is still running, send `SigKill`.
+4. `wait` to reap the process.
+
 ### Scheduler / blocking behavior
 
 Any operation that could block an OS thread is implemented so that the *scheduler thread* is never
