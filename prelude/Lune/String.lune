@@ -2,13 +2,14 @@ module Lune.String exposing (
   append, eq, fromInt, fromFloat, toInt,
   toChars, fromChars, fromChar,
   length, isEmpty,
-  split, join,
+  split, join, words,
   toLower, toUpper,
   startsWith, endsWith, contains,
   trim, trimLeft, trimRight,
   drop, take,
   indexOf,
-  lines, unlines
+  lines, unlines,
+  sumInts
 )
 
 import Lune.Prelude exposing (Bool(..), Int, Float, Char, String, Result(..), List(..), Maybe(..))
@@ -103,6 +104,37 @@ lines s = split "\n" s
 
 unlines : List String -> String
 unlines ls = join "\n" ls
+
+words : String -> List String
+words s = wordsFromChars (toChars s) Nil Nil
+
+wordsFromChars : List Char -> List Char -> List String -> List String
+wordsFromChars chars currentRev accRev =
+  case chars of
+    Nil ->
+      case currentRev of
+        Nil -> listReverse accRev
+        _ -> listReverse (Cons (fromChars (listReverse currentRev)) accRev)
+    Cons c rest ->
+      case Char.isSpace c of
+        True ->
+          case currentRev of
+            Nil -> wordsFromChars rest Nil accRev
+            _ -> wordsFromChars rest Nil (Cons (fromChars (listReverse currentRev)) accRev)
+        False ->
+          wordsFromChars rest (Cons c currentRev) accRev
+
+sumInts : List String -> Result String Int
+sumInts xs = listFoldl sumIntsStep (Ok 0) xs
+
+sumIntsStep : Result String Int -> String -> Result String Int
+sumIntsStep acc s =
+  case acc of
+    Err msg -> Err msg
+    Ok n ->
+      case toInt s of
+        Err msg -> Err msg
+        Ok m -> Ok (prim_addInt n m)
 
 -- ===== Internal helpers =====
 

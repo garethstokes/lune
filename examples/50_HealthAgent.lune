@@ -1,3 +1,21 @@
+{-| HealthAgent - LLM-powered system health analyzer
+
+An AI agent that collects Linux system health metrics (memory, CPU, processes)
+and uses an LLM to analyze issues and propose remediation actions.
+
+Architecture:
+  1. Data Collection - Reads /proc filesystem for memory, CPU, and process stats
+  2. LLM Analysis - Sends metrics to Nova (LLM client) for issue detection
+  3. Human-in-the-Loop - Presents proposed actions for user approval
+  4. Action Recording - Approved commands are written to approved-commands.sh
+
+Key types:
+  - HealthReport: Aggregated system metrics (disk, memory, processes, services)
+  - HealthAnalysis: LLM output with issues and proposed actions
+  - AgentError: Union of LLM, decode, and system errors
+
+Uses @derive(Json) for automatic JSON serialization of all data types.
+-}
 module HealthAgent exposing (main)
 
 import Lune.IO as IO
@@ -7,6 +25,8 @@ import Lune.Char as Char
 import Lune.Int as Int
 import Lune.Float as Float
 import Lune.List as List
+import Lune.Maybe as Maybe
+import Lune.Bool as Bool
 import Lune.Json as RawJson exposing (Json)
 import Lune.Json.Decode as D
 import Lune.Json.Encode as E
@@ -16,7 +36,9 @@ import Nova.Core as Core exposing (Error(..), Provider, Response)
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 
--- Health check result types
+
+-- Data Types ----------------------------------------------------------------
+
 @derive(Json)
 type alias DiskUsage =
   { mountPoint : String
@@ -90,6 +112,9 @@ type AgentError =
   | DecodeError String
   | SystemError String
 
+
+-- Data Collection -----------------------------------------------------------
+
 procReadFile : String -> Task AgentError String
 procReadFile path =
   IO.readFile path
@@ -113,21 +138,21 @@ processCheck =
   do
     meminfo <- procReadFile "/proc/meminfo"
     memTotalKb <-
-      case meminfoValueKb "MemTotal" meminfo of
-        Nothing ->
-          Task.fail (SystemError "meminfo: missing MemTotal")
-        Just kb ->
-          Task.succeed kb
+      (|>)
+        (Maybe.toResult
+          "meminfo: missing MemTotal"
+          (meminfoValueKb "MemTotal" meminfo))
+        Task.fromResult
+      |> Task.mapError SystemError
 
     name <- procReadFile "/proc/self/comm" |> Task.map Str.trim
 
     status <- procReadFile "/proc/self/status"
     let rssKb =
-      case lineFirstInt "VmRSS:" status of
-        Nothing ->
-          0
-        Just kb ->
-          kb
+      lineFirstInt
+        "VmRSS:"
+        status
+      |> Maybe.withDefault 0
 
     sample0 <- sampleSelfCpu
     _ <- IO.sleepMs 200
@@ -135,7 +160,7 @@ processCheck =
 
     let cpuPercent = cpuPercentFromSamples sample0 sample1
 
-    let memoryPercent = percentOf rssKb memTotalKb
+    let memoryPercent = Float.percent rssKb memTotalKb
 
     Task.succeed
       [ { pid = sample0.pid
@@ -195,14 +220,14 @@ sampleSelfCpu =
           { pid = pid
           , procJiffies = procJiffies
           , totalJiffies = totalJiffies
-          , cpuCount = ensureAtLeast1 (procCpuCount sys)
+          , cpuCount = Int.max 1 (procCpuCount sys)
           }
 
 cpuPercentFromSamples : CpuSample -> CpuSample -> Float
 cpuPercentFromSamples a b =
   let
-    dp = clampNonNegative (Int.sub b.procJiffies a.procJiffies)
-    dt = clampNonNegative (Int.sub b.totalJiffies a.totalJiffies)
+    dp = Int.max 0 (Int.sub b.procJiffies a.procJiffies)
+    dt = Int.max 0 (Int.sub b.totalJiffies a.totalJiffies)
   in
     case Int.lte dt 0 of
       True ->
@@ -213,50 +238,47 @@ cpuPercentFromSamples a b =
         in
           Float.mul (Float.fromInt a.cpuCount) (Float.mul 100.0 ratio)
 
-percentOf : Int -> Int -> Float
-percentOf part total =
-  case Int.lte total 0 of
-    True ->
-      0.0
-    False ->
-      Float.mul
-        100.0
-        (Float.div
-          (Float.fromInt (clampNonNegative part))
-          (Float.fromInt total))
-
 parseMeminfo : String -> Result String MemoryUsage
 parseMeminfo contents =
-  case meminfoValueKb "MemTotal" contents of
-    Nothing ->
-      Err "meminfo: missing MemTotal"
-    Just totalKb ->
-      case meminfoValueKb "MemAvailable" contents of
-        Nothing ->
-          Err "meminfo: missing MemAvailable"
-        Just availableKb ->
-          case meminfoValueKb "SwapTotal" contents of
-            Nothing ->
-              Err "meminfo: missing SwapTotal"
-            Just swapTotalKb ->
-              case meminfoValueKb "SwapFree" contents of
-                Nothing ->
-                  Err "meminfo: missing SwapFree"
-                Just swapFreeKb ->
-                  let
-                    totalMb = Int.div totalKb 1024
-                    availableMb = Int.div availableKb 1024
-                    usedMb = clampNonNegative (Int.sub totalMb availableMb)
-                    swapUsedMb =
-                      clampNonNegative
-                        (Int.div (Int.sub swapTotalKb swapFreeKb) 1024)
-                  in
-                    Ok
-                      { totalMb = totalMb
-                      , usedMb = usedMb
-                      , availableMb = availableMb
-                      , swapUsedMb = swapUsedMb
-                      }
+  do
+    totalKb <-
+      meminfoValueKb
+        "MemTotal"
+        contents
+      |> Maybe.toResult "meminfo: missing MemTotal"
+    availableKb <-
+      meminfoValueKb
+        "MemAvailable"
+        contents
+      |> Maybe.toResult "meminfo: missing MemAvailable"
+    swapTotalKb <-
+      meminfoValueKb
+        "SwapTotal"
+        contents
+      |> Maybe.toResult "meminfo: missing SwapTotal"
+    swapFreeKb <-
+      meminfoValueKb
+        "SwapFree"
+        contents
+      |> Maybe.toResult "meminfo: missing SwapFree"
+    let totalMb = Int.div totalKb 1024
+    let availableMb = Int.div availableKb 1024
+    let usedMb =
+      Int.sub
+        totalMb
+        availableMb
+      |> Int.max 0
+    let swapUsedMb =
+      Int.div
+        (Int.sub swapTotalKb swapFreeKb)
+        1024
+      |> Int.max 0
+    Ok
+      { totalMb = totalMb
+      , usedMb = usedMb
+      , availableMb = availableMb
+      , swapUsedMb = swapUsedMb
+      }
 
 meminfoValueKb : String -> String -> Maybe Int
 meminfoValueKb key contents =
@@ -267,7 +289,7 @@ meminfoValueKb key contents =
 
 lineFirstInt : String -> String -> Maybe Int
 lineFirstInt prefix contents =
-  case findFirst (\line -> Str.startsWith prefix line) (Str.lines contents) of
+  case List.findFirst (\line -> Str.startsWith prefix line) (Str.lines contents) of
     Nothing ->
       Nothing
     Just line ->
@@ -277,14 +299,14 @@ extractFirstInt : String -> Maybe Int
 extractFirstInt s =
   let
     chars = Str.toChars s
-    after = dropWhile (\c -> not (isDigit c)) chars
+    after = List.dropWhile (\c -> Bool.not (Char.isDigit c)) chars
   in
     case after of
       [] ->
         Nothing
       _ ->
         let
-          digits = takeWhile isDigit after
+          digits = List.takeWhile Char.isDigit after
         in
           case Str.toInt (Str.fromChars digits) of
             Err _ ->
@@ -298,11 +320,11 @@ procTotalJiffies sys =
     [] ->
       Err "proc/stat: empty"
     Cons first _ ->
-      case words first of
+      case Str.words first of
         [] ->
           Err "proc/stat: malformed cpu line"
         Cons _ rest ->
-          sumInts rest
+          Str.sumInts rest
 
 procCpuCount : String -> Int
 procCpuCount sys = List.foldl countCpuCoreLine 0 (Str.lines sys)
@@ -323,13 +345,13 @@ isCpuCoreLine line =
     True ->
       case Str.toChars (Str.drop 3 line) of
         Cons c _ ->
-          isDigit c
+          Char.isDigit c
         _ ->
           False
 
 procPidAndJiffies : String -> Result String (Int, Int)
 procPidAndJiffies statLine =
-  case words statLine of
+  case Str.words statLine of
     [] ->
       Err "proc/self/stat: missing pid"
     Cons pidToken _ ->
@@ -343,9 +365,9 @@ procPidAndJiffies statLine =
             Just idx ->
               let
                 rest = Str.drop (Int.add idx 2) statLine
-                fields = words rest
+                fields = Str.words rest
               in
-                case (listGet 11 fields, listGet 12 fields) of
+                case (List.get 11 fields, List.get 12 fields) of
                   (Just ut, Just st) ->
                     case (Str.toInt ut, Str.toInt st) of
                       (Ok utime, Ok stime) ->
@@ -355,133 +377,8 @@ procPidAndJiffies statLine =
                   _ ->
                     Err "proc/self/stat: missing utime/stime fields"
 
-sumInts : List String -> Result String Int
-sumInts xs = List.foldl sumIntsStep (Ok 0) xs
 
-sumIntsStep : Result String Int -> String -> Result String Int
-sumIntsStep acc s =
-  case acc of
-    Err msg ->
-      Err msg
-    Ok n ->
-      case Str.toInt s of
-        Err msg ->
-          Err msg
-        Ok m ->
-          Ok (Int.add n m)
-
-words : String -> List String
-words s = wordsFromChars (Str.toChars s) [] []
-
-wordsFromChars : List Char -> List Char -> List String -> List String
-wordsFromChars chars currentRev accRev =
-  case chars of
-    [] ->
-      case currentRev of
-        [] ->
-          List.reverse accRev
-        _ ->
-          List.reverse (Cons (Str.fromChars (List.reverse currentRev)) accRev)
-    Cons c rest ->
-      case Char.isSpace c of
-        True ->
-          case currentRev of
-            [] ->
-              wordsFromChars rest [] accRev
-            _ ->
-              wordsFromChars
-                rest
-                []
-                (Cons (Str.fromChars (List.reverse currentRev)) accRev)
-        False ->
-          wordsFromChars rest (Cons c currentRev) accRev
-
-findFirst : (a -> Bool) -> List a -> Maybe a
-findFirst pred xs =
-  case xs of
-    [] ->
-      Nothing
-    Cons x rest ->
-      case pred x of
-        True ->
-          Just x
-        False ->
-          findFirst pred rest
-
-listGet : Int -> List a -> Maybe a
-listGet n xs =
-  case Int.lte n 0 of
-    True ->
-      case xs of
-        [] ->
-          Nothing
-        Cons x _ ->
-          Just x
-    False ->
-      case xs of
-        [] ->
-          Nothing
-        Cons _ rest ->
-          listGet (Int.sub n 1) rest
-
-takeWhile : (a -> Bool) -> List a -> List a
-takeWhile pred xs =
-  case xs of
-    [] ->
-      []
-    Cons x rest ->
-      case pred x of
-        True ->
-          Cons x (takeWhile pred rest)
-        False ->
-          []
-
-dropWhile : (a -> Bool) -> List a -> List a
-dropWhile pred xs =
-  case xs of
-    [] ->
-      []
-    Cons x rest ->
-      case pred x of
-        True ->
-          dropWhile pred rest
-        False ->
-          xs
-
-not : Bool -> Bool
-not b =
-  case b of
-    True ->
-      False
-    False ->
-      True
-
-isDigit : Char -> Bool
-isDigit c =
-  let
-    n = Char.toInt c
-  in
-    case Int.gte n 48 of
-      False ->
-        False
-      True ->
-        Int.lte n 57
-
-clampNonNegative : Int -> Int
-clampNonNegative n =
-  case Int.gte n 0 of
-    True ->
-      n
-    False ->
-      0
-
-ensureAtLeast1 : Int -> Int
-ensureAtLeast1 n =
-  case Int.gte n 1 of
-    True ->
-      n
-    False ->
-      1
+-- Display -------------------------------------------------------------------
 
 showSeverity : Severity -> String
 showSeverity sev =
@@ -521,6 +418,9 @@ showAction current total act =
       | Expected: ${act.expectedOutcome}
       +-------------------------------------------------+
     ''
+
+
+-- Mock LLM Provider ---------------------------------------------------------
 
 mockHealthProvider : Provider
 mockHealthProvider = provider "mock-health"
@@ -622,6 +522,9 @@ mockProviderRegistry =
 makeClient : Nova.Client
 makeClient = newClient mockProviderRegistry mockHealthProvider "health-analyzer"
 
+
+-- Agent ---------------------------------------------------------------------
+
 analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
 analyzeHealth report =
   do
@@ -661,6 +564,9 @@ showAgentError err =
       render "Failed to decode response: ${msg}"
     SystemError msg ->
       render "System check failed: ${msg}"
+
+
+-- Human-in-the-Loop ---------------------------------------------------------
 
 type ApprovalResult =
   Approved
@@ -735,6 +641,9 @@ processActionsGo current total actions =
               IO.println result
               IO.println "Action recorded."
               processActionsGo (Int.add current 1) total rest
+
+
+-- Main ----------------------------------------------------------------------
 
 runAgent : Task AgentError Unit
 runAgent =

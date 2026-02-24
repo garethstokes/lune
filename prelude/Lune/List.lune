@@ -1,8 +1,8 @@
-module Lune.List exposing (map, foldl, length, reverse)
+module Lune.List exposing (map, foldl, length, reverse, findFirst, get, takeWhile, dropWhile)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
-import Lune.Prelude exposing (List(..), Int)
+import Lune.Prelude exposing (List(..), Int, Bool(..), Maybe(..))
 import Lune.Int as Int
 
 map : (a -> b) -> List a -> List b
@@ -32,3 +32,42 @@ reverseHelper xs acc =
   case xs of
     [] -> acc
     Cons x xt -> reverseHelper xt (Cons x acc)
+
+findFirst : (a -> Bool) -> List a -> Maybe a
+findFirst pred xs =
+  case xs of
+    [] -> Nothing
+    Cons x rest ->
+      case pred x of
+        True -> Just x
+        False -> findFirst pred rest
+
+get : Int -> List a -> Maybe a
+get n xs =
+  case Int.lte n 0 of
+    True ->
+      case xs of
+        [] -> Nothing
+        Cons x _ -> Just x
+    False ->
+      case xs of
+        [] -> Nothing
+        Cons _ rest -> get (Int.sub n 1) rest
+
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile pred xs =
+  case xs of
+    [] -> []
+    Cons x rest ->
+      case pred x of
+        True -> Cons x (takeWhile pred rest)
+        False -> []
+
+dropWhile : (a -> Bool) -> List a -> List a
+dropWhile pred xs =
+  case xs of
+    [] -> []
+    Cons x rest ->
+      case pred x of
+        True -> dropWhile pred rest
+        False -> xs

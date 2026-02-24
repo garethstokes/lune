@@ -4,6 +4,7 @@ module Lune.Char exposing (
   toLower,
   toUpper,
   isSpace,
+  isDigit,
   eq
 )
 
@@ -41,6 +42,10 @@ isSpace c =
               case prim_eqInt (toInt c) 13 of
                 True -> True
                 False -> False
+
+isDigit : Char -> Bool
+isDigit c =
+  prim_and (prim_geInt (toInt c) 48) (prim_leInt (toInt c) 57)
 
 eq : Char -> Char -> Bool
 eq a b = prim_eqInt (toInt a) (toInt b)

@@ -1,4 +1,4 @@
-module Lune.Int exposing (add, sub, mul, div, mod, eq, gte, lte)
+module Lune.Int exposing (add, sub, mul, div, mod, eq, gte, lte, max, min)
 
 {-| Surface API per `spec/lune_standard_library_v0_1.md`. -}
 
@@ -27,3 +27,15 @@ gte = prim_geInt
 
 lte : Int -> Int -> Bool
 lte = prim_leInt
+
+max : Int -> Int -> Int
+max a b =
+  case prim_geInt a b of
+    True -> a
+    False -> b
+
+min : Int -> Int -> Int
+min a b =
+  case prim_leInt a b of
+    True -> a
+    False -> b

@@ -1,12 +1,13 @@
 module Lune.Float exposing (
   add, sub, mul, div,
   eq, gt, lt, gte, lte,
-  fromInt, truncate
+  fromInt, truncate,
+  percent
 )
 
 {-| Float operations module. -}
 
-import Lune.Prelude exposing (Bool, Int, Float)
+import Lune.Prelude exposing (Bool(..), Int, Float)
 
 add : Float -> Float -> Float
 add = prim_addFloat
@@ -40,3 +41,20 @@ fromInt = prim_fromIntFloat
 
 truncate : Float -> Int
 truncate = prim_truncateFloat
+
+percent : Int -> Int -> Float
+percent part total =
+  case prim_leInt total 0 of
+    True -> 0.0
+    False ->
+      prim_mulFloat
+        100.0
+        (prim_divFloat
+          (prim_fromIntFloat (max 0 part))
+          (prim_fromIntFloat total))
+
+max : Int -> Int -> Int
+max a b =
+  case prim_geInt a b of
+    True -> a
+    False -> b

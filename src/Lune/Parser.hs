@@ -11,7 +11,7 @@ module Lune.Parser
   ) where
 
 import Control.Applicative (empty, many, optional, some)
-import Control.Monad (void)
+import Control.Monad (guard, void)
 import Data.Functor (($>))
 import Data.Char (isUpper)
 import Data.Text (Text)
@@ -515,9 +515,8 @@ parseAppExpr = do
           notFollowedBy casePatternArrow
           -- Check if next char is ( or { - these are self-delimiting so OK at any indent
           isDelimited <- P.option False (True <$ P.lookAhead (satisfy (\c -> c == '(' || c == '{')))
-          if isDelimited || currentIndent > ref
-            then parseTerm
-            else empty
+          guard (isDelimited || currentIndent > ref)
+          parseTerm
 
     -- Detects pattern -> which indicates start of a case alternative
     casePatternArrow = try $ do
