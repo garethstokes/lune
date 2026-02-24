@@ -15,18 +15,39 @@ import Nova exposing (newClient, provider, withModel, tool)
 import Nova.Core as Core exposing (Error(..), Provider, Response)
 import Nova.Tool as Tool
 import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+
+-- Health check result types
 @derive(Json)
 type alias DiskUsage =
-  { mountPoint : String, totalGb : Float, usedGb : Float, percentUsed : Int }
+  { mountPoint : String
+  , totalGb : Float
+  , usedGb : Float
+  , percentUsed : Int
+  }
+
 @derive(Json)
 type alias MemoryUsage =
-  { totalMb : Int, usedMb : Int, availableMb : Int, swapUsedMb : Int }
+  { totalMb : Int
+  , usedMb : Int
+  , availableMb : Int
+  , swapUsedMb : Int
+  }
+
 @derive(Json)
 type alias ProcessInfo =
-  { pid : Int, name : String, cpuPercent : Float, memoryPercent : Float }
+  { pid : Int
+  , name : String
+  , cpuPercent : Float
+  , memoryPercent : Float
+  }
+
 @derive(Json)
 type alias ServiceStatus =
-  { name : String, isRunning : Bool, uptime : Maybe String }
+  { name : String
+  , isRunning : Bool
+  , uptime : Maybe String
+  }
+
 @derive(Json)
 type alias HealthReport =
   { disks : List DiskUsage
@@ -34,14 +55,20 @@ type alias HealthReport =
   , topProcesses : List ProcessInfo
   , services : List ServiceStatus
   }
+
 @derive(Json)
 type Severity =
   Critical
   | Warning
   | Info
+
 @derive(Json)
 type alias Issue =
-  { severity : Severity, summary : String, details : String }
+  { severity : Severity
+  , summary : String
+  , details : String
+  }
+
 @derive(Json)
 type alias ProposedAction =
   { id : Int
@@ -51,19 +78,26 @@ type alias ProposedAction =
   , risk : String
   , expectedOutcome : String
   }
+
 @derive(Json)
 type alias HealthAnalysis =
-  { issues : List Issue, actions : List ProposedAction }
+  { issues : List Issue
+  , actions : List ProposedAction
+  }
+
 type AgentError =
   LlmError Error
   | DecodeError String
   | SystemError String
+
 procReadFile : String -> Task AgentError String
 procReadFile path =
   IO.readFile path
     |> Task.mapError (\_ -> SystemError (Str.append "Failed to read " path))
+
 diskCheck : Task AgentError (List DiskUsage)
 diskCheck = Task.succeed []
+
 memoryCheck : Task AgentError MemoryUsage
 memoryCheck =
   do
@@ -73,6 +107,7 @@ memoryCheck =
         Task.fail (SystemError msg)
       Ok m ->
         Task.succeed m
+
 processCheck : Task AgentError (List ProcessInfo)
 processCheck =
   do
@@ -109,8 +144,10 @@ processCheck =
       , memoryPercent = memoryPercent
       }
       ]
+
 serviceCheck : Task AgentError (List ServiceStatus)
 serviceCheck = Task.succeed []
+
 collectHealthReport : Task AgentError HealthReport
 collectHealthReport =
   do
@@ -124,8 +161,14 @@ collectHealthReport =
       , topProcesses = processes
       , services = services
       }
+
 type alias CpuSample =
-  { pid : Int, procJiffies : Int, totalJiffies : Int, cpuCount : Int }
+  { pid : Int
+  , procJiffies : Int
+  , totalJiffies : Int
+  , cpuCount : Int
+  }
+
 sampleSelfCpu : Task AgentError CpuSample
 sampleSelfCpu =
   do
@@ -154,6 +197,7 @@ sampleSelfCpu =
           , totalJiffies = totalJiffies
           , cpuCount = ensureAtLeast1 (procCpuCount sys)
           }
+
 cpuPercentFromSamples : CpuSample -> CpuSample -> Float
 cpuPercentFromSamples a b =
   let
@@ -168,6 +212,7 @@ cpuPercentFromSamples a b =
           ratio = Float.div (Float.fromInt dp) (Float.fromInt dt)
         in
           Float.mul (Float.fromInt a.cpuCount) (Float.mul 100.0 ratio)
+
 percentOf : Int -> Int -> Float
 percentOf part total =
   case Int.lte total 0 of
@@ -179,6 +224,7 @@ percentOf part total =
         (Float.div
           (Float.fromInt (clampNonNegative part))
           (Float.fromInt total))
+
 parseMeminfo : String -> Result String MemoryUsage
 parseMeminfo contents =
   case meminfoValueKb "MemTotal" contents of
@@ -211,12 +257,14 @@ parseMeminfo contents =
                       , availableMb = availableMb
                       , swapUsedMb = swapUsedMb
                       }
+
 meminfoValueKb : String -> String -> Maybe Int
 meminfoValueKb key contents =
   let
     prefix = Str.append key ":"
   in
     lineFirstInt prefix contents
+
 lineFirstInt : String -> String -> Maybe Int
 lineFirstInt prefix contents =
   case findFirst (\line -> Str.startsWith prefix line) (Str.lines contents) of
@@ -224,6 +272,7 @@ lineFirstInt prefix contents =
       Nothing
     Just line ->
       extractFirstInt line
+
 extractFirstInt : String -> Maybe Int
 extractFirstInt s =
   let
@@ -242,6 +291,7 @@ extractFirstInt s =
               Nothing
             Ok n ->
               Just n
+
 procTotalJiffies : String -> Result String Int
 procTotalJiffies sys =
   case Str.lines sys of
@@ -253,8 +303,10 @@ procTotalJiffies sys =
           Err "proc/stat: malformed cpu line"
         Cons _ rest ->
           sumInts rest
+
 procCpuCount : String -> Int
 procCpuCount sys = List.foldl countCpuCoreLine 0 (Str.lines sys)
+
 countCpuCoreLine : Int -> String -> Int
 countCpuCoreLine n line =
   case isCpuCoreLine line of
@@ -262,6 +314,7 @@ countCpuCoreLine n line =
       Int.add n 1
     False ->
       n
+
 isCpuCoreLine : String -> Bool
 isCpuCoreLine line =
   case Str.startsWith "cpu" line of
@@ -273,6 +326,7 @@ isCpuCoreLine line =
           isDigit c
         _ ->
           False
+
 procPidAndJiffies : String -> Result String (Int, Int)
 procPidAndJiffies statLine =
   case words statLine of
@@ -300,8 +354,10 @@ procPidAndJiffies statLine =
                         Err "proc/self/stat: invalid utime/stime"
                   _ ->
                     Err "proc/self/stat: missing utime/stime fields"
+
 sumInts : List String -> Result String Int
 sumInts xs = List.foldl sumIntsStep (Ok 0) xs
+
 sumIntsStep : Result String Int -> String -> Result String Int
 sumIntsStep acc s =
   case acc of
@@ -313,8 +369,10 @@ sumIntsStep acc s =
           Err msg
         Ok m ->
           Ok (Int.add n m)
+
 words : String -> List String
 words s = wordsFromChars (Str.toChars s) [] []
+
 wordsFromChars : List Char -> List Char -> List String -> List String
 wordsFromChars chars currentRev accRev =
   case chars of
@@ -337,6 +395,7 @@ wordsFromChars chars currentRev accRev =
                 (Cons (Str.fromChars (List.reverse currentRev)) accRev)
         False ->
           wordsFromChars rest (Cons c currentRev) accRev
+
 findFirst : (a -> Bool) -> List a -> Maybe a
 findFirst pred xs =
   case xs of
@@ -348,6 +407,7 @@ findFirst pred xs =
           Just x
         False ->
           findFirst pred rest
+
 listGet : Int -> List a -> Maybe a
 listGet n xs =
   case Int.lte n 0 of
@@ -363,6 +423,7 @@ listGet n xs =
           Nothing
         Cons _ rest ->
           listGet (Int.sub n 1) rest
+
 takeWhile : (a -> Bool) -> List a -> List a
 takeWhile pred xs =
   case xs of
@@ -374,6 +435,7 @@ takeWhile pred xs =
           Cons x (takeWhile pred rest)
         False ->
           []
+
 dropWhile : (a -> Bool) -> List a -> List a
 dropWhile pred xs =
   case xs of
@@ -385,6 +447,7 @@ dropWhile pred xs =
           dropWhile pred rest
         False ->
           xs
+
 not : Bool -> Bool
 not b =
   case b of
@@ -392,6 +455,7 @@ not b =
       False
     False ->
       True
+
 isDigit : Char -> Bool
 isDigit c =
   let
@@ -402,6 +466,7 @@ isDigit c =
         False
       True ->
         Int.lte n 57
+
 clampNonNegative : Int -> Int
 clampNonNegative n =
   case Int.gte n 0 of
@@ -409,6 +474,7 @@ clampNonNegative n =
       n
     False ->
       0
+
 ensureAtLeast1 : Int -> Int
 ensureAtLeast1 n =
   case Int.gte n 1 of
@@ -416,6 +482,7 @@ ensureAtLeast1 n =
       n
     False ->
       1
+
 showSeverity : Severity -> String
 showSeverity sev =
   case sev of
@@ -425,10 +492,13 @@ showSeverity sev =
       "WARNING"
     Info ->
       "INFO"
+
 showIssue : Issue -> String
 showIssue iss = render "  * [${showSeverity iss.severity}] ${iss.summary}"
+
 showIssuesHeader : String
 showIssuesHeader = "Issues found:"
+
 showIssues : List Issue -> String
 showIssues issues =
   case issues of
@@ -436,6 +506,7 @@ showIssues issues =
       "No issues found."
     _ ->
       Str.join "\n" (Cons showIssuesHeader (List.map showIssue issues))
+
 showAction : Int -> Int -> ProposedAction -> String
 showAction current total act =
   render
@@ -450,8 +521,10 @@ showAction current total act =
       | Expected: ${act.expectedOutcome}
       +-------------------------------------------------+
     ''
+
 mockHealthProvider : Provider
 mockHealthProvider = provider "mock-health"
+
 mockHealthCall :
     Core.ProviderConfig -> String -> String -> IO (Result Core.Error Response)
 mockHealthCall _ _ _ =
@@ -461,6 +534,7 @@ mockHealthCall _ _ _ =
       , usage = Just
           { inputTokens = 100, outputTokens = 50, totalTokens = 150 }
       }
+
 mockHealthAnalysis : HealthAnalysis
 mockHealthAnalysis =
   { issues =
@@ -494,44 +568,49 @@ mockHealthAnalysis =
     }
     ]
   }
+
 mockHealthAnalysisJson : String
 mockHealthAnalysisJson =
   RawJson.stringify (healthAnalysisEncoder mockHealthAnalysis)
+
 mockHealthProviderImpl : Core.ProviderImpl
 mockHealthProviderImpl =
   { id = mockHealthProvider
   , call = mockHealthCall
   , capabilities = Core.setEmpty
   }
+
 analysisSystemPrompt : String
 analysisSystemPrompt =
   render
     ''
       You are a Linux sysadmin assistant. Analyze these system
       health metrics and identify issues that need attention.
-      
+
       Severity guidelines:
       - Critical: System at risk of failure (disk >90%, OOM imminent)
       - Warning: Degraded performance or trending toward critical
       - Info: Notable but not actionable
-      
+
       For each issue, propose a concrete remediation action with
       the exact command to run. Assess risk level:
       - low: Safe, no service impact (clear caches, rotate logs)
       - medium: Brief impact (restart service, kill process)
       - high: Potential data loss or extended downtime
-      
+
       Return actions in priority order (most urgent first).
     ''
+
 buildAnalysisPrompt : HealthReport -> String
 buildAnalysisPrompt report =
   render
     ''
       ${analysisSystemPrompt}
-      
+
       Health Report:
       ${RawJson.stringify (healthReportEncoder report)}
     ''
+
 mockProviderRegistry : Core.ProviderRegistry
 mockProviderRegistry =
   Core.dictInsert
@@ -539,8 +618,10 @@ mockProviderRegistry =
     mockHealthProvider
     mockHealthProviderImpl
     Core.defaultProviderRegistry
+
 makeClient : Nova.Client
 makeClient = newClient mockProviderRegistry mockHealthProvider "health-analyzer"
+
 analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
 analyzeHealth report =
   do
@@ -553,6 +634,7 @@ analyzeHealth report =
     D.decodeValue healthAnalysisDecoder analysisJson
       |> Task.fromResult
       |> Task.mapError (\d -> DecodeError d.message)
+
 displayAnalysis : HealthAnalysis -> Task e Unit
 displayAnalysis analysis =
   do
@@ -569,6 +651,7 @@ displayAnalysis analysis =
             (render "Proposed ${Str.fromInt count} remediation actions:")
           IO.println ""
           processActions count analysis.actions
+
 showAgentError : AgentError -> String
 showAgentError err =
   case err of
@@ -578,10 +661,12 @@ showAgentError err =
       render "Failed to decode response: ${msg}"
     SystemError msg ->
       render "System check failed: ${msg}"
+
 type ApprovalResult =
   Approved
   | Skipped
   | Quit
+
 promptForApproval : Task e ApprovalResult
 promptForApproval =
   do
@@ -599,8 +684,10 @@ promptForApproval =
         do
           IO.println "Please enter y, n, or q"
           promptForApproval
+
 approvedCommandsPath : String
 approvedCommandsPath = "approved-commands.sh"
+
 recordApprovedCommand : String -> Task e String
 recordApprovedCommand cmd =
   do
@@ -618,8 +705,10 @@ recordApprovedCommand cmd =
         (IO.writeFile approvedCommandsPath updated)
         (\_ -> Task.succeed unit)
     Task.succeed (render "Recorded: ${cmd}")
+
 processActions : Int -> List ProposedAction -> Task e Unit
 processActions total actions = processActionsGo 1 total actions
+
 processActionsGo : Int -> Int -> List ProposedAction -> Task e Unit
 processActionsGo current total actions =
   case actions of
@@ -646,16 +735,22 @@ processActionsGo current total actions =
               IO.println result
               IO.println "Action recorded."
               processActionsGo (Int.add current 1) total rest
+
 runAgent : Task AgentError Unit
 runAgent =
   do
     IO.println "Collecting system health data..."
     report <- collectHealthReport
-    IO.println "Health data collected."
-    IO.println ""
-    IO.println "Analyzing with LLM..."
+
+    IO.println <| render ''
+          Health data collected.
+
+          Analysing with LLM
+        ''
+
     analysis <- analyzeHealth report
     displayAnalysis analysis
+
 main : Task Unit Unit
 main =
   do
@@ -667,15 +762,3 @@ main =
         Task.succeed unit
       Err e ->
         IO.println (showAgentError e)
-
-{-| System health monitoring agent using Nova LLM analysis.
-
-    Demonstrates:
-    - Composable Task pipelines with unified error handling
-    - Structured tool outputs with Nova.tool
-    - JSON decoding of LLM responses
-    - User approval workflows
-    - Clean separation of concerns: collect -> analyze -> display -> execute
--}
-
--- Health check result types

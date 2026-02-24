@@ -548,23 +548,39 @@ zipImportDocs offs docs =
 
 zipDeclDocs :: BlankLineMap -> [Int] -> [S.Decl] -> [D.Doc] -> [Item]
 zipDeclDocs blankMap offs decls docs =
-  let offs' =
-        if length offs == length docs
-          then offs
-          else [0 ..]
-   in zipWith3
-        ( \o decl d ->
-            Item
-              { itemOffset = o
-              , itemKind2 = KindDecl
-              , itemDeclInfo = Just (declInfo decl)
-              , itemDoc = d
-              , itemHasBlankBefore = IntMap.findWithDefault False o blankMap
-              }
-        )
-        offs'
-        decls
-        docs
+  -- Each declaration may be preceded by N annotation lines (@derive, etc).
+  -- The trivia scanner sees these as separate ItemDecl entries.
+  -- We need to consume N+1 offsets per declaration (N annotations + 1 declaration)
+  -- and use the FIRST offset for blank line lookup (that's where the blank line is).
+  go offs (zip decls docs)
+  where
+    go :: [Int] -> [(S.Decl, D.Doc)] -> [Item]
+    go _ [] = []
+    go remainingOffs ((decl, d) : rest) =
+      let annCount = declAnnotationCount decl
+          -- We need annCount + 1 offsets: annCount for @lines, 1 for the declaration itself
+          needed = annCount + 1
+          (usedOffs, nextOffs) = splitAt needed remainingOffs
+          -- Use the first offset (the @line or declaration if no annotations)
+          -- for blank line lookup, since that's where the blank line would be
+          itemOff = case usedOffs of
+            (o : _) -> o
+            [] -> 0  -- fallback, shouldn't happen if counts match
+          item = Item
+            { itemOffset = itemOff
+            , itemKind2 = KindDecl
+            , itemDeclInfo = Just (declInfo decl)
+            , itemDoc = d
+            , itemHasBlankBefore = IntMap.findWithDefault False itemOff blankMap
+            }
+       in item : go nextOffs rest
+
+    declAnnotationCount :: S.Decl -> Int
+    declAnnotationCount d =
+      case d of
+        S.DeclTypeAnn anns _ _ _ -> length anns
+        S.DeclTypeAlias anns _ _ _ -> length anns
+        _ -> 0
 
 declInfo :: S.Decl -> DeclInfo
 declInfo d =

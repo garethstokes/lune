@@ -386,13 +386,13 @@ formatRecordType fields =
   case fields of
     [] -> text "{}"
     (f : fs) ->
-      group $
-        text "{"
-          <> space
-          <> formatRecordTypeField f
-          <> mconcat (map (\x -> lineBreak <> text "," <+> formatRecordTypeField x) fs)
-          <> line
-          <> text "}"
+      -- Always use newlines between record type fields
+      text "{"
+        <> space
+        <> formatRecordTypeField f
+        <> mconcat (map (\x -> hardLine <> text "," <+> formatRecordTypeField x) fs)
+        <> hardLine
+        <> text "}"
 
 formatRecordTypeField :: (Text, S.Type, [S.Annotation]) -> Doc
 formatRecordTypeField (name, ty, anns) =
@@ -603,12 +603,30 @@ formatBlockTemplateM parts = do
   -- ''
   content <- renderBlockTemplatePartsM parts
   let ls = T.splitOn "\n" content
-      bodyLineDocs = map text ls
-      bodyDoc = mconcat (intersperse hardLine bodyLineDocs)
+      -- Strip trailing whitespace from blank lines (lines that are all whitespace)
+      -- This ensures empty lines don't have trailing spaces
+      cleanedLines = map stripIfBlank ls
+      -- Use hardLineNoIndent before empty lines so they're truly empty (no indentation)
+      bodyDoc = intersperseWithBlankAware cleanedLines
   pure $
     if T.null content
       then text "''" <> hardLine <> text "''"
       else text "''" <> nest indentSize (hardLine <> bodyDoc) <> hardLine <> text "''"
+  where
+    stripIfBlank line =
+      if T.all isWhitespace line then T.empty else line
+    isWhitespace c = c == ' ' || c == '\t'
+
+    -- Intersperse line breaks, using hardLineNoIndent before empty lines
+    intersperseWithBlankAware [] = mempty
+    intersperseWithBlankAware [x] = text x
+    intersperseWithBlankAware (x : rest) =
+      text x <> go rest
+
+    go [] = mempty
+    go (x : xs)
+      | T.null x  = hardLineNoIndent <> text x <> go xs  -- Empty line: no indent
+      | otherwise = hardLine <> text x <> go xs          -- Content line: normal indent
 
 renderInlineTemplatePartsM :: [S.TemplatePart] -> FmtM Text
 renderInlineTemplatePartsM =
