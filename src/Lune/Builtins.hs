@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Lune.Builtins
@@ -45,6 +46,10 @@ import System.Exit (ExitCode (..))
 import System.IO (BufferMode (NoBuffering), Handle, hClose, hFlush, hSetBinaryMode, hSetBuffering)
 import System.IO.Error (isEOFError, isDoesNotExistError, isPermissionError, userError)
 import System.Process (CreateProcess (close_fds, cwd, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, Inherit), createProcess, interruptProcessGroupOf, proc, terminateProcess, waitForProcess)
+#if !defined(mingw32_HOST_OS)
+import System.Process (getPid)
+import qualified System.Posix.Signals as Posix
+#endif
 
 instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
@@ -2511,12 +2516,24 @@ primProcessKill args =
                 "SigTerm" ->
                   terminateProcess ph
                 "SigKill" ->
+#if defined(mingw32_HOST_OS)
                   terminateProcess ph
+#else
+                  do
+                    mPid <- getPid ph
+                    case mPid of
+                      Nothing ->
+                        terminateProcess ph
+                      Just pid ->
+                        Posix.signalProcess Posix.sigKILL pid
+#endif
                 _ ->
                   terminateProcess ph
             case r of
               Left (e :: IOException) ->
-                pure $ Right $ StepDone world (resultErrValue (procErrIoError (T.pack (show e))))
+                if isDoesNotExistError e
+                  then pure $ Right $ StepDone world (resultOk unitValue)
+                  else pure $ Right $ StepDone world (resultErrValue (procErrIoError (T.pack (show e))))
               Right () ->
                 pure $ Right $ StepDone world (resultOk unitValue)
     _ ->

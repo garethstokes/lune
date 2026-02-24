@@ -1663,11 +1663,11 @@ func Builtin(name string) Value {
 				case "SigInt":
 					err = p.cmd.Process.Signal(os.Interrupt)
 				case "SigTerm":
-					err = p.cmd.Process.Kill()
+					err = sendSigTerm(p.cmd.Process)
 				case "SigKill":
-					err = p.cmd.Process.Kill()
+					err = sendSigKill(p.cmd.Process)
 				default:
-					err = p.cmd.Process.Kill()
+					err = sendSigKill(p.cmd.Process)
 				}
 
 				if err != nil && !errors.Is(err, os.ErrProcessDone) {
