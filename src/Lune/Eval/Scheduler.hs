@@ -48,6 +48,8 @@ data SchedulerState = SchedulerState
     -- ^ Completed fiber results (for await)
   , schedAwaitConts :: IORef (IntMap (World -> Value -> IO (Either EvalError IOStep)))
     -- ^ Stored await continuations by waiter fiber ID
+  , schedMainDone :: IORef (Maybe (World, Value))
+    -- ^ Result of main fiber (fiber 0), when completed
   }
 
 {-| M:N Scheduler Architecture
@@ -133,6 +135,7 @@ newScheduler = do
   nextId <- newIORef 0
   results <- newIORef IntMap.empty
   awaitConts <- newIORef IntMap.empty
+  mainDone <- newIORef Nothing
   pure SchedulerState
     { schedFibers = fibers
     , schedReadyQueue = ready
@@ -140,6 +143,7 @@ newScheduler = do
     , schedNextId = nextId
     , schedResults = results
     , schedAwaitConts = awaitConts
+    , schedMainDone = mainDone
     }
 
 -- | Spawn a new fiber, returns its ID
@@ -163,45 +167,51 @@ runScheduler :: SchedulerState -> World -> IO (Either EvalError (World, Value))
 runScheduler sched world0 = loop world0
   where
     loop world = do
-      -- Wake any sleeping fibers that are due
-      wakeSlept sched
-
-      -- Try to get next ready fiber
-      ready <- atomicModifyIORef' (schedReadyQueue sched) $ \q ->
-        case Seq.viewl q of
-          Seq.EmptyL -> (q, Nothing)
-          fid Seq.:< rest -> (rest, Just fid)
-
-      case ready of
+      -- If the main fiber has completed, stop the scheduler (detaching any
+      -- remaining fibers).
+      mMain <- readIORef (schedMainDone sched)
+      case mMain of
+        Just res -> pure (Right res)
         Nothing -> do
-          -- No ready fibers - check if any sleeping
-          sleeping <- readIORef (schedSleeping sched)
-          if null sleeping
-            then do
-              -- All done - get main fiber result
-              results <- readIORef (schedResults sched)
-              case IntMap.lookup 0 results of
-                Just v -> pure $ Right (world, v)
-                Nothing -> pure $ Left (UnboundVariable "main fiber did not complete")
-            else do
-              -- Sleep until next wakeup
-              let (nextWake, _, _) = head sleeping
-              now <- nowMs
-              let delay = max 0 (nextWake - now)
-              when (delay > 0) $
-                threadDelay (delay * 1000)  -- microseconds
-              loop world
+          -- Wake any sleeping fibers that are due
+          wakeSlept sched
 
-        Just fid -> do
-          -- Run this fiber for one step
-          fibers <- readIORef (schedFibers sched)
-          case IntMap.lookup fid fibers of
-            Nothing -> loop world  -- Fiber was removed
-            Just entry -> do
-              result <- fiberCont entry world
-              case result of
-                Left err -> pure $ Left err
-                Right step -> handleStep sched fid step >>= loop
+          -- Try to get next ready fiber
+          ready <- atomicModifyIORef' (schedReadyQueue sched) $ \q ->
+            case Seq.viewl q of
+              Seq.EmptyL -> (q, Nothing)
+              fid Seq.:< rest -> (rest, Just fid)
+
+          case ready of
+            Nothing -> do
+              -- No ready fibers - check if any sleeping
+              sleeping <- readIORef (schedSleeping sched)
+              if null sleeping
+                then do
+                  -- All done - get main fiber result
+                  results <- readIORef (schedResults sched)
+                  case IntMap.lookup 0 results of
+                    Just v -> pure $ Right (world, v)
+                    Nothing -> pure $ Left (UnboundVariable "main fiber did not complete")
+                else do
+                  -- Sleep until next wakeup
+                  let (nextWake, _, _) = head sleeping
+                  now <- nowMs
+                  let delay = max 0 (nextWake - now)
+                  when (delay > 0) $
+                    threadDelay (delay * 1000)  -- microseconds
+                  loop world
+
+            Just fid -> do
+              -- Run this fiber for one step
+              fibers <- readIORef (schedFibers sched)
+              case IntMap.lookup fid fibers of
+                Nothing -> loop world  -- Fiber was removed
+                Just entry -> do
+                  result <- fiberCont entry world
+                  case result of
+                    Left err -> pure $ Left err
+                    Right step -> handleStep sched fid step >>= loop
 
 -- | Wake sleeping fibers that are due
 wakeSlept :: SchedulerState -> IO ()
@@ -223,6 +233,8 @@ handleStep sched fid step =
     StepDone world value -> do
       -- Fiber completed - store result and wake waiters
       modifyIORef' (schedResults sched) (IntMap.insert fid value)
+      when (fid == 0) $
+        writeIORef (schedMainDone sched) (Just (world, value))
       fibers <- readIORef (schedFibers sched)
       case IntMap.lookup fid fibers of
         Nothing -> pure ()
@@ -235,8 +247,8 @@ handleStep sched fid step =
                 -- Update waiter's continuation with the actual result value
                 modifyIORef' (schedFibers sched) (IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) waiterId)
                 modifyIORef' (schedAwaitConts sched) (IntMap.delete waiterId)
-              Nothing -> pure ()  -- No stored continuation
-            modifyIORef' (schedReadyQueue sched) (Seq.|> waiterId)
+                modifyIORef' (schedReadyQueue sched) (Seq.|> waiterId)
+              Nothing -> pure ()  -- No stored continuation (e.g. already resumed via awaitAny)
       -- Remove completed fiber
       modifyIORef' (schedFibers sched) (IntMap.delete fid)
       pure world
@@ -274,6 +286,22 @@ handleStep sched fid step =
           -- Fiber stays out of ready queue until target completes
           pure world
 
+    StepAwaitAny world targetFids cont -> do
+      results <- readIORef (schedResults sched)
+      case firstCompleted results targetFids of
+        Just value -> do
+          modifyIORef' (schedFibers sched) (IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) fid)
+          modifyIORef' (schedReadyQueue sched) (Seq.|> fid)
+          pure world
+        Nothing -> do
+          modifyIORef' (schedFibers sched) $ \fibers ->
+            foldr
+              (\targetId -> IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetId)
+              fibers
+              targetFids
+          modifyIORef' (schedAwaitConts sched) (IntMap.insert fid cont)
+          pure world
+
     StepSpawn world newCont resumeCont -> do
       -- Spawn new fiber
       newFid <- spawnFiber sched newCont
@@ -281,6 +309,15 @@ handleStep sched fid step =
       modifyIORef' (schedFibers sched) (IntMap.adjust (\e -> e { fiberCont = \w -> resumeCont w newFid }) fid)
       modifyIORef' (schedReadyQueue sched) (Seq.|> fid)
       pure world
+
+firstCompleted :: IntMap Value -> [FiberId] -> Maybe Value
+firstCompleted results fids =
+  case fids of
+    [] -> Nothing
+    fid : rest ->
+      case IntMap.lookup fid results of
+        Just v -> Just v
+        Nothing -> firstCompleted results rest
 
 -- | Handle a step result in parallel scheduler
 --
@@ -308,8 +345,8 @@ handleStepPar sched fid step =
                   modifyTVar' (parFibers sched) $
                     IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) waiterId
                   modifyTVar' (parAwaitConts sched) (IntMap.delete waiterId)
-                Nothing -> pure ()
-              modifyTVar' (parReadyQueue sched) (Seq.|> waiterId)
+                  modifyTVar' (parReadyQueue sched) (Seq.|> waiterId)
+                Nothing -> pure () -- No stored continuation (e.g. already resumed via awaitAny)
         -- Remove completed fiber
         modifyTVar' (parFibers sched) (IntMap.delete fid)
         -- If main fiber, signal completion
@@ -344,6 +381,22 @@ handleStepPar sched fid step =
             -- Add to waiters
             modifyTVar' (parFibers sched) $
               IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetFid
+            modifyTVar' (parAwaitConts sched) (IntMap.insert fid cont)
+
+    StepAwaitAny _world targetFids cont -> do
+      atomically $ do
+        results <- readTVar (parResults sched)
+        case firstCompleted results targetFids of
+          Just value -> do
+            modifyTVar' (parFibers sched) $
+              IntMap.adjust (\e -> e { fiberCont = \w -> cont w value }) fid
+            modifyTVar' (parReadyQueue sched) (Seq.|> fid)
+          Nothing -> do
+            modifyTVar' (parFibers sched) $ \fibers ->
+              foldr
+                (\targetId -> IntMap.adjust (\e -> e { fiberWaiters = fid : fiberWaiters e }) targetId)
+                fibers
+                targetFids
             modifyTVar' (parAwaitConts sched) (IntMap.insert fid cont)
 
     StepSpawn _world newCont resumeCont -> do

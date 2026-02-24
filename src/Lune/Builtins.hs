@@ -9,11 +9,12 @@ module Lune.Builtins
   , instanceDictName
   ) where
 
-import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM (atomically, readTVar, writeTVar, modifyTVar')
-import Control.Exception (try, throw, catch, IOException, SomeException, Exception)
+import Control.Concurrent (MVar, forkIO, newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar, threadDelay)
+import Control.Concurrent.STM (atomically, modifyTVar', newEmptyTMVarIO, newTQueueIO, putTMVar, readTVar, tryPutTMVar, tryReadTMVar, tryReadTQueue, writeTQueue, writeTVar)
+import Control.Concurrent.STM.TQueue (TQueue)
+import Control.Exception (finally, try, throw, catch, IOException, SomeException, Exception)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Control.Monad (replicateM, when)
+import Control.Monad (forever, replicateM, void, when)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as BS
 import qualified Data.Char as Char
@@ -38,7 +39,12 @@ import Lune.Type
 import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import qualified Network.Connection as NC
-import System.IO.Error (isEOFError, userError)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.Environment (getEnvironment)
+import System.Exit (ExitCode (..))
+import System.IO (BufferMode (NoBuffering), Handle, hClose, hFlush, hSetBinaryMode, hSetBuffering)
+import System.IO.Error (isEOFError, isDoesNotExistError, isPermissionError, userError)
+import System.Process (CreateProcess (close_fds, cwd, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, Inherit), createProcess, interruptProcessGroupOf, proc, terminateProcess, waitForProcess)
 
 instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
@@ -132,7 +138,61 @@ builtinSchemes =
     , ("prim_orElse", Forall ["a"] [] (TArrow (TApp (TCon "STM") (TVar "a")) (TArrow (TApp (TCon "STM") (TVar "a")) (TApp (TCon "STM") (TVar "a")))))
     , ("prim_spawn", Forall ["a"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TApp (TCon "IO") (TApp (TCon "Fiber") (TVar "a")))))
     , ("prim_await", Forall ["a"] [] (TArrow (TApp (TCon "Fiber") (TVar "a")) (TApp (TCon "IO") (TVar "a"))))
+    , ("prim_awaitAny", Forall ["a"] [] (TArrow (TApp (TCon "Fiber") (TVar "a")) (TArrow (TApp (TCon "Fiber") (TVar "a")) (TApp (TCon "IO") (TVar "a")))))
     , ("prim_yield", Forall [] [] (TApp (TCon "IO") (TCon "Unit")))
+    -- Process primitives
+    , ("prim_process_run", Forall [] []
+        (TArrow
+          (TRecord
+            [ ("program", TCon "String")
+            , ("args", TApp (TCon "List") (TCon "String"))
+            , ("cwd", TApp (TCon "Maybe") (TCon "String"))
+            , ("env", TApp (TCon "List") (TApp (TApp (TCon "Pair") (TCon "String")) (TCon "String")))
+            , ("clearEnv", TCon "Bool")
+            ])
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "ExitStatus")))))
+    , ("prim_process_spawn", Forall [] []
+        (TArrow
+          (TRecord
+            [ ("program", TCon "String")
+            , ("args", TApp (TCon "List") (TCon "String"))
+            , ("cwd", TApp (TCon "Maybe") (TCon "String"))
+            , ("env", TApp (TCon "List") (TApp (TApp (TCon "Pair") (TCon "String")) (TCon "String")))
+            , ("clearEnv", TCon "Bool")
+            ])
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "Process")))))
+    , ("prim_process_wait", Forall [] []
+        (TArrow (TCon "Process")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "ExitStatus")))))
+    , ("prim_process_kill", Forall [] []
+        (TArrow (TCon "Process")
+          (TArrow (TCon "Signal")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "Unit"))))))
+    , ("prim_process_stdin_write", Forall [] []
+        (TArrow (TCon "Process")
+          (TArrow (TCon "Bytes")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "Unit"))))))
+    , ("prim_process_stdin_close", Forall [] []
+        (TArrow (TCon "Process")
+          (TApp (TCon "IO")
+            (TApp (TApp (TCon "Result") (TCon "ProcessError")) (TCon "Unit")))))
+    , ("prim_process_stdout_read", Forall [] []
+        (TArrow (TCon "Process")
+          (TArrow (TCon "Int")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "ProcessError"))
+                (TApp (TCon "Maybe") (TCon "Bytes")))))))
+    , ("prim_process_stderr_read", Forall [] []
+        (TArrow (TCon "Process")
+          (TArrow (TCon "Int")
+            (TApp (TCon "IO")
+              (TApp (TApp (TCon "Result") (TCon "ProcessError"))
+                (TApp (TCon "Maybe") (TCon "Bytes")))))))
     , ("$primIOPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
     , ("prim_ioPure", Forall ["a"] [] (TArrow (TVar "a") (TApp (TCon "IO") (TVar "a"))))
     , ("$primIOBind", Forall ["a", "b"] [] (TArrow (TApp (TCon "IO") (TVar "a")) (TArrow (TArrow (TVar "a") (TApp (TCon "IO") (TVar "b"))) (TApp (TCon "IO") (TVar "b")))))
@@ -754,6 +814,16 @@ builtinEvalPrims =
     , ("prim_spawn", BuiltinPrim 1 primSpawn)
     , ("prim_yield", BuiltinPrim 0 primYield)
     , ("prim_await", BuiltinPrim 1 primAwait)
+    , ("prim_awaitAny", BuiltinPrim 2 primAwaitAny)
+    -- Process primitives
+    , ("prim_process_run", BuiltinPrim 1 primProcessRun)
+    , ("prim_process_spawn", BuiltinPrim 1 primProcessSpawn)
+    , ("prim_process_wait", BuiltinPrim 1 primProcessWait)
+    , ("prim_process_kill", BuiltinPrim 2 primProcessKill)
+    , ("prim_process_stdin_write", BuiltinPrim 2 primProcessStdinWrite)
+    , ("prim_process_stdin_close", BuiltinPrim 1 primProcessStdinClose)
+    , ("prim_process_stdout_read", BuiltinPrim 2 primProcessStdoutRead)
+    , ("prim_process_stderr_read", BuiltinPrim 2 primProcessStderrRead)
     -- File I/O primitives
     , ("prim_readFile", BuiltinPrim 1 primReadFile)
     , ("prim_writeFile", BuiltinPrim 2 primWriteFile)
@@ -1391,6 +1461,13 @@ chainStep step k =
           Left err -> pure (Left err)
           Right step' -> chainStep step' k
 
+    StepAwaitAny w fids cont ->
+      pure $ Right $ StepAwaitAny w fids $ \w' v -> do
+        result <- cont w' v
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStep step' k
+
     StepSpawn w newCont resumeCont ->
       pure $ Right $ StepSpawn w newCont $ \w' fid -> do
         result <- resumeCont w' fid
@@ -1434,6 +1511,12 @@ chainStepThen step act2 =
           Right step' -> chainStepThen step' act2
     StepAwait w fid cont ->
       pure $ Right $ StepAwait w fid $ \w' v -> do
+        result <- cont w' v
+        case result of
+          Left err -> pure (Left err)
+          Right step' -> chainStepThen step' act2
+    StepAwaitAny w fids cont ->
+      pure $ Right $ StepAwaitAny w fids $ \w' v -> do
         result <- cont w' v
         case result of
           Left err -> pure (Left err)
@@ -2076,6 +2159,499 @@ primAwait args =
           pure $ Right $ StepDone w v
     [other] -> Left (NotAnIO other)
     _ -> Left (NotAFunction (VPrim 1 primAwait args))
+
+-- | prim_awaitAny : Fiber a -> Fiber a -> IO a
+-- Awaits whichever of two fibers completes first.
+primAwaitAny :: [Value] -> Either EvalError Value
+primAwaitAny args =
+  case args of
+    [VFiber fid1, VFiber fid2] ->
+      Right $ VIO $ \world ->
+        pure $ Right $ StepAwaitAny world [fid1, fid2] $ \w v ->
+          pure $ Right $ StepDone w v
+    _ ->
+      Left (NotAFunction (VPrim 2 primAwaitAny args))
+
+-- =============================================================================
+-- Process Primitives
+-- =============================================================================
+
+processCon :: Text -> Text
+processCon n =
+  "Lune.Process." <> n
+
+resultErrValue :: Value -> Value
+resultErrValue e =
+  VCon (preludeCon "Err") [e]
+
+unitValue :: Value
+unitValue =
+  VCon (preludeCon "Unit") []
+
+maybeNothing :: Value
+maybeNothing =
+  VCon (preludeCon "Nothing") []
+
+maybeJust :: Value -> Value
+maybeJust v =
+  VCon (preludeCon "Just") [v]
+
+exitStatusValue :: ExitCode -> Value
+exitStatusValue ec =
+  case ec of
+    ExitSuccess ->
+      VCon (processCon "Exited") [VInt 0]
+    ExitFailure code ->
+      VCon (processCon "Exited") [VInt (fromIntegral code)]
+
+procErrNotFound :: Text -> Value
+procErrNotFound program =
+  VCon (processCon "NotFound") [VString program]
+
+procErrPermissionDenied :: Text -> Value
+procErrPermissionDenied program =
+  VCon (processCon "PermissionDenied") [VString program]
+
+procErrSpawnFailed :: Text -> Value
+procErrSpawnFailed msg =
+  VCon (processCon "SpawnFailed") [VString msg]
+
+procErrIoError :: Text -> Value
+procErrIoError msg =
+  VCon (processCon "IoError") [VString msg]
+
+data CmdSpec = CmdSpec
+  { cmdProgram :: !Text
+  , cmdArgs :: ![Text]
+  , cmdCwd :: !(Maybe Text)
+  , cmdEnv :: ![(Text, Text)]
+  , cmdClearEnv :: !Bool
+  }
+
+cmdSpecFromValue :: Value -> Either Text CmdSpec
+cmdSpecFromValue v =
+  case v of
+    VRecord fields -> do
+      program <-
+        case Map.lookup "program" fields of
+          Just (VString s) -> Right s
+          _ -> Left "Cmd.program: expected String"
+
+      args0 <-
+        case Map.lookup "args" fields of
+          Just xs ->
+            case valueToList xs of
+              Nothing -> Left "Cmd.args: expected List String"
+              Just vs ->
+                case traverse (\x -> case x of VString s -> Right s; _ -> Left "Cmd.args: expected String") vs of
+                  Left e -> Left e
+                  Right ss -> Right ss
+          Nothing -> Right []
+
+      cwd0 <-
+        case Map.lookup "cwd" fields of
+          Nothing -> Right Nothing
+          Just maybeVal ->
+            case maybeVal of
+              VCon name [] | "Nothing" `T.isSuffixOf` name -> Right Nothing
+              VCon name [VString s] | "Just" `T.isSuffixOf` name -> Right (Just s)
+              _ -> Left "Cmd.cwd: expected Maybe String"
+
+      env0 <-
+        case Map.lookup "env" fields of
+          Nothing -> Right []
+          Just envVal ->
+            case valueToList envVal of
+              Nothing -> Left "Cmd.env: expected List (String, String)"
+              Just vs ->
+                case traverse valueToStringPair vs of
+                  Nothing -> Left "Cmd.env: expected List (String, String)"
+                  Just ps -> Right ps
+
+      clearEnv0 <-
+        case Map.lookup "clearEnv" fields of
+          Nothing -> Right False
+          Just b ->
+            case valueToBool b of
+              Nothing -> Left "Cmd.clearEnv: expected Bool"
+              Just x -> Right x
+
+      Right
+        CmdSpec
+          { cmdProgram = program
+          , cmdArgs = args0
+          , cmdCwd = cwd0
+          , cmdEnv = env0
+          , cmdClearEnv = clearEnv0
+          }
+
+    _ ->
+      Left "Cmd: expected record"
+
+valueToStringPair :: Value -> Maybe (Text, Text)
+valueToStringPair v =
+  case v of
+    VCon name [VString a, VString b] | "Pair" `T.isSuffixOf` name ->
+      Just (a, b)
+    _ ->
+      Nothing
+
+valueToBool :: Value -> Maybe Bool
+valueToBool v =
+  case v of
+    VCon name [] | "True" `T.isSuffixOf` name -> Just True
+    VCon name [] | "False" `T.isSuffixOf` name -> Just False
+    _ -> Nothing
+
+mkProcessEnv :: CmdSpec -> IO (Maybe [(String, String)])
+mkProcessEnv spec =
+  if cmdClearEnv spec
+    then
+      pure $
+        Just
+          [ (T.unpack k, T.unpack v)
+          | (k, v) <- cmdEnv spec
+          ]
+    else
+      if null (cmdEnv spec)
+        then pure Nothing
+        else do
+          base <- getEnvironment
+          let overrides =
+                [ (T.unpack k, T.unpack v)
+                | (k, v) <- cmdEnv spec
+                ]
+              merged =
+                Map.toList $
+                  foldl'
+                    (\m (k, v) -> Map.insert k v m)
+                    (Map.fromList base)
+                    overrides
+          pure (Just merged)
+
+awaitMVar :: MVar a -> (a -> World -> IO (Either EvalError IOStep)) -> World -> IO (Either EvalError IOStep)
+awaitMVar mv k world = do
+  mx <- tryTakeMVar mv
+  case mx of
+    Nothing ->
+      pure $ Right $ StepSleep world 1 (awaitMVar mv k)
+    Just x ->
+      k x world
+
+primProcessRun :: [Value] -> Either EvalError Value
+primProcessRun args =
+  case args of
+    [cmdVal] ->
+      Right $ VIO $ \world -> do
+        case cmdSpecFromValue cmdVal of
+          Left msg ->
+            pure $ Right $ StepDone world (resultErrValue (procErrSpawnFailed msg))
+          Right spec -> do
+            env' <- mkProcessEnv spec
+            let cp =
+                  (proc (T.unpack (cmdProgram spec)) (map T.unpack (cmdArgs spec)))
+                    { cwd = fmap T.unpack (cmdCwd spec)
+                    , env = env'
+                    , close_fds = True
+                    , std_in = Inherit
+                    , std_out = Inherit
+                    , std_err = Inherit
+                    }
+            spawned <- try (createProcess cp) :: IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
+            case spawned of
+              Left e ->
+                pure $ Right $ StepDone world (resultErrValue (spawnErrorToProcessError (cmdProgram spec) e))
+              Right (_hin, _hout, _herr, ph) -> do
+                exitVar <- newEmptyMVar
+                _ <- forkIO $ do
+                  ec <- waitForProcess ph
+                  putMVar exitVar ec
+                pure $ Right $
+                  StepSleep world 1 $
+                    awaitMVar exitVar $ \ec w ->
+                      pure $ Right $ StepDone w (resultOk (exitStatusValue ec))
+    _ ->
+      Left (NotAFunction (VPrim 1 primProcessRun args))
+
+spawnErrorToProcessError :: Text -> IOException -> Value
+spawnErrorToProcessError program e
+  | isDoesNotExistError e = procErrNotFound program
+  | isPermissionError e = procErrPermissionDenied program
+  | otherwise = procErrSpawnFailed (T.pack (show e))
+
+primProcessSpawn :: [Value] -> Either EvalError Value
+primProcessSpawn args =
+  case args of
+    [cmdVal] ->
+      Right $ VIO $ \world -> do
+        case cmdSpecFromValue cmdVal of
+          Left msg ->
+            pure $ Right $ StepDone world (resultErrValue (procErrSpawnFailed msg))
+          Right spec -> do
+            env' <- mkProcessEnv spec
+            let cp =
+                  (proc (T.unpack (cmdProgram spec)) (map T.unpack (cmdArgs spec)))
+                    { cwd = fmap T.unpack (cmdCwd spec)
+                    , env = env'
+                    , close_fds = True
+                    , std_in = CreatePipe
+                    , std_out = CreatePipe
+                    , std_err = CreatePipe
+                    }
+            spawned <- try (createProcess cp) :: IO (Either IOException (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle))
+            case spawned of
+              Left e ->
+                pure $ Right $ StepDone world (resultErrValue (spawnErrorToProcessError (cmdProgram spec) e))
+              Right (mIn, mOut, mErr, ph) ->
+                case (mIn, mOut, mErr) of
+                  (Just hin, Just hout, Just herr) -> do
+                    hSetBinaryMode hin True
+                    hSetBinaryMode hout True
+                    hSetBinaryMode herr True
+                    hSetBuffering hin NoBuffering
+                    hSetBuffering hout NoBuffering
+                    hSetBuffering herr NoBuffering
+
+                    exitVar <- newEmptyTMVarIO
+                    stdinRef <- newIORef (Just hin)
+                    stdinLock <- newMVar ()
+
+                    stdoutQ <- newTQueueIO
+                    stdoutBuf <- newIORef BS.empty
+                    stdoutEOF <- newIORef False
+                    stdoutErr <- newIORef Nothing
+
+                    stderrQ <- newTQueueIO
+                    stderrBuf <- newIORef BS.empty
+                    stderrEOF <- newIORef False
+                    stderrErr <- newIORef Nothing
+
+                    let procRt =
+                          ProcessRuntime
+                            { procHandle = ph
+                            , procExitCode = exitVar
+                            , procStdin = stdinRef
+                            , procStdinLock = stdinLock
+                            , procStdoutQ = stdoutQ
+                            , procStdoutBuf = stdoutBuf
+                            , procStdoutEOF = stdoutEOF
+                            , procStdoutErr = stdoutErr
+                            , procStderrQ = stderrQ
+                            , procStderrBuf = stderrBuf
+                            , procStderrEOF = stderrEOF
+                            , procStderrErr = stderrErr
+                            }
+
+                    _ <- forkIO $ drainHandle hout stdoutQ stdoutErr
+                    _ <- forkIO $ drainHandle herr stderrQ stderrErr
+                    _ <- forkIO $ do
+                      ec <- waitForProcess ph
+                      atomically $ void $ tryPutTMVar (procExitCode procRt) ec
+
+                    pure $ Right $ StepDone world (resultOk (VProcess procRt))
+
+                  _ ->
+                    pure $ Right $ StepDone world (resultErrValue (procErrSpawnFailed "createProcess: missing pipes"))
+
+    _ ->
+      Left (NotAFunction (VPrim 1 primProcessSpawn args))
+
+drainHandle :: Handle -> TQueue (Maybe BS.ByteString) -> IORef (Maybe Text) -> IO ()
+drainHandle h q errRef =
+  finally
+    (go `catch` \(e :: IOException) -> do
+      writeIORef errRef (Just (T.pack (show e)))
+      atomically $ writeTQueue q Nothing
+    )
+    (hClose h)
+  where
+    go = do
+      bs <- BS.hGetSome h 4096
+      if BS.null bs
+        then atomically $ writeTQueue q Nothing
+        else do
+          atomically $ writeTQueue q (Just bs)
+          go
+
+primProcessWait :: [Value] -> Either EvalError Value
+primProcessWait args =
+  case args of
+    [VProcess procRt] ->
+      Right $ VIO $ \world -> do
+        mEc <- atomically $ tryReadTMVar (procExitCode procRt)
+        case mEc of
+          Nothing ->
+            pure $ Right $ StepSleep world 1 (waitPoll procRt)
+          Just ec ->
+            pure $ Right $ StepDone world (resultOk (exitStatusValue ec))
+    _ ->
+      Left (NotAFunction (VPrim 1 primProcessWait args))
+  where
+    waitPoll procRt world = do
+      mEc <- atomically $ tryReadTMVar (procExitCode procRt)
+      case mEc of
+        Nothing -> pure $ Right $ StepSleep world 1 (waitPoll procRt)
+        Just ec -> pure $ Right $ StepDone world (resultOk (exitStatusValue ec))
+
+primProcessKill :: [Value] -> Either EvalError Value
+primProcessKill args =
+  case args of
+    [VProcess procRt, sigVal] ->
+      case signalFromValue sigVal of
+        Nothing ->
+          Left (NotAFunction (VPrim 2 primProcessKill args))
+        Just sig ->
+          Right $ VIO $ \world -> do
+            let ph = procHandle procRt
+            r <- try $ do
+              case sig of
+                "SigInt" ->
+                  interruptProcessGroupOf ph `catch` \(_ :: IOException) ->
+                    terminateProcess ph
+                "SigTerm" ->
+                  terminateProcess ph
+                "SigKill" ->
+                  terminateProcess ph
+                _ ->
+                  terminateProcess ph
+            case r of
+              Left (e :: IOException) ->
+                pure $ Right $ StepDone world (resultErrValue (procErrIoError (T.pack (show e))))
+              Right () ->
+                pure $ Right $ StepDone world (resultOk unitValue)
+    _ ->
+      Left (NotAFunction (VPrim 2 primProcessKill args))
+
+signalFromValue :: Value -> Maybe Text
+signalFromValue v =
+  case v of
+    VCon name [] | name == processCon "SigTerm" -> Just "SigTerm"
+    VCon name [] | name == processCon "SigKill" -> Just "SigKill"
+    VCon name [] | name == processCon "SigInt" -> Just "SigInt"
+    _ -> Nothing
+
+primProcessStdinWrite :: [Value] -> Either EvalError Value
+primProcessStdinWrite args =
+  case args of
+    [VProcess procRt, VBytes bytes] ->
+      Right $ VIO $ \world -> do
+        ack <- newEmptyMVar
+        _ <- forkIO $ do
+          mHandle <- readIORef (procStdin procRt)
+          case mHandle of
+            Nothing ->
+              putMVar ack (Left ("stdin is closed" :: Text))
+            Just h -> do
+              takeMVar (procStdinLock procRt)
+              result <- try (BS.hPut h bytes >> hFlush h) :: IO (Either IOException ())
+              putMVar (procStdinLock procRt) ()
+              case result of
+                Left e -> putMVar ack (Left (T.pack (show e)))
+                Right () -> putMVar ack (Right ())
+
+        pure $ Right $
+          StepSleep world 1 $
+            awaitMVar ack $ \res w ->
+              case res of
+                Left msg ->
+                  pure $ Right $ StepDone w (resultErrValue (procErrIoError msg))
+                Right () ->
+                  pure $ Right $ StepDone w (resultOk unitValue)
+
+    _ ->
+      Left (NotAFunction (VPrim 2 primProcessStdinWrite args))
+
+primProcessStdinClose :: [Value] -> Either EvalError Value
+primProcessStdinClose args =
+  case args of
+    [VProcess procRt] ->
+      Right $ VIO $ \world -> do
+        ack <- newEmptyMVar
+        _ <- forkIO $ do
+          takeMVar (procStdinLock procRt)
+          mHandle <- readIORef (procStdin procRt)
+          result <- case mHandle of
+            Nothing ->
+              pure (Right ())
+            Just h ->
+              (try (hClose h) :: IO (Either IOException ())) `finally` writeIORef (procStdin procRt) Nothing
+          putMVar (procStdinLock procRt) ()
+          case result of
+            Left e -> putMVar ack (Left (T.pack (show e)))
+            Right () -> putMVar ack (Right ())
+
+        pure $ Right $
+          StepSleep world 1 $
+            awaitMVar ack $ \res w ->
+              case res of
+                Left msg ->
+                  pure $ Right $ StepDone w (resultErrValue (procErrIoError msg))
+                Right () ->
+                  pure $ Right $ StepDone w (resultOk unitValue)
+    _ ->
+      Left (NotAFunction (VPrim 1 primProcessStdinClose args))
+
+primProcessStdoutRead :: [Value] -> Either EvalError Value
+primProcessStdoutRead =
+  primProcessReadStream procStdoutQ procStdoutBuf procStdoutEOF procStdoutErr
+
+primProcessStderrRead :: [Value] -> Either EvalError Value
+primProcessStderrRead =
+  primProcessReadStream procStderrQ procStderrBuf procStderrEOF procStderrErr
+
+primProcessReadStream ::
+  (ProcessRuntime -> TQueue (Maybe BS.ByteString)) ->
+  (ProcessRuntime -> IORef BS.ByteString) ->
+  (ProcessRuntime -> IORef Bool) ->
+  (ProcessRuntime -> IORef (Maybe Text)) ->
+  [Value] ->
+  Either EvalError Value
+primProcessReadStream getQ getBuf getEof getErr args =
+  case args of
+    [VProcess procRt, VInt n] ->
+      Right $ VIO $ \world ->
+        streamPoll procRt (fromIntegral (max 0 n)) world
+    _ ->
+      Left (NotAFunction (VPrim 2 (primProcessReadStream getQ getBuf getEof getErr) args))
+  where
+    streamPoll :: ProcessRuntime -> Int -> World -> IO (Either EvalError IOStep)
+    streamPoll procRt n world
+      | n <= 0 =
+          pure $ Right $ StepDone world (resultOk (maybeJust (VBytes BS.empty)))
+      | otherwise = do
+          buf <- readIORef (getBuf procRt)
+          if not (BS.null buf)
+            then do
+              let (chunk, rest) = BS.splitAt n buf
+              writeIORef (getBuf procRt) rest
+              pure $ Right $ StepDone world (resultOk (maybeJust (VBytes chunk)))
+            else do
+              eof <- readIORef (getEof procRt)
+              if eof
+                then do
+                  mErr <- readIORef (getErr procRt)
+                  case mErr of
+                    Nothing ->
+                      pure $ Right $ StepDone world (resultOk maybeNothing)
+                    Just msg ->
+                      pure $ Right $ StepDone world (resultErrValue (procErrIoError msg))
+                else do
+                  mNext <- atomically $ tryReadTQueue (getQ procRt)
+                  case mNext of
+                    Nothing ->
+                      pure $ Right $ StepSleep world 1 (streamPoll procRt n)
+                    Just Nothing -> do
+                      writeIORef (getEof procRt) True
+                      pure $ Right $ StepDone world (resultOk maybeNothing)
+                    Just (Just bs)
+                      | BS.null bs ->
+                          pure $ Right $ StepSleep world 1 (streamPoll procRt n)
+                      | BS.length bs <= n ->
+                          pure $ Right $ StepDone world (resultOk (maybeJust (VBytes bs)))
+                      | otherwise -> do
+                          let (chunk, rest) = BS.splitAt n bs
+                          writeIORef (getBuf procRt) rest
+                          pure $ Right $ StepDone world (resultOk (maybeJust (VBytes chunk)))
 
 -- =============================================================================
 -- File I/O Primitives

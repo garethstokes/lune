@@ -66,6 +66,7 @@ library
       transformers,
       megaparsec,
       parser-combinators,
+      process,
       lsp,
       lsp-types,
       unix >= 2.7
@@ -76,6 +77,7 @@ library
 executable lune
   main-is:          Main.hs
   hs-source-dirs:   app
+  ghc-options:      -threaded -rtsopts
   build-depends:
       base,
       containers,

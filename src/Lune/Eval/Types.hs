@@ -11,6 +11,7 @@ module Lune.Eval.Types
   , SharedState (..)
   , World (..)
   , Value (..)
+  , ProcessRuntime (..)
   , Template (..)
   , TemplatePart (..)
   , TemplateHole (..)
@@ -22,6 +23,10 @@ module Lune.Eval.Types
   ) where
 
 import Control.Concurrent.STM (TVar)
+import Control.Concurrent.STM.TMVar (TMVar)
+import Control.Concurrent.STM.TQueue (TQueue)
+import Control.Concurrent.MVar (MVar)
+import Data.IORef (IORef)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Map.Strict as Map
@@ -35,6 +40,9 @@ import Lune.Type (Constraint, Type)
 import qualified Network.Socket as NS
 import qualified Data.ByteString as BS
 import qualified Network.Connection as NC
+import System.Exit (ExitCode)
+import System.IO (Handle)
+import System.Process (ProcessHandle)
 
 type Env = Map Text Value
 
@@ -67,6 +75,8 @@ data IOStep
     -- ^ Fiber sleeping for N ms, continuation to resume
   | StepAwait World FiberId (World -> Value -> IO (Either EvalError IOStep))
     -- ^ Fiber waiting for another fiber's result
+  | StepAwaitAny World [FiberId] (World -> Value -> IO (Either EvalError IOStep))
+    -- ^ Fiber waiting for any of several fibers to complete
   | StepSpawn World (World -> IO (Either EvalError IOStep)) (World -> FiberId -> IO (Either EvalError IOStep))
     -- ^ Spawn new fiber (its action, continuation with fiber id)
 
@@ -75,6 +85,7 @@ instance Show IOStep where
   show (StepYield _ _) = "StepYield"
   show (StepSleep _ ms _) = "StepSleep " <> show ms
   show (StepAwait _ fid _) = "StepAwait " <> show fid
+  show (StepAwaitAny _ fids _) = "StepAwaitAny " <> show fids
   show (StepSpawn _ _ _) = "StepSpawn"
 
 -- | Thread-safe shared state for concurrent fiber access
@@ -174,6 +185,7 @@ data Value
   | VConn ConnId
   | VBytes BS.ByteString
   | VTlsConn TlsConnId
+  | VProcess ProcessRuntime
   | VCon Text [Value]
   | VJson JsonValue
   | VClosure Env [S.Pattern] C.CoreExpr
@@ -181,6 +193,21 @@ data Value
   | VThunk Env C.CoreExpr
   | VPrim Int ([Value] -> Either EvalError Value) [Value]
   | VIO (World -> IO (Either EvalError IOStep))
+
+data ProcessRuntime = ProcessRuntime
+  { procHandle :: !ProcessHandle
+  , procExitCode :: !(TMVar ExitCode)
+  , procStdin :: !(IORef (Maybe Handle))
+  , procStdinLock :: !(MVar ())
+  , procStdoutQ :: !(TQueue (Maybe BS.ByteString))
+  , procStdoutBuf :: !(IORef BS.ByteString)
+  , procStdoutEOF :: !(IORef Bool)
+  , procStdoutErr :: !(IORef (Maybe Text))
+  , procStderrQ :: !(TQueue (Maybe BS.ByteString))
+  , procStderrBuf :: !(IORef BS.ByteString)
+  , procStderrEOF :: !(IORef Bool)
+  , procStderrErr :: !(IORef (Maybe Text))
+  }
 
 data EvalError
   = UnboundVariable Text
@@ -259,6 +286,8 @@ instance Show Value where
         "<bytes:" <> show (BS.length bs) <> ">"
       VTlsConn tid ->
         "<tlsconn:" <> show tid <> ">"
+      VProcess {} ->
+        "<process>"
     where
       renderCtor n =
         case reverse (T.splitOn "." n) of
