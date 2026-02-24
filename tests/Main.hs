@@ -20,16 +20,17 @@ import Data.Aeson (Value (..), (.=), encode, object)
 import Data.Aeson.Types (parseMaybe, (.:))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Data.List (isSuffixOf, sort)
+import Data.List (isPrefixOf, isSuffixOf, sort)
 import Data.Char (isSpace, toLower, ord)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import System.Directory (listDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeDirectoryRecursive)
 import System.Directory (getTemporaryDirectory, removeFile, getCurrentDirectory)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeBaseName)
+import System.Info (os)
 import System.IO (BufferMode (NoBuffering), Handle, hClose, hFlush, hPutStrLn, hSetBinaryMode, hSetBuffering, hWaitForInput, openTempFile, stderr)
 import System.Process
   ( CreateProcess (std_err, std_in, std_out)
@@ -44,7 +45,7 @@ import System.Process
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Golden (goldenVsStringDiff)
-import Test.Tasty.HUnit (testCase, assertEqual)
+import Test.Tasty.HUnit (assertFailure, testCase, assertEqual)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
 import Data.Maybe (fromMaybe)
@@ -55,6 +56,7 @@ main = do
   examples <- discoverExamples "examples"
   invalidExamples <- discoverExamples "examples/invalid"
   fmtCases <- discoverFmtCases "tests/fmt"
+  processCases <- discoverProcessCases "tests/process"
 
   let interactiveExamples =
         [ "50_HealthAgent"
@@ -75,6 +77,7 @@ main = do
     , testGroup "Fmt" (map fmtGoldenTest fmtCases)
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
     , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
+    , testGroup "Process" (map processTest processCases)
     , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, unicodeHoverIntegrationTest, hoverRetentionIntegrationTest, vfsImportPropagationTest]
     ]
 
@@ -83,6 +86,16 @@ discoverExamples :: FilePath -> IO [FilePath]
 discoverExamples dir = do
   files <- listDirectory dir
   let luneFiles = filter (".lune" `isSuffixOf`) files
+  pure $ map (dir </>) (sort luneFiles)
+
+-- | Discover process tests under `tests/process`.
+--
+-- We ignore scratch/debug files prefixed with `_`.
+discoverProcessCases :: FilePath -> IO [FilePath]
+discoverProcessCases dir = do
+  files <- listDirectory dir
+  let luneFiles =
+        filter (\f -> ".lune" `isSuffixOf` f && not ("_" `isPrefixOf` f)) files
   pure $ map (dir </>) (sort luneFiles)
 
 data FmtCase = FmtCase
@@ -148,6 +161,28 @@ diffCmd ref new = ["diff", "-u", ref, new]
 rawOutput :: String -> LBS.ByteString
 rawOutput =
   LBS8.pack
+
+-- =============================================================================
+-- Process Tests
+-- =============================================================================
+
+processTest :: FilePath -> TestTree
+processTest file =
+  testCase (takeBaseName file) $ do
+    -- These tests use `sh`, `cat`, `sleep`, etc.
+    if os == "mingw32"
+      then pure ()
+      else do
+        luneBin <- getLuneBin
+        mRes <- timeout (10 * 1000 * 1000) (readProcessWithExitCode luneBin ["--run", file] "")
+        case mRes of
+          Nothing ->
+            assertFailure ("process test timed out: " <> file)
+          Just (ec, out, err) ->
+            case ec of
+              ExitSuccess -> pure ()
+              ExitFailure _ ->
+                assertFailure ("process test failed: " <> file <> "\n" <> err <> out)
 
 -- =============================================================================
 -- Parse Tests
