@@ -2,6 +2,7 @@ module Lune.Fiber exposing (
   Fiber,
   spawn,
   await,
+  awaitAny,
   yield
 )
 
@@ -26,6 +27,10 @@ spawn task =
 await : Fiber (Result e a) -> Task e a
 await fib =
   Task (prim_await fib)
+
+awaitAny : Fiber (Result e a) -> Fiber (Result e a) -> Task e a
+awaitAny a b =
+  Task (prim_awaitAny a b)
 
 yield : Task e Unit
 yield =

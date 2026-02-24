@@ -1,0 +1,33 @@
+module WithTimeoutPollSleep exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.IO as IO
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+crash : Task Unit Unit
+crash =
+  assertTrue False
+
+sleepLoop : Int -> Task Unit Unit
+sleepLoop n =
+  case prim_leInt n 0 of
+    True ->
+      Task.succeed unit
+    False ->
+      Task.then
+        (IO.sleepMs 1)
+        (sleepLoop (prim_subInt n 1))
+
+main : Task Unit Unit
+main =
+  do
+    r <- Task.withTimeout 50 (sleepLoop 10000)
+    case r of
+      Err _ -> Task.succeed unit
+      Ok _ -> crash
+

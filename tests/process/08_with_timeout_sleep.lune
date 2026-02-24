@@ -1,0 +1,23 @@
+module WithTimeoutSleep exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.IO as IO
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+crash : Task Unit Unit
+crash =
+  assertTrue False
+
+main : Task Unit Unit
+main =
+  do
+    r <- Task.withTimeout 50 (IO.sleepMs 200)
+    case r of
+      Err _ -> Task.succeed unit
+      Ok _ -> crash
+

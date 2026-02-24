@@ -9,7 +9,9 @@ module Lune.Task exposing (
   mapError,
   onError,
   attempt,
-  result
+  result,
+  Timeout(..),
+  withTimeout
 )
 
 {-| `Task e a` is the primary user-facing effect in Lune.
@@ -19,7 +21,11 @@ or succeed with a value `a`.
 -}
 
 import Lune.Prelude exposing (Task(..), Result(..))
+import Lune.Fiber as Fiber
 import Lune.IO as IO
+
+type Timeout =
+  Timeout
 
 succeed : a -> Task e a
 succeed a =
@@ -105,3 +111,15 @@ attempt task =
 result : Task e a -> Task x (Result e a)
 result task =
   onError (map Ok task) (\e -> succeed (Err e))
+
+withTimeout : Int -> Task e a -> Task e (Result Timeout a)
+withTimeout timeoutMs task =
+  do
+    t1 <- Fiber.spawn (map Ok task)
+    t2 <-
+      Fiber.spawn
+        ( then
+            (IO.sleepMs timeoutMs)
+            (succeed (Err Timeout))
+        )
+    Fiber.awaitAny t1 t2

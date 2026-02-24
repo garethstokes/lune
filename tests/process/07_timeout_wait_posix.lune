@@ -1,0 +1,35 @@
+module ProcessTimeoutWaitPosix exposing (main)
+
+import Lune.Prelude exposing (Bool(..), Result(..), Task, Unit, unit)
+import Lune.IO as IO
+import Lune.Process as Process exposing (Signal(..))
+import Lune.Task as Task
+
+assertTrue : Bool -> Task Unit Unit
+assertTrue b =
+  case b of
+    True -> Task.succeed unit
+
+unsafe : Task e a -> Task Unit a
+unsafe t =
+  do
+    r <- Task.fromIO (Task.attempt t)
+    case r of
+      Ok a -> Task.succeed a
+
+crash : Task Unit Unit
+crash =
+  assertTrue False
+
+main : Task Unit Unit
+main =
+  do
+    p <- unsafe (Process.spawn (Process.cmd "sh" |> Process.args ["-c", "sleep 10"]))
+    r <- unsafe (Task.withTimeout 100 (Process.wait p))
+    case r of
+      Ok _ -> crash
+      Err _ ->
+        do
+          _ <- unsafe (Process.kill p SigKill)
+          _ <- unsafe (Task.withTimeout 1000 (Process.wait p))
+          Task.succeed unit
