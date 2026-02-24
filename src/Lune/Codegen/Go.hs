@@ -504,7 +504,16 @@ isSupportedPrimitive name =
       , "prim_atomically"
       , "prim_spawn"
       , "prim_await"
+      , "prim_awaitAny"
       , "prim_yield"
+      , "prim_process_run"
+      , "prim_process_spawn"
+      , "prim_process_wait"
+      , "prim_process_kill"
+      , "prim_process_stdin_write"
+      , "prim_process_stdin_close"
+      , "prim_process_stdout_read"
+      , "prim_process_stderr_read"
       ]
 
 isConstructorName :: Text -> Bool

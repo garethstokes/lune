@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -203,6 +205,90 @@ type Task struct {
 	res  Value
 }
 
+type streamBuf struct {
+	mu   sync.Mutex
+	cond *sync.Cond
+	buf  []byte
+	eof  bool
+	err  error
+}
+
+func newStreamBuf() *streamBuf {
+	sb := &streamBuf{}
+	sb.cond = sync.NewCond(&sb.mu)
+	return sb
+}
+
+func (sb *streamBuf) appendBytes(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	sb.mu.Lock()
+	sb.buf = append(sb.buf, data...)
+	sb.cond.Broadcast()
+	sb.mu.Unlock()
+}
+
+func (sb *streamBuf) closeWithError(err error) {
+	sb.mu.Lock()
+	if sb.eof {
+		sb.mu.Unlock()
+		return
+	}
+	sb.eof = true
+	sb.err = err
+	sb.cond.Broadcast()
+	sb.mu.Unlock()
+}
+
+func (sb *streamBuf) closeEOF() {
+	sb.closeWithError(nil)
+}
+
+func (sb *streamBuf) readN(n int) (chunk []byte, eof bool, err error) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+
+	for len(sb.buf) == 0 && !sb.eof {
+		sb.cond.Wait()
+	}
+
+	if len(sb.buf) > 0 {
+		if n > len(sb.buf) {
+			n = len(sb.buf)
+		}
+		out := make([]byte, n)
+		copy(out, sb.buf[:n])
+		sb.buf = sb.buf[n:]
+		return out, false, nil
+	}
+
+	if sb.err != nil {
+		return nil, true, sb.err
+	}
+	return nil, true, nil
+}
+
+type exitInfo struct {
+	mu   sync.Mutex
+	done bool
+	code int
+	err  error
+	ch   chan struct{}
+}
+
+type Process struct {
+	cmd *exec.Cmd
+
+	stdinMu sync.Mutex
+	stdin   io.WriteCloser
+
+	stdout *streamBuf
+	stderr *streamBuf
+
+	exit exitInfo
+}
+
 func NewPrim(arity int, fn func([]Value) Value) Prim {
 	return Prim{Arity: arity, Fn: fn, Args: nil}
 }
@@ -341,12 +427,28 @@ func expectRune(v Value, ctx string) rune {
 	return r
 }
 
+func expectString(v Value, ctx string) string {
+	s, ok := v.(string)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected String, got %T", ctx, v))
+	}
+	return s
+}
+
 func expectBytes(v Value, ctx string) []byte {
 	bs, ok := v.([]byte)
 	if !ok {
 		panic(fmt.Sprintf("%s: expected Bytes, got %T", ctx, v))
 	}
 	return bs
+}
+
+func expectProcess(v Value, ctx string) *Process {
+	p, ok := v.(*Process)
+	if !ok {
+		panic(fmt.Sprintf("%s: expected Process, got %T", ctx, v))
+	}
+	return p
 }
 
 func expectSocket(v Value, ctx string) *Socket {
@@ -379,6 +481,34 @@ func resultOk(v Value) Value {
 
 func resultErr(msg string) Value {
 	return Con{Name: "Lune.Prelude.Err", Args: []Value{msg}}
+}
+
+func resultErrValue(v Value) Value {
+	return Con{Name: "Lune.Prelude.Err", Args: []Value{v}}
+}
+
+func processCon(name string) string {
+	return "Lune.Process." + name
+}
+
+func exitStatusValue(code int) Value {
+	return Con{Name: processCon("Exited"), Args: []Value{int64(code)}}
+}
+
+func procErrNotFound(program string) Value {
+	return Con{Name: processCon("NotFound"), Args: []Value{program}}
+}
+
+func procErrPermissionDenied(program string) Value {
+	return Con{Name: processCon("PermissionDenied"), Args: []Value{program}}
+}
+
+func procErrSpawnFailed(msg string) Value {
+	return Con{Name: processCon("SpawnFailed"), Args: []Value{msg}}
+}
+
+func procErrIoError(msg string) Value {
+	return Con{Name: processCon("IoError"), Args: []Value{msg}}
 }
 
 func decodeUtf8Lenient(bs []byte) string {
@@ -1370,6 +1500,264 @@ func Builtin(name string) Value {
 				return t.res
 			})
 		})
+	case "prim_awaitAny":
+		return NewPrim(2, func(args []Value) Value {
+			t1, ok := args[0].(*Task)
+			if !ok {
+				panic(fmt.Sprintf("prim_awaitAny: expected Task, got %T", args[0]))
+			}
+			t2, ok := args[1].(*Task)
+			if !ok {
+				panic(fmt.Sprintf("prim_awaitAny: expected Task, got %T", args[1]))
+			}
+			return IO(func() Value {
+				select {
+				case <-t1.done:
+					return t1.res
+				case <-t2.done:
+					return t2.res
+				}
+			})
+		})
+	case "prim_process_run":
+		return NewPrim(1, func(args []Value) Value {
+			spec, msg, ok := cmdSpecFromValue(args[0])
+			if !ok {
+				return IO(func() Value { return resultErrValue(procErrSpawnFailed(msg)) })
+			}
+
+			return IO(func() Value {
+				cmd := exec.Command(spec.program, spec.args...)
+				if spec.cwd != nil {
+					cmd.Dir = *spec.cwd
+				}
+				if env := mkProcessEnv(spec); env != nil {
+					cmd.Env = env
+				}
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+
+				err := cmd.Run()
+				if err == nil {
+					return resultOk(exitStatusValue(0))
+				}
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return resultOk(exitStatusValue(exitErr.ExitCode()))
+				}
+				return resultErrValue(spawnErrorToProcessError(spec.program, err))
+			})
+		})
+	case "prim_process_spawn":
+		return NewPrim(1, func(args []Value) Value {
+			spec, msg, ok := cmdSpecFromValue(args[0])
+			if !ok {
+				return IO(func() Value { return resultErrValue(procErrSpawnFailed(msg)) })
+			}
+
+			return IO(func() Value {
+				cmd := exec.Command(spec.program, spec.args...)
+				if spec.cwd != nil {
+					cmd.Dir = *spec.cwd
+				}
+				if env := mkProcessEnv(spec); env != nil {
+					cmd.Env = env
+				}
+
+				stdin, err := cmd.StdinPipe()
+				if err != nil {
+					return resultErrValue(procErrSpawnFailed(err.Error()))
+				}
+				stdout, err := cmd.StdoutPipe()
+				if err != nil {
+					_ = stdin.Close()
+					return resultErrValue(procErrSpawnFailed(err.Error()))
+				}
+				stderr, err := cmd.StderrPipe()
+				if err != nil {
+					_ = stdin.Close()
+					_ = stdout.Close()
+					return resultErrValue(procErrSpawnFailed(err.Error()))
+				}
+
+				if err := cmd.Start(); err != nil {
+					_ = stdin.Close()
+					_ = stdout.Close()
+					_ = stderr.Close()
+					return resultErrValue(spawnErrorToProcessError(spec.program, err))
+				}
+
+				p := &Process{
+					cmd:    cmd,
+					stdin:  stdin,
+					stdout: newStreamBuf(),
+					stderr: newStreamBuf(),
+					exit:   exitInfo{ch: make(chan struct{})},
+				}
+
+				go drainReader(stdout, p.stdout)
+				go drainReader(stderr, p.stderr)
+				go func() {
+					waitErr := cmd.Wait()
+					code := 0
+					var ioErr error
+					if waitErr != nil {
+						if exitErr, ok := waitErr.(*exec.ExitError); ok {
+							code = exitErr.ExitCode()
+							ioErr = nil
+						} else {
+							code = 1
+							ioErr = waitErr
+						}
+					}
+
+					p.exit.mu.Lock()
+					p.exit.done = true
+					p.exit.code = code
+					p.exit.err = ioErr
+					close(p.exit.ch)
+					p.exit.mu.Unlock()
+				}()
+
+				return resultOk(p)
+			})
+		})
+	case "prim_process_wait":
+		return NewPrim(1, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_wait")
+			return IO(func() Value {
+				p.exit.mu.Lock()
+				done := p.exit.done
+				ch := p.exit.ch
+				p.exit.mu.Unlock()
+
+				if !done && ch != nil {
+					<-ch
+				}
+
+				p.exit.mu.Lock()
+				code := p.exit.code
+				waitErr := p.exit.err
+				p.exit.mu.Unlock()
+
+				if waitErr != nil {
+					return resultErrValue(procErrIoError(waitErr.Error()))
+				}
+				return resultOk(exitStatusValue(code))
+			})
+		})
+	case "prim_process_kill":
+		return NewPrim(2, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_kill")
+			sigName, ok := signalFromValue(args[1])
+			if !ok {
+				panic(fmt.Sprintf("prim_process_kill: expected Signal, got %T", args[1]))
+			}
+			return IO(func() Value {
+				if p.cmd == nil || p.cmd.Process == nil {
+					return resultErrValue(procErrIoError("process not started"))
+				}
+
+				var err error
+				switch sigName {
+				case "SigInt":
+					err = p.cmd.Process.Signal(os.Interrupt)
+				case "SigTerm":
+					err = p.cmd.Process.Kill()
+				case "SigKill":
+					err = p.cmd.Process.Kill()
+				default:
+					err = p.cmd.Process.Kill()
+				}
+
+				if err != nil && !errors.Is(err, os.ErrProcessDone) {
+					return resultErrValue(procErrIoError(err.Error()))
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_process_stdin_write":
+		return NewPrim(2, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_stdin_write")
+			bs := expectBytes(args[1], "prim_process_stdin_write")
+			return IO(func() Value {
+				p.stdinMu.Lock()
+				w := p.stdin
+				if w == nil {
+					p.stdinMu.Unlock()
+					return resultErrValue(procErrIoError("stdin is closed"))
+				}
+				err := writeAll(w, bs)
+				p.stdinMu.Unlock()
+
+				if err != nil {
+					return resultErrValue(procErrIoError(err.Error()))
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_process_stdin_close":
+		return NewPrim(1, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_stdin_close")
+			return IO(func() Value {
+				p.stdinMu.Lock()
+				w := p.stdin
+				p.stdin = nil
+				p.stdinMu.Unlock()
+
+				if w == nil {
+					return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+				}
+				if err := w.Close(); err != nil {
+					return resultErrValue(procErrIoError(err.Error()))
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Unit", Args: nil})
+			})
+		})
+	case "prim_process_stdout_read":
+		return NewPrim(2, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_stdout_read")
+			n64 := expectInt64(args[1], "prim_process_stdout_read")
+			return IO(func() Value {
+				if n64 <= 0 {
+					return resultOk(Con{Name: "Lune.Prelude.Just", Args: []Value{[]byte{}}})
+				}
+				n := int(n64)
+				if n < 0 {
+					n = 0
+				}
+				chunk, eof, err := p.stdout.readN(n)
+				if err != nil {
+					return resultErrValue(procErrIoError(err.Error()))
+				}
+				if eof {
+					return resultOk(Con{Name: "Lune.Prelude.Nothing", Args: nil})
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Just", Args: []Value{chunk}})
+			})
+		})
+	case "prim_process_stderr_read":
+		return NewPrim(2, func(args []Value) Value {
+			p := expectProcess(args[0], "prim_process_stderr_read")
+			n64 := expectInt64(args[1], "prim_process_stderr_read")
+			return IO(func() Value {
+				if n64 <= 0 {
+					return resultOk(Con{Name: "Lune.Prelude.Just", Args: []Value{[]byte{}}})
+				}
+				n := int(n64)
+				if n < 0 {
+					n = 0
+				}
+				chunk, eof, err := p.stderr.readN(n)
+				if err != nil {
+					return resultErrValue(procErrIoError(err.Error()))
+				}
+				if eof {
+					return resultOk(Con{Name: "Lune.Prelude.Nothing", Args: nil})
+				}
+				return resultOk(Con{Name: "Lune.Prelude.Just", Args: []Value{chunk}})
+			})
+		})
 	case "prim_yield":
 		return IO(func() Value {
 			runtime.Gosched()
@@ -1419,6 +1807,196 @@ func listFromSlice(items []Value) Value {
 		out = Con{Name: "Lune.Prelude.Cons", Args: []Value{items[i], out}}
 	}
 	return out
+}
+
+// =============================================================================
+// Process helpers
+// =============================================================================
+
+type cmdEnvPair struct {
+	key string
+	val string
+}
+
+type cmdSpec struct {
+	program  string
+	args     []string
+	cwd      *string
+	env      []cmdEnvPair
+	clearEnv bool
+}
+
+func cmdSpecFromValue(v Value) (cmdSpec, string, bool) {
+	rec, ok := v.(Record)
+	if !ok {
+		return cmdSpec{}, "Cmd: expected record", false
+	}
+
+	progAny, ok := rec["program"]
+	if !ok {
+		return cmdSpec{}, "Cmd.program: missing", false
+	}
+	prog, ok := progAny.(string)
+	if !ok {
+		return cmdSpec{}, "Cmd.program: expected String", false
+	}
+
+	argsAny, ok := rec["args"]
+	if !ok {
+		return cmdSpec{}, "Cmd.args: missing", false
+	}
+	argVals := sliceFromList(argsAny, "Cmd.args")
+	args := make([]string, 0, len(argVals))
+	for _, aAny := range argVals {
+		a, ok := aAny.(string)
+		if !ok {
+			return cmdSpec{}, "Cmd.args: expected String", false
+		}
+		args = append(args, a)
+	}
+
+	var cwd *string
+	cwdAny, ok := rec["cwd"]
+	if ok {
+		if _, ok := MatchCon(cwdAny, "Lune.Prelude.Nothing", 0); ok {
+			cwd = nil
+		} else if justArgs, ok := MatchCon(cwdAny, "Lune.Prelude.Just", 1); ok {
+			s, ok := justArgs[0].(string)
+			if !ok {
+				return cmdSpec{}, "Cmd.cwd: expected Maybe String", false
+			}
+			cwd = &s
+		} else {
+			return cmdSpec{}, "Cmd.cwd: expected Maybe String", false
+		}
+	}
+
+	var env []cmdEnvPair
+	envAny, ok := rec["env"]
+	if ok {
+		envVals := sliceFromList(envAny, "Cmd.env")
+		env = make([]cmdEnvPair, 0, len(envVals))
+		for _, item := range envVals {
+			pairArgs, ok := MatchCon(item, "Lune.Prelude.Pair", 2)
+			if !ok {
+				return cmdSpec{}, "Cmd.env: expected List (String, String)", false
+			}
+			k, ok := pairArgs[0].(string)
+			if !ok {
+				return cmdSpec{}, "Cmd.env: expected List (String, String)", false
+			}
+			val, ok := pairArgs[1].(string)
+			if !ok {
+				return cmdSpec{}, "Cmd.env: expected List (String, String)", false
+			}
+			env = append(env, cmdEnvPair{key: k, val: val})
+		}
+	}
+
+	clearEnv := false
+	clearAny, ok := rec["clearEnv"]
+	if ok {
+		con, ok := clearAny.(Con)
+		if !ok {
+			return cmdSpec{}, "Cmd.clearEnv: expected Bool", false
+		}
+		switch con.Name {
+		case "Lune.Prelude.True":
+			clearEnv = true
+		case "Lune.Prelude.False":
+			clearEnv = false
+		default:
+			return cmdSpec{}, "Cmd.clearEnv: expected Bool", false
+		}
+	}
+
+	return cmdSpec{
+		program:  prog,
+		args:     args,
+		cwd:      cwd,
+		env:      env,
+		clearEnv: clearEnv,
+	}, "", true
+}
+
+func mkProcessEnv(spec cmdSpec) []string {
+	if spec.clearEnv {
+		out := make([]string, 0, len(spec.env))
+		for _, kv := range spec.env {
+			out = append(out, kv.key+"="+kv.val)
+		}
+		return out
+	}
+
+	if len(spec.env) == 0 {
+		return nil
+	}
+
+	base := os.Environ()
+	merged := make(map[string]string, len(base)+len(spec.env))
+	for _, kv := range base {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			merged[k] = v
+		}
+	}
+	for _, kv := range spec.env {
+		merged[kv.key] = kv.val
+	}
+
+	out := make([]string, 0, len(merged))
+	for k, v := range merged {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+func spawnErrorToProcessError(program string, err error) Value {
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		return procErrNotFound(program)
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return procErrPermissionDenied(program)
+	}
+	return procErrSpawnFailed(err.Error())
+}
+
+func drainReader(rc io.ReadCloser, buf *streamBuf) {
+	defer rc.Close()
+	tmp := make([]byte, 4096)
+	for {
+		n, err := rc.Read(tmp)
+		if n > 0 {
+			buf.appendBytes(tmp[:n])
+		}
+		if err != nil {
+			if err == io.EOF {
+				buf.closeEOF()
+			} else {
+				buf.closeWithError(err)
+			}
+			return
+		}
+	}
+}
+
+func signalFromValue(v Value) (string, bool) {
+	con, ok := v.(Con)
+	if !ok {
+		return "", false
+	}
+	if len(con.Args) != 0 {
+		return "", false
+	}
+	switch con.Name {
+	case "Lune.Process.SigTerm":
+		return "SigTerm", true
+	case "Lune.Process.SigKill":
+		return "SigKill", true
+	case "Lune.Process.SigInt":
+		return "SigInt", true
+	default:
+		return "", false
+	}
 }
 
 func parseJson(input string) (*jsonValue, error) {

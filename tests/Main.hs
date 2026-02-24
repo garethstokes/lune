@@ -25,7 +25,7 @@ import Data.Char (isSpace, toLower, ord)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing, listDirectory, removeDirectoryRecursive)
+import System.Directory (createDirectoryIfMissing, findExecutable, listDirectory, removeDirectoryRecursive)
 import System.Directory (getTemporaryDirectory, removeFile, getCurrentDirectory)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
@@ -67,6 +67,11 @@ main = do
 
       parseExamples = filter (not . shouldSkipInteractive) examples
       evalExamples = filter (not . shouldSkipInteractive) examples
+      goProcessCases =
+        [ "tests/process/04_large_output_no_deadlock_posix.lune"
+        , "tests/process/05_stdin_roundtrip_posix.lune"
+        , "tests/process/07_timeout_wait_posix.lune"
+        ]
 
   -- Build test tree
   defaultMain $ testGroup "Lune Golden Tests"
@@ -78,6 +83,7 @@ main = do
     , testGroup "Fmt Idempotent" (map fmtIdempotentTest fmtCases)
     , testGroup "Fmt Check" (map fmtCheckTest fmtCases)
     , testGroup "Process" (map processTest processCases)
+    , testGroup "Process Go" (map processGoTest goProcessCases)
     , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, unicodeHoverIntegrationTest, hoverRetentionIntegrationTest, vfsImportPropagationTest]
     ]
 
@@ -183,6 +189,39 @@ processTest file =
               ExitSuccess -> pure ()
               ExitFailure _ ->
                 assertFailure ("process test failed: " <> file <> "\n" <> err <> out)
+
+processGoTest :: FilePath -> TestTree
+processGoTest file =
+  testCase (takeBaseName file) $ do
+    if os == "mingw32"
+      then pure ()
+      else do
+        mGo <- findExecutable "go"
+        case mGo of
+          Nothing -> pure ()
+          Just _ -> do
+            luneBin <- getLuneBin
+            withTempDirectory ("lune-process-go-" <> takeBaseName file) $ \tmpDir -> do
+              let outPath = tmpDir </> takeBaseName file
+              mBuild <- timeout (120 * 1000 * 1000) (readProcessWithExitCode luneBin ["build", file, "-o", outPath, "--target", "go"] "")
+              case mBuild of
+                Nothing ->
+                  assertFailure ("go build timed out: " <> file)
+                Just (ec, out, err) ->
+                  case ec of
+                    ExitSuccess -> pure ()
+                    ExitFailure _ ->
+                      assertFailure ("go build failed: " <> file <> "\n" <> err <> out)
+
+              mRun <- timeout (10 * 1000 * 1000) (readProcessWithExitCode outPath [] "")
+              case mRun of
+                Nothing ->
+                  assertFailure ("go run timed out: " <> file)
+                Just (ec, out, err) ->
+                  case ec of
+                    ExitSuccess -> pure ()
+                    ExitFailure _ ->
+                      assertFailure ("go binary failed: " <> file <> "\n" <> err <> out)
 
 -- =============================================================================
 -- Parse Tests
