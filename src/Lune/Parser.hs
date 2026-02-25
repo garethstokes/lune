@@ -1174,3 +1174,22 @@ skipNewlines =
     --     -- comment here
     --     x = 1
     whitespaceConsumer = void $ some (char '\n' <|> char ' ' <|> char '\t')
+
+-- ===== Comment-collecting functions (used after Task 6 updates Parser type) =====
+
+-- | Collect a line comment and add to pending comments
+-- Note: This placeholder version just skips comments. After Task 6 updates
+-- the Parser type to include StateT, this will be updated to actually collect.
+collectLineComment :: Parser ()
+collectLineComment = L.skipLineComment "--"
+
+-- | Collect a block comment and add to pending comments
+-- Note: Placeholder - will be updated in Task 6
+collectBlockComment :: Parser ()
+collectBlockComment = L.skipBlockCommentNested "{-" "-}"
+
+-- | Space consumer that will collect comments (placeholder)
+-- Note: Currently identical to scn. After Task 6, this will use
+-- collectLineComment and collectBlockComment with state.
+scCollect :: Parser ()
+scCollect = L.space space1 collectLineComment collectBlockComment
