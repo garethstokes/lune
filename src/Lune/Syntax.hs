@@ -43,7 +43,7 @@ data ExposeMembers
 
 data Decl
   = DeclTypeSig Text QualType
-  | DeclValue Text [Pattern] Expr
+  | DeclValue Text [Located Pattern] (Located Expr)
   | DeclType Text [Text] [TypeCtor]
   | DeclTypeAnn [Annotation] Text [Text] [TypeCtor]  -- ^ Annotations, name, type params, constructors
   | DeclTypeAlias [Annotation] Text [Text] Type  -- ^ Annotations, name, type params, body
@@ -94,7 +94,7 @@ data ClassMethodSig = ClassMethodSig
 
 data InstanceMethodDef = InstanceMethodDef
   { instanceMethodName :: Text
-  , instanceMethodExpr :: Expr
+  , instanceMethodExpr :: Located Expr
   }
   deriving (Show)
 
@@ -125,19 +125,19 @@ data TemplatePart
   | TemplateHole (Located Expr)
   deriving (Show)
 
-data Alt = Alt Pattern Expr
+data Alt = Alt (Located Pattern) (Located Expr)
   deriving (Show)
 
 data Pattern
   = PVar Text
   | PWildcard
-  | PCon Text [Pattern]
+  | PCon Text [Located Pattern]
   | PString Text
   deriving (Show)
 
 data Stmt
-  = BindStmt Pattern Expr
-  | DiscardBindStmt Expr
-  | LetStmt Text Expr
-  | ExprStmt Expr
+  = BindStmt (Located Pattern) (Located Expr)
+  | DiscardBindStmt (Located Expr)
+  | LetStmt Text (Located Expr)
+  | ExprStmt (Located Expr)
   deriving (Show)
