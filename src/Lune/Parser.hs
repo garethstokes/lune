@@ -195,7 +195,7 @@ typeSigDecl = do
 valueDecl :: Parser Decl
 valueDecl = do
   name <- valueName
-  args <- many patternAtom
+  args <- many parseLocatedPattern
   symbol "="
   scnOptional
   expr <- parseExpr
@@ -211,10 +211,11 @@ annotation = do
   pure Annotation { annName = name, annArgs = args }
 
 -- | Parse annotation arguments (a space-separated expression)
+-- Note: Annotations use non-located Expr since they're metadata
 annotationArgs :: Parser Expr
 annotationArgs = do
   atoms <- some annotationAtom
-  pure (foldl1 App atoms)
+  pure (foldl1 (\f x -> App (noLoc f) (noLoc x)) atoms)
 
 -- | Parse a single atom in annotation arguments
 annotationAtom :: Parser Expr
@@ -393,7 +394,7 @@ instanceMethodDef = do
   name <- valueName
   symbol "="
   scnOptional
-  expr <- parseExpr
+  expr <- parseExpr  -- parseExpr now returns Located Expr
   pure (InstanceMethodDef name expr)
 
 parseType :: Parser Type
@@ -489,7 +490,7 @@ typeAtomWith spaceConsumer = typeAtom
       pure Annotation { annName = annName, annArgs = annArg }
     fieldAnnotationArgs = do
       atoms <- some fieldAnnotationAtom
-      pure (foldl1 App atoms)
+      pure (foldl1 (\f x -> App (noLoc f) (noLoc x)) atoms)
     fieldAnnotationAtom = choice
       [ Var <$> try (lexeme tcon)  -- Type names
       , StringLit . T.pack <$> lexeme stringLiteral  -- String literals
@@ -497,7 +498,7 @@ typeAtomWith spaceConsumer = typeAtom
       , Var <$> lexeme ident  -- Regular identifiers
       ]
 
-parseExpr :: Parser Expr
+parseExpr :: Parser (Located Expr)
 parseExpr =
   scnOptional
     *> choice
@@ -509,7 +510,7 @@ parseExpr =
 
 -- | Parse backward pipe operator (<|), right-associative, lowest precedence.
 -- f <| g <| x  parses as  App (App (Var "<|") f) (App (App (Var "<|") g) x)
-parseBackwardPipe :: Parser Expr
+parseBackwardPipe :: Parser (Located Expr)
 parseBackwardPipe = do
   first <- parseForwardPipe
   -- NOTE: RHS uses parseExpr (not parseForwardPipe) so that constructs like
@@ -521,37 +522,37 @@ parseBackwardPipe = do
   -- Right-associative: f <| x becomes App (App (Var "<|") f) x
   case rest of
     [] -> pure first
-    _  -> pure (foldr1 (\f x -> App (App (Var "<|") f) x) (first : rest))
+    _  -> pure (foldr1 (\f x -> mapLoc (\_ -> App (noLoc (App (noLoc (Var "<|")) f)) x) x) (first : rest))
   where
     infixOp op = scnOptional *> symbol op *> scnOptional
 
 -- | Parse forward pipe operator (|>), left-associative.
 -- x |> f |> g  parses as  App (App (Var "|>") (App (App (Var "|>") x) f)) g
-parseForwardPipe :: Parser Expr
+parseForwardPipe :: Parser (Located Expr)
 parseForwardPipe = do
   first <- parseAppendExpr
   rest <- many (try (infixOp "|>" *> parseAppendExpr))
   -- Left-associative: x |> f becomes App (App (Var "|>") x) f
-  pure (foldl (\acc f -> App (App (Var "|>") acc) f) first rest)
+  pure (foldl (\acc f -> mapLoc (\_ -> App (noLoc (App (noLoc (Var "|>")) acc)) f) f) first rest)
   where
     infixOp op = scnOptional *> symbol op *> scnOptional
 
 -- | Parse semigroup append operator (<>), left-associative.
-parseAppendExpr :: Parser Expr
+parseAppendExpr :: Parser (Located Expr)
 parseAppendExpr = do
   first <- parseAppExpr
   rest <- many (try (infixOp "<>" *> parseAppExpr))
-  pure (foldl (\acc x -> App (App (Var "<>") acc) x) first rest)
+  pure (foldl (\acc x -> mapLoc (\_ -> App (noLoc (App (noLoc (Var "<>")) acc)) x) x) first rest)
   where
     infixOp op = scnOptional *> symbol op *> scnOptional
 
-parseAppExpr :: Parser Expr
+parseAppExpr :: Parser (Located Expr)
 parseAppExpr = do
   ref <- L.indentLevel  -- capture reference BEFORE any whitespace
   scnOptional           -- allow newline before first term (for multi-line binding RHS)
   first <- parseTerm
   rest <- many (try (continuationTerm ref))
-  pure (foldl1 App (first : rest))
+  pure (foldl1 (\f x -> mapLoc (\_ -> App f x) x) (first : rest))
   where
     -- Only parse continuation terms if they're on the same line OR indented more than the start
     continuationTerm ref = do
@@ -575,32 +576,32 @@ parseAppExpr = do
       _ <- symbol "->"
       pure ()
 
-parseTerm :: Parser Expr
+parseTerm :: Parser (Located Expr)
 parseTerm = do
   atom <- parseAtom
   parseFieldAccess atom
 
-parseFieldAccess :: Expr -> Parser Expr
+parseFieldAccess :: Located Expr -> Parser (Located Expr)
 parseFieldAccess expr = do
   next <- optional (symbol "." *> identifier)
   case next of
     Nothing -> pure expr
-    Just field -> parseFieldAccess (FieldAccess expr field)
+    Just field -> parseFieldAccess (mapLoc (\_ -> FieldAccess expr field) expr)
 
-parseAtom :: Parser Expr
+parseAtom :: Parser (Located Expr)
 parseAtom =
   choice
     [ try parseDo
     , parseRecord
     , parseListLit
-    , try (Var <$> operatorName)
+    , try (located (Var <$> operatorName))
     , parenExpr
-    , try (lexeme parseMultilineTemplateLiteral)
-    , lexeme parseStringTemplateLiteral
-    , CharLit <$> lexeme charLiteral
-    , try (FloatLit <$> lexeme L.float)
-    , IntLit <$> lexeme L.decimal
-    , Var <$> identifier
+    , try (located (lexeme parseMultilineTemplateLiteral))
+    , located (lexeme parseStringTemplateLiteral)
+    , located (CharLit <$> lexeme charLiteral)
+    , try (located (FloatLit <$> lexeme L.float))
+    , located (IntLit <$> lexeme L.decimal)
+    , located (Var <$> identifier)
     ]
   where
     parenExpr = do
@@ -663,7 +664,7 @@ parseStringTemplateLiteral = do
     interpolationPart = do
       _ <- string "${"
       scnOptional
-      expr <- parseExpr
+      expr <- parseExpr  -- parseExpr now returns Located Expr
       scnOptional
       _ <- char '}'
       pure (TemplateHole expr)
@@ -781,8 +782,8 @@ mergeTemplateTextParts =
         _ ->
           go (p : acc) ps
 
-parseListLit :: Parser Expr
-parseListLit = do
+parseListLit :: Parser (Located Expr)
+parseListLit = located $ do
   _ <- symbol "["
   scnOptional
   elements <- parseExpr `sepBy` listSep
@@ -792,29 +793,34 @@ parseListLit = do
   where
     listSep = try (scnOptional *> symbol "," <* scnOptional)
 
-desugarListExpr :: [Expr] -> Expr
+desugarListExpr :: [Located Expr] -> Expr
 desugarListExpr [] = Var "Nil"
-desugarListExpr (x:xs) = App (App (Var "Cons") x) (desugarListExpr xs)
+desugarListExpr (x:xs) = App (noLoc (App (noLoc (Var "Cons")) x)) (noLoc (desugarListExpr xs))
 
-desugarTupleExpr :: [Expr] -> Expr
+desugarTupleExpr :: [Located Expr] -> Located Expr
 desugarTupleExpr exprs =
-  case length exprs of
-    2 -> foldl App (Var "Pair") exprs
-    3 -> foldl App (Var "Triple") exprs
-    4 -> foldl App (Var "Quad") exprs
-    5 -> foldl App (Var "Quint") exprs
-    n -> error $ "Tuples must have 2-5 elements, got " ++ show n
+  case exprs of
+    [] -> error "Tuples must have 2-5 elements, got 0"
+    (x:_) ->
+      let n = length exprs
+          ctorName = case n of
+            2 -> "Pair"
+            3 -> "Triple"
+            4 -> "Quad"
+            5 -> "Quint"
+            _ -> error $ "Tuples must have 2-5 elements, got " ++ show n
+      in mapLoc (\_ -> foldl (\acc e -> App (noLoc acc) e) (Var ctorName) exprs) x
 
-parseLambda :: Parser Expr
-parseLambda = do
+parseLambda :: Parser (Located Expr)
+parseLambda = located $ do
   symbol "\\"
-  args <- some patternAtom
+  args <- some parseLocatedPattern
   symbol "->"
   scnOptional
   Lam args <$> parseExpr
 
-parseLetIn :: Parser Expr
-parseLetIn = do
+parseLetIn :: Parser (Located Expr)
+parseLetIn = located $ do
   ref0 <- L.indentLevel
   let ref = mkPos (unPos ref0)
   keyword "let"
@@ -848,7 +854,7 @@ parseLetIn = do
       scnOptional
       body <- parseExpr
       let binds = firstBind : restBinds
-      pure (foldr (\(n, rhs) acc -> LetIn n rhs acc) body binds)
+      pure (foldr (\(n, rhs) acc -> LetIn n rhs (noLoc acc)) (unLoc body) binds)
 
     parseLetBindingIndented ref =
       L.indentGuard scIndent GT ref *> parseLetBinding
@@ -860,8 +866,8 @@ parseLetIn = do
       rhs <- parseExpr
       pure (name, rhs)
 
-parseCase :: Parser Expr
-parseCase = do
+parseCase :: Parser (Located Expr)
+parseCase = located $ do
   ref0 <- L.indentLevel
   let ref = mkPos (unPos ref0)
   keyword "case"
@@ -874,27 +880,27 @@ parseCase = do
   let alts = firstAlt : restAlts
   pure (Case scrut alts)
 
-parseCaseAltIndented :: P.Pos -> Parser Alt
+parseCaseAltIndented :: P.Pos -> Parser (Located Alt)
 parseCaseAltIndented ref = do
   _ <- L.indentGuard scIndent GT ref
   altRef0 <- L.indentLevel
   let altRef = mkPos (unPos altRef0)
   parseCaseAltFrom altRef
 
-parseCaseAltFrom :: P.Pos -> Parser Alt
-parseCaseAltFrom altRef = do
-  pat <- parsePattern
+parseCaseAltFrom :: P.Pos -> Parser (Located Alt)
+parseCaseAltFrom altRef = located $ do
+  pat <- parseLocatedPattern
   symbol "->"
   Alt pat <$> parseCaseRhs altRef
 
-parseCaseRhs :: P.Pos -> Parser Expr
+parseCaseRhs :: P.Pos -> Parser (Located Expr)
 parseCaseRhs altRef =
   choice
     [ try (parseInlineDo altRef)
     , scnOptional *> parseExpr
     ]
 
-parseInlineDo :: P.Pos -> Parser Expr
+parseInlineDo :: P.Pos -> Parser (Located Expr)
 parseInlineDo altRef = do
   startLine <- P.sourceLine <$> P.getSourcePos
   sc
@@ -903,8 +909,8 @@ parseInlineDo altRef = do
     then parseDoFrom altRef
     else empty
 
-parseDo :: Parser Expr
-parseDo = do
+parseDo :: Parser (Located Expr)
+parseDo = located $ do
   ref0 <- L.indentLevel
   let ref = mkPos (unPos ref0)
   keyword "do"
@@ -913,30 +919,30 @@ parseDo = do
   restStmts <- many (try (skipNewlines *> parseIndentedStmt ref))
   pure (DoBlock (firstStmt : restStmts))
 
-parseDoFrom :: P.Pos -> Parser Expr
-parseDoFrom ref = do
+parseDoFrom :: P.Pos -> Parser (Located Expr)
+parseDoFrom ref = located $ do
   keyword "do"
   skipNewlines
   firstStmt <- parseIndentedStmt ref
   restStmts <- many (try (skipNewlines *> parseIndentedStmt ref))
   pure (DoBlock (firstStmt : restStmts))
 
-parseIndentedStmt :: P.Pos -> Parser Stmt
+parseIndentedStmt :: P.Pos -> Parser (Located Stmt)
 parseIndentedStmt ref =
   L.indentGuard scIndent GT ref *> parseDoStmt
 
-parseDoStmt :: Parser Stmt
-parseDoStmt = do
+parseDoStmt :: Parser (Located Stmt)
+parseDoStmt = located $ do
   stmt <- choice [try bindStmt, try letStmt, ExprStmt <$> parseExpr]
   pure stmt
 
 bindStmt :: Parser Stmt
 bindStmt = do
-  pat <- parsePattern
+  pat <- parseLocatedPattern
   symbol "<-"
   rhs <- parseExpr
   pure $
-    case pat of
+    case unLoc pat of
       PWildcard -> DiscardBindStmt rhs
       _ -> BindStmt pat rhs
 
@@ -950,6 +956,9 @@ letStmt = do
 
 parsePattern :: Parser Pattern
 parsePattern = patternAtom
+
+parseLocatedPattern :: Parser (Located Pattern)
+parseLocatedPattern = located patternAtom
 
 patternAtom :: Parser Pattern
 patternAtom =
@@ -965,30 +974,30 @@ patternAtom =
     parenPattern = do
       _ <- symbol "("
       scnOptional
-      first <- parsePattern
-      rest <- many (try (scnOptional *> symbol "," *> scnOptional *> parsePattern))
+      first <- parseLocatedPattern
+      rest <- many (try (scnOptional *> symbol "," *> scnOptional *> parseLocatedPattern))
       scnOptional
       _ <- symbol ")"
       case rest of
-        [] -> pure first  -- parenthesized pattern
+        [] -> pure (unLoc first)  -- parenthesized pattern
         _  -> pure (desugarTuplePattern (first : rest))
 
 parseListPattern :: Parser Pattern
 parseListPattern = do
   _ <- symbol "["
   scnOptional
-  elements <- patternAtom `sepBy` listSep
+  elements <- parseLocatedPattern `sepBy` listSep
   scnOptional
   _ <- symbol "]"
   pure (desugarListPattern elements)
   where
     listSep = try (scnOptional *> symbol "," <* scnOptional)
 
-desugarListPattern :: [Pattern] -> Pattern
+desugarListPattern :: [Located Pattern] -> Pattern
 desugarListPattern [] = PCon "Nil" []
-desugarListPattern (x:xs) = PCon "Cons" [x, desugarListPattern xs]
+desugarListPattern (x:xs) = PCon "Cons" [x, noLoc (desugarListPattern xs)]
 
-desugarTuplePattern :: [Pattern] -> Pattern
+desugarTuplePattern :: [Located Pattern] -> Pattern
 desugarTuplePattern pats =
   case length pats of
     2 -> PCon "Pair" pats
@@ -1009,11 +1018,11 @@ desugarTupleType types =
 conPattern :: Parser Pattern
 conPattern = do
   name <- typeConstructor
-  args <- many patternAtom
+  args <- many parseLocatedPattern
   pure (PCon name args)
 
-parseRecord :: Parser Expr
-parseRecord = between (symbol "{") (symbol "}") recordBody
+parseRecord :: Parser (Located Expr)
+parseRecord = located $ between (symbol "{") (symbol "}") recordBody
   where
     recordBody = do
       scnOptional
@@ -1023,7 +1032,7 @@ parseRecord = between (symbol "{") (symbol "}") recordBody
       pure $
         case base of
           Nothing -> RecordLiteral fields
-          Just b -> RecordUpdate (Var b) fields
+          Just b -> RecordUpdate (noLoc (Var b)) fields
     fieldSep = try (scnOptional *> symbol "," <* scnOptional)
     recordField = do
       name <- identifier
