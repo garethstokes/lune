@@ -105,14 +105,14 @@ data Expr
   | IntLit Integer
   | FloatLit Double
   | CharLit Char
-  | App Expr Expr
-  | Lam [Pattern] Expr
-  | LetIn Text Expr Expr
-  | Case Expr [Alt]
-  | DoBlock [Stmt]
-  | RecordLiteral [(Text, Expr)]
-  | RecordUpdate Expr [(Text, Expr)]
-  | FieldAccess Expr Text
+  | App (Located Expr) (Located Expr)
+  | Lam [Located Pattern] (Located Expr)
+  | LetIn Text (Located Expr) (Located Expr)
+  | Case (Located Expr) [Located Alt]
+  | DoBlock [Located Stmt]
+  | RecordLiteral [(Text, Located Expr)]
+  | RecordUpdate (Located Expr) [(Text, Located Expr)]
+  | FieldAccess (Located Expr) Text
   deriving (Show)
 
 data TemplateFlavor
@@ -122,7 +122,7 @@ data TemplateFlavor
 
 data TemplatePart
   = TemplateText Text
-  | TemplateHole Expr
+  | TemplateHole (Located Expr)
   deriving (Show)
 
 data Alt = Alt Pattern Expr
