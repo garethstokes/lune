@@ -63,7 +63,7 @@ generateTableRef :: Text -> [Decl]
 generateTableRef tableName =
   [ DeclTypeSig tableName (QualType [] (TypeCon "Table"))
   , DeclValue tableName []
-      (App (Var "table") (StringLit tableName))
+      (noLoc (App (noLoc (Var "table")) (noLoc (StringLit tableName))))
   ]
 
 -- | Generate field reference
@@ -76,7 +76,7 @@ generateFieldRef tableName (fieldName, fieldType, _anns) =
   in
   [ DeclTypeSig refName (QualType [] fieldTypeWrapped)
   , DeclValue refName []
-      (App (App (Var "field") (Var tableName)) (StringLit fieldName))
+      (noLoc (App (noLoc (App (noLoc (Var "field")) (noLoc (Var tableName)))) (noLoc (StringLit fieldName))))
   ]
 
 -- | Generate decoder
@@ -91,26 +91,26 @@ generateDecoder typeName fields =
 
       -- Build the constructor lambda
       fieldNames = map (\(n, _, _) -> n) fields
-      lambdaParams = map PVar fieldNames
-      recordFields = map (\n -> (n, Var n)) fieldNames
+      lambdaParams = map (noLoc . PVar) fieldNames
+      recordFields = map (\n -> (n, noLoc (Var n))) fieldNames
       recordExpr = RecordLiteral recordFields
-      constructorLambda = Lam lambdaParams recordExpr
+      constructorLambda = Lam lambdaParams (noLoc recordExpr)
 
       -- Build the index decoders
       indexDecoders = zipWith buildIndexDecoder [0..] fields
 
       -- Apply map to constructor and all decoders
-      fullExpr = foldl App (App (Var mapN) constructorLambda) indexDecoders
+      fullExpr = foldl (\acc e -> App (noLoc acc) (noLoc e)) (App (noLoc (Var mapN)) (noLoc constructorLambda)) indexDecoders
   in
   [ DeclTypeSig decoderName (QualType [] (TypeApp (TypeCon "Decoder") (TypeCon typeName)))
-  , DeclValue decoderName [] fullExpr
+  , DeclValue decoderName [] (noLoc fullExpr)
   ]
 
 -- | Build an index decoder for a field
 -- (index 0 int) or (index 1 string) or (index 2 (nullable string))
 buildIndexDecoder :: Int -> (Text, Type, [Annotation]) -> Expr
 buildIndexDecoder idx (_fieldName, fieldType, _anns) =
-  let indexExpr = App (App (Var "index") (IntLit (fromIntegral idx))) (typeToDecoder fieldType)
+  let indexExpr = App (noLoc (App (noLoc (Var "index")) (noLoc (IntLit (fromIntegral idx))))) (noLoc (typeToDecoder fieldType))
   in indexExpr
 
 -- | Convert a Lune type to its decoder
@@ -123,7 +123,7 @@ typeToDecoder ty =
     TypeCon "Bool" -> Var "bool"
     TypeCon "Timestamp" -> Var "timestamp"
     TypeApp (TypeCon "Maybe") inner ->
-      App (Var "nullable") (typeToDecoder inner)
+      App (noLoc (Var "nullable")) (noLoc (typeToDecoder inner))
     _ ->
       -- Fallback - generate a placeholder that will error at typecheck
       Var "unsupportedDecoder"
@@ -153,14 +153,14 @@ generateFindById singularName typeName tableName pkType =
       returnType = TypeApp (TypeCon "Query") (TypeCon typeName)
       decoderName = singularName <> "Decoder"
       -- findUserById id = limit 1 (where_ (eq users_id (DbInt id)) (select users userDecoder))
-      selectExpr = App (App (Var "select") (Var tableName)) (Var decoderName)
-      condExpr = App (App (Var "eq") (Var (tableName <> "_id")))
-                   (App (typeToDbValue pkType) (Var "id"))
-      whereExpr = App (App (Var "where_") condExpr) selectExpr
-      body = App (App (Var "limit") (IntLit 1)) whereExpr
+      selectExpr = App (noLoc (App (noLoc (Var "select")) (noLoc (Var tableName)))) (noLoc (Var decoderName))
+      condExpr = App (noLoc (App (noLoc (Var "eq")) (noLoc (Var (tableName <> "_id")))))
+                   (noLoc (App (noLoc (typeToDbValue pkType)) (noLoc (Var "id"))))
+      whereExpr = App (noLoc (App (noLoc (Var "where_")) (noLoc condExpr))) (noLoc selectExpr)
+      body = App (noLoc (App (noLoc (Var "limit")) (noLoc (IntLit 1)))) (noLoc whereExpr)
   in
   [ DeclTypeSig fnName (QualType [] (TypeArrow pkType returnType))
-  , DeclValue fnName [PVar "id"] body
+  , DeclValue fnName [noLoc (PVar "id")] (noLoc body)
   ]
 
 -- | Generate findAllUsers : Query User
@@ -171,10 +171,10 @@ generateFindAll singularName typeName tableName =
   let fnName = "findAll" <> capitalize typeName <> "s"
       returnType = TypeApp (TypeCon "Query") (TypeCon typeName)
       decoderName = singularName <> "Decoder"
-      body = App (App (Var "select") (Var tableName)) (Var decoderName)
+      body = App (noLoc (App (noLoc (Var "select")) (noLoc (Var tableName)))) (noLoc (Var decoderName))
   in
   [ DeclTypeSig fnName (QualType [] returnType)
-  , DeclValue fnName [] body
+  , DeclValue fnName [] (noLoc body)
   ]
 
 -- | Generate insertUser : { ... } -> Query User
@@ -190,15 +190,15 @@ generateInsert singularName typeName tableName fields _pkName _isSerial =
 
       -- Build: returning (values [...] (insert users userDecoder))
       assignments = map (\(n, t, _) ->
-        App (App (Var "set") (Var (tableName <> "_" <> n)))
-          (App (typeToDbValue t) (FieldAccess (Var "input") n))) inputFields
-      valuesExpr = foldr (\a acc -> App (App (Var "Cons") a) acc) (Var "Nil") assignments
-      insertExpr = App (App (Var "insert") (Var tableName)) (Var decoderName)
-      withValues = App (App (Var "values") valuesExpr) insertExpr
-      body = App (Var "returning") withValues
+        App (noLoc (App (noLoc (Var "set")) (noLoc (Var (tableName <> "_" <> n)))))
+          (noLoc (App (noLoc (typeToDbValue t)) (noLoc (FieldAccess (noLoc (Var "input")) n))))) inputFields
+      valuesExpr = foldr (\a acc -> App (noLoc (App (noLoc (Var "Cons")) (noLoc a))) (noLoc acc)) (Var "Nil") assignments
+      insertExpr = App (noLoc (App (noLoc (Var "insert")) (noLoc (Var tableName)))) (noLoc (Var decoderName))
+      withValues = App (noLoc (App (noLoc (Var "values")) (noLoc valuesExpr))) (noLoc insertExpr)
+      body = App (noLoc (Var "returning")) (noLoc withValues)
   in
   [ DeclTypeSig fnName (QualType [] (TypeArrow inputType returnType))
-  , DeclValue fnName [PVar "input"] body
+  , DeclValue fnName [noLoc (PVar "input")] (noLoc body)
   ]
 
 -- | Generate updateUser : Int -> List Assignment -> Query User
@@ -208,15 +208,15 @@ generateUpdate singularName typeName tableName pkType =
       returnType = TypeApp (TypeCon "Query") (TypeCon typeName)
       decoderName = singularName <> "Decoder"
       -- updateUser id assigns = returning (where_ (eq users_id (int id)) (values assigns (update users userDecoder)))
-      updateExpr = App (App (Var "update") (Var tableName)) (Var decoderName)
-      withValues = App (App (Var "values") (Var "assigns")) updateExpr
-      condExpr = App (App (Var "eq") (Var (tableName <> "_id")))
-                   (App (typeToDbValue pkType) (Var "id"))
-      withWhere = App (App (Var "where_") condExpr) withValues
-      body = App (Var "returning") withWhere
+      updateExpr = App (noLoc (App (noLoc (Var "update")) (noLoc (Var tableName)))) (noLoc (Var decoderName))
+      withValues = App (noLoc (App (noLoc (Var "values")) (noLoc (Var "assigns")))) (noLoc updateExpr)
+      condExpr = App (noLoc (App (noLoc (Var "eq")) (noLoc (Var (tableName <> "_id")))))
+                   (noLoc (App (noLoc (typeToDbValue pkType)) (noLoc (Var "id"))))
+      withWhere = App (noLoc (App (noLoc (Var "where_")) (noLoc condExpr))) (noLoc withValues)
+      body = App (noLoc (Var "returning")) (noLoc withWhere)
   in
   [ DeclTypeSig fnName (QualType [] (TypeArrow pkType (TypeArrow (TypeApp (TypeCon "List") (TypeCon "Assignment")) returnType)))
-  , DeclValue fnName [PVar "id", PVar "assigns"] body
+  , DeclValue fnName [noLoc (PVar "id"), noLoc (PVar "assigns")] (noLoc body)
   ]
 
 -- | Generate deleteUser : Int -> Query Unit
@@ -225,13 +225,13 @@ generateDelete _singularName typeName tableName pkType =
   let fnName = "delete" <> capitalize typeName
       returnType = TypeApp (TypeCon "Query") (TypeCon "Unit")
       -- deleteUser id = where_ (eq users_id (int id)) (delete users)
-      deleteExpr = App (Var "delete") (Var tableName)
-      condExpr = App (App (Var "eq") (Var (tableName <> "_id")))
-                   (App (typeToDbValue pkType) (Var "id"))
-      body = App (App (Var "where_") condExpr) deleteExpr
+      deleteExpr = App (noLoc (Var "delete")) (noLoc (Var tableName))
+      condExpr = App (noLoc (App (noLoc (Var "eq")) (noLoc (Var (tableName <> "_id")))))
+                   (noLoc (App (noLoc (typeToDbValue pkType)) (noLoc (Var "id"))))
+      body = App (noLoc (App (noLoc (Var "where_")) (noLoc condExpr))) (noLoc deleteExpr)
   in
   [ DeclTypeSig fnName (QualType [] (TypeArrow pkType returnType))
-  , DeclValue fnName [PVar "id"] body
+  , DeclValue fnName [noLoc (PVar "id")] (noLoc body)
   ]
 
 -- | Convert type to DbValue constructor
@@ -245,18 +245,18 @@ typeToDbValue ty =
     TypeCon "Bool" -> Var "DbBool"
     TypeCon "Timestamp" ->
       -- Timestamp wraps Int, need to extract micros: \ts -> case ts of Timestamp m -> DbTimestamp m
-      Lam [PVar "ts"]
-        (Case (Var "ts")
-          [ Alt (PCon "Timestamp" [PVar "m"]) (App (Var "DbTimestamp") (Var "m"))
-          ])
+      Lam [noLoc (PVar "ts")]
+        (noLoc (Case (noLoc (Var "ts"))
+          [ noLoc (Alt (noLoc (PCon "Timestamp" [noLoc (PVar "m")])) (noLoc (App (noLoc (Var "DbTimestamp")) (noLoc (Var "m")))))
+          ]))
     TypeApp (TypeCon "Maybe") inner ->
       -- For Maybe, we need to handle it specially in the caller
       -- Return a lambda that converts Maybe a to DbValue
-      Lam [PVar "maybeVal"]
-        (Case (Var "maybeVal")
-          [ Alt (PCon "Nothing" []) (Var "DbNull")
-          , Alt (PCon "Just" [PVar "v"]) (App (typeToDbValue inner) (Var "v"))
-          ])
+      Lam [noLoc (PVar "maybeVal")]
+        (noLoc (Case (noLoc (Var "maybeVal"))
+          [ noLoc (Alt (noLoc (PCon "Nothing" [])) (noLoc (Var "DbNull")))
+          , noLoc (Alt (noLoc (PCon "Just" [noLoc (PVar "v")])) (noLoc (App (noLoc (typeToDbValue inner)) (noLoc (Var "v")))))
+          ]))
     _ -> Var "DbNull"  -- Fallback for unknown types
 
 -- | Lower the first character of a text

@@ -20,6 +20,7 @@ import Lune.Desugar (desugarModule)
 import qualified Lune.Infer as I
 import qualified Lune.InstanceEnv as IE
 import qualified Lune.Syntax as S
+import Lune.Syntax (Located, unLoc)
 import Lune.Type
 import Lune.TypeConvert (AliasEnv, buildAliasEnv, convertType, expandAliases)
 import qualified Lune.TypeConvert as TypeConvert
@@ -165,14 +166,14 @@ elabInstanceDict methodIndex instanceDicts dictCandidates env0 classEnv aliasEnv
   superFields <- elabSuperDictFields classEnv instanceDicts inst
   pure (CoreDecl dictName (CRecord (superFields <> fields)))
   where
-    elabMethod methodSchemes (methodName, methodExpr) = do
+    elabMethod methodSchemes (methodName, lmethodExpr) = do
       scheme <-
         case Map.lookup methodName methodSchemes of
           Nothing ->
             Left (ElaborateMissingScheme methodName)
           Just s ->
             Right s
-      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme [] methodExpr) of
+      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme [] (S.unLoc lmethodExpr)) of
         Left err ->
           Left (ElaborateInferError (IE.instanceInfoClass inst <> " " <> IE.instanceInfoHeadCon inst <> "." <> methodName) err)
         Right (s, core0) -> do
@@ -193,13 +194,13 @@ specializeMethodScheme className classParam instTy instVars (Forall vars constra
 elabValueDecl :: MethodIndex -> InstanceDicts -> [DictCandidate] -> TypeEnv -> CE.ClassEnv -> S.Decl -> Either ElaborateError CoreDecl
 elabValueDecl methodIndex instanceDicts dictCandidates env0 classEnv decl =
   case decl of
-    S.DeclValue name args body -> do
+    S.DeclValue name largs lbody -> do
       scheme <-
         case Map.lookup name env0 of
           Just s -> Right s
           Nothing -> Left (ElaborateMissingScheme name)
 
-      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme args body) of
+      case I.runInferM (inferTopLevel classEnv methodIndex env0 scheme (map S.unLoc largs) (S.unLoc lbody)) of
         Left err ->
           Left (ElaborateInferError name err)
         Right (s, core0) -> do
@@ -305,8 +306,8 @@ inferCoreExpr methodIndex env expr =
       pure (nullSubst, [], TCon "Char", CChar c)
 
     S.App f x -> do
-      (s1, c1, t1, cf) <- inferCoreExpr methodIndex env f
-      (s2, c2, t2, cx) <- inferCoreExpr methodIndex (applySubstEnv s1 env) x
+      (s1, c1, t1, cf) <- inferLCoreExpr methodIndex env f
+      (s2, c2, t2, cx) <- inferLCoreExpr methodIndex (applySubstEnv s1 env) x
       tv <- freshTypeVar
       s3 <- I.unify (applySubstType s2 t1) (TArrow t2 tv)
       let s = s3 `composeSubst` s2 `composeSubst` s1
@@ -315,13 +316,13 @@ inferCoreExpr methodIndex env expr =
 
     S.Lam pats body -> do
       (envArgs, argTypes) <- bindLambdaPatterns pats
-      (s1, c1, tBody, cBody) <- inferCoreExpr methodIndex (envArgs <> env) body
+      (s1, c1, tBody, cBody) <- inferLCoreExpr methodIndex (envArgs <> env) body
       let argTypes' = map (applySubstType s1) argTypes
           c = applySubstConstraints s1 c1
-      pure (s1, c, foldr TArrow tBody argTypes', CLam pats cBody)
+      pure (s1, c, foldr TArrow tBody argTypes', CLam (map unLoc pats) cBody)
 
     S.LetIn name bound body -> do
-      (s1, c1, t1, cBound0) <- inferCoreExpr methodIndex env bound
+      (s1, c1, t1, cBound0) <- inferLCoreExpr methodIndex env bound
       let env1 = applySubstEnv s1 env
           scheme = generalize env1 c1 t1
 
@@ -340,7 +341,7 @@ inferCoreExpr methodIndex env expr =
 
           env2 = Map.insert name scheme env1
 
-      (s2, c2, t2, cBody) <- inferCoreExpr methodIndex env2 body
+      (s2, c2, t2, cBody) <- inferLCoreExpr methodIndex env2 body
       let sFinal = s2 `composeSubst` s1
       pure (sFinal, applySubstConstraints sFinal c2, applySubstType sFinal t2, CLet name cBoundFinal cBody)
       where
@@ -354,7 +355,7 @@ inferCoreExpr methodIndex env expr =
            in S.PVar base
 
     S.Case scrut alts -> do
-      (s0, c0, tScrut0, cScrut) <- inferCoreExpr methodIndex env scrut
+      (s0, c0, tScrut0, cScrut) <- inferLCoreExpr methodIndex env scrut
       tvRes <- freshTypeVar
       let env0 = applySubstEnv s0 env
       (sFinal, cAlts, altsCore) <- inferCaseAlts methodIndex env0 (s0, [], []) tScrut0 tvRes alts
@@ -371,7 +372,7 @@ inferCoreExpr methodIndex env expr =
       inferRecordUpdate methodIndex env base updates
 
     S.FieldAccess base field -> do
-      (s1, c1, baseTy, cBase) <- inferCoreExpr methodIndex env base
+      (s1, c1, baseTy, cBase) <- inferLCoreExpr methodIndex env base
       case applySubstType s1 baseTy of
         TRecord fields ->
           case lookup field fields of
@@ -389,6 +390,10 @@ inferCoreExpr methodIndex env expr =
         other ->
           I.inferFail (I.NotARecord other)
 
+-- | Helper for inferring Located expressions
+inferLCoreExpr :: MethodIndex -> TypeEnv -> Located S.Expr -> I.InferM (Subst, [Constraint], Type, CoreExpr)
+inferLCoreExpr methodIndex env lexpr = inferCoreExpr methodIndex env (unLoc lexpr)
+
 inferTemplateLit :: MethodIndex -> TypeEnv -> S.TemplateFlavor -> [S.TemplatePart] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
 inferTemplateLit methodIndex env flavor parts = do
   (s, cs, coreParts) <- go (nullSubst, [], []) parts
@@ -405,9 +410,9 @@ inferTemplateLit methodIndex env flavor parts = do
       case part of
         S.TemplateText t ->
           go (sAcc, cAcc, partsAcc <> [CTemplateText t]) rest
-        S.TemplateHole e -> do
+        S.TemplateHole le -> do
           let env1 = applySubstEnv sAcc env
-          (s1, c1, t1, core1) <- inferCoreExpr methodIndex env1 e
+          (s1, c1, t1, core1) <- inferLCoreExpr methodIndex env1 le
           let s = s1 `composeSubst` sAcc
               cAcc' = applySubstConstraints s1 cAcc
               t1' = applySubstType s1 t1
@@ -449,21 +454,21 @@ inferVar methodIndex env name =
                      in foldl CApp base (map CDictWanted otherCs)
       pure (nullSubst, constraints, ty, core)
 
-bindLambdaPatterns :: [S.Pattern] -> I.InferM (TypeEnv, [Type])
+bindLambdaPatterns :: [Located S.Pattern] -> I.InferM (TypeEnv, [Type])
 bindLambdaPatterns pats =
   go Map.empty [] pats
   where
     go envAcc tys [] =
       pure (envAcc, tys)
-    go envAcc tys (pat : rest) =
-      case pat of
+    go envAcc tys (lpat : rest) =
+      case unLoc lpat of
         S.PVar name -> do
           tv <- freshTypeVar
           go (Map.insert name (Forall [] [] tv) envAcc) (tys <> [tv]) rest
         S.PWildcard -> do
           tv <- freshTypeVar
           go envAcc (tys <> [tv]) rest
-        _ ->
+        pat ->
           I.inferFail (I.UnsupportedPattern pat)
 
 inferCaseAlts ::
@@ -472,19 +477,21 @@ inferCaseAlts ::
   (Subst, [Constraint], [CoreAlt]) ->
   Type ->
   Type ->
-  [S.Alt] ->
+  [Located S.Alt] ->
   I.InferM (Subst, [Constraint], [CoreAlt])
 inferCaseAlts _ _ acc _ _ [] =
   pure acc
-inferCaseAlts methodIndex envBase (sAcc, cAcc, altsAcc) scrutTy resTy (S.Alt pat body : rest) = do
-  let env1 = applySubstEnv sAcc envBase
+inferCaseAlts methodIndex envBase (sAcc, cAcc, altsAcc) scrutTy resTy (lalt : rest) = do
+  let S.Alt lpat lbody = unLoc lalt
+      pat = unLoc lpat
+      env1 = applySubstEnv sAcc envBase
       scrutTy' = applySubstType sAcc scrutTy
       resTy' = applySubstType sAcc resTy
   (patEnv, cPat, patTy) <- I.inferPattern env1 pat
   s1 <- I.unify scrutTy' patTy
   let env2 = applySubstEnv s1 (patEnv <> env1)
       c1 = applySubstConstraints s1 (cAcc <> cPat)
-  (sBody, cBody, bodyTy, cBodyCore) <- inferCoreExpr methodIndex env2 body
+  (sBody, cBody, bodyTy, cBodyCore) <- inferLCoreExpr methodIndex env2 lbody
   let s' = sBody `composeSubst` s1 `composeSubst` sAcc
       c2 = applySubstConstraints s' (c1 <> cBody)
   sRes <- I.unify (applySubstType s' resTy') (applySubstType s' bodyTy)
@@ -492,7 +499,7 @@ inferCaseAlts methodIndex envBase (sAcc, cAcc, altsAcc) scrutTy resTy (S.Alt pat
       altCore = CoreAlt pat cBodyCore
   inferCaseAlts methodIndex envBase (sFinal, applySubstConstraints sFinal c2, altsAcc <> [altCore]) scrutTy resTy rest
 
-inferRecordLiteral :: MethodIndex -> TypeEnv -> [(Text, S.Expr)] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
+inferRecordLiteral :: MethodIndex -> TypeEnv -> [(Text, Located S.Expr)] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
 inferRecordLiteral methodIndex env fields = do
   (s, c, fieldTypes, fieldExprs) <- foldlM inferField (nullSubst, [], [], []) fields
   let recordTy = TRecord (sortOn fst fieldTypes)
@@ -503,16 +510,16 @@ inferRecordLiteral methodIndex env fields = do
         go acc [] = pure acc
         go acc (y : ys) = f acc y >>= \acc' -> go acc' ys
 
-    inferField (sAcc, cAcc, tysAcc, exprAcc) (name, e) = do
-      (s1, c1, t1, c1expr) <- inferCoreExpr methodIndex (applySubstEnv sAcc env) e
+    inferField (sAcc, cAcc, tysAcc, exprAcc) (name, le) = do
+      (s1, c1, t1, c1expr) <- inferLCoreExpr methodIndex (applySubstEnv sAcc env) le
       let sFinal = s1 `composeSubst` sAcc
           cFinal = applySubstConstraints sFinal (cAcc <> c1)
           tFinal = applySubstType sFinal t1
       pure (sFinal, cFinal, tysAcc <> [(name, tFinal)], exprAcc <> [(name, c1expr)])
 
-inferRecordUpdate :: MethodIndex -> TypeEnv -> S.Expr -> [(Text, S.Expr)] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
+inferRecordUpdate :: MethodIndex -> TypeEnv -> Located S.Expr -> [(Text, Located S.Expr)] -> I.InferM (Subst, [Constraint], Type, CoreExpr)
 inferRecordUpdate methodIndex env base updates = do
-  (sBase, cBase, baseTy0, cBaseExpr) <- inferCoreExpr methodIndex env base
+  (sBase, cBase, baseTy0, cBaseExpr) <- inferLCoreExpr methodIndex env base
   case applySubstType sBase baseTy0 of
     TRecord fields0 -> do
       let env1 = applySubstEnv sBase env
@@ -535,12 +542,12 @@ inferRecordUpdate methodIndex env base updates = do
         go acc [] = pure acc
         go acc (y : ys) = f acc y >>= \acc' -> go acc' ys
 
-    checkUpdate env1 fields (sAcc, cAcc, exprAcc) (name, expr) =
+    checkUpdate env1 fields (sAcc, cAcc, exprAcc) (name, lexpr) =
       case lookup name fields of
         Nothing ->
           I.inferFail (I.MissingRecordField name)
         Just fieldTy -> do
-          (s1, c1, exprTy, cExpr) <- inferCoreExpr methodIndex (applySubstEnv sAcc env1) expr
+          (s1, c1, exprTy, cExpr) <- inferLCoreExpr methodIndex (applySubstEnv sAcc env1) lexpr
           let expectedTy = applySubstType sAcc fieldTy
           s2 <- I.unify (applySubstType s1 expectedTy) exprTy
           let sFinal = s2 `composeSubst` s1 `composeSubst` sAcc

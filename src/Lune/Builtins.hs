@@ -55,6 +55,10 @@ instanceDictName :: Text -> Text -> Text
 instanceDictName cls headCon =
   "$dict" <> cls <> "_" <> headCon
 
+-- | Helper to create a PCon pattern with located sub-patterns
+pcon :: Text -> [S.Pattern] -> S.Pattern
+pcon name pats = S.PCon name [S.noLoc p | p <- pats]
+
 -- | Max IO steps before auto-yield for fair scheduling
 maxStepsBeforeYield :: Int
 maxStepsBeforeYield = 100
@@ -366,7 +370,7 @@ builtinCoreDecls =
                   ( C.CCase
                       (C.CVar "ta")
                       [ C.CoreAlt
-                          (S.PCon conTask [S.PVar "io"])
+                          (pcon conTask [S.PVar "io"])
                           ( C.CApp
                               (C.CVar conTask)
                               ( C.CApp
@@ -376,13 +380,13 @@ builtinCoreDecls =
                                       ( C.CCase
                                           (C.CVar "r")
                                           [ C.CoreAlt
-                                              (S.PCon conErr [S.PVar "e"])
+                                              (pcon conErr [S.PVar "e"])
                                               ( C.CApp
                                                   (C.CVar "$primIOPure")
                                                   (C.CApp (C.CVar conErr) (C.CVar "e"))
                                               )
                                           , C.CoreAlt
-                                              (S.PCon conOk [S.PVar "a"])
+                                              (pcon conOk [S.PVar "a"])
                                               ( C.CApp
                                                   (C.CVar "$primIOPure")
                                                   ( C.CApp
@@ -427,11 +431,11 @@ builtinCoreDecls =
             ( C.CCase
                 (C.CVar "tf")
                 [ C.CoreAlt
-                    (S.PCon conTask [S.PVar "ioF"])
+                    (pcon conTask [S.PVar "ioF"])
                     ( C.CCase
                         (C.CVar "ta")
                         [ C.CoreAlt
-                            (S.PCon conTask [S.PVar "ioA"])
+                            (pcon conTask [S.PVar "ioA"])
                             ( C.CApp
                                 (C.CVar conTask)
                                 ( C.CApp
@@ -441,13 +445,13 @@ builtinCoreDecls =
                                         ( C.CCase
                                             (C.CVar "rf")
                                             [ C.CoreAlt
-                                                (S.PCon conErr [S.PVar "e"])
+                                                (pcon conErr [S.PVar "e"])
                                                 ( C.CApp
                                                     (C.CVar "$primIOPure")
                                                     (C.CApp (C.CVar conErr) (C.CVar "e"))
                                                 )
                                             , C.CoreAlt
-                                                (S.PCon conOk [S.PVar "f"])
+                                                (pcon conOk [S.PVar "f"])
                                                 ( C.CApp
                                                     (C.CApp (C.CVar "$primIOBind") (C.CVar "ioA"))
                                                     ( C.CLam
@@ -455,13 +459,13 @@ builtinCoreDecls =
                                                         ( C.CCase
                                                             (C.CVar "ra")
                                                             [ C.CoreAlt
-                                                                (S.PCon conErr [S.PVar "e"])
+                                                                (pcon conErr [S.PVar "e"])
                                                                 ( C.CApp
                                                                     (C.CVar "$primIOPure")
                                                                     (C.CApp (C.CVar conErr) (C.CVar "e"))
                                                                 )
                                                             , C.CoreAlt
-                                                                (S.PCon conOk [S.PVar "a"])
+                                                                (pcon conOk [S.PVar "a"])
                                                                 ( C.CApp
                                                                     (C.CVar "$primIOPure")
                                                                     ( C.CApp
@@ -502,7 +506,7 @@ builtinCoreDecls =
             ( C.CCase
                 (C.CVar "ta")
                 [ C.CoreAlt
-                    (S.PCon conTask [S.PVar "io"])
+                    (pcon conTask [S.PVar "io"])
                     ( C.CApp
                         (C.CVar conTask)
                         ( C.CApp
@@ -512,17 +516,17 @@ builtinCoreDecls =
                                 ( C.CCase
                                     (C.CVar "r")
                                     [ C.CoreAlt
-                                        (S.PCon conErr [S.PVar "e"])
+                                        (pcon conErr [S.PVar "e"])
                                         ( C.CApp
                                             (C.CVar "$primIOPure")
                                             (C.CApp (C.CVar conErr) (C.CVar "e"))
                                         )
                                     , C.CoreAlt
-                                        (S.PCon conOk [S.PVar "a"])
+                                        (pcon conOk [S.PVar "a"])
                                         ( C.CCase
                                             (C.CApp (C.CVar "k") (C.CVar "a"))
                                             [ C.CoreAlt
-                                                (S.PCon conTask [S.PVar "io2"])
+                                                (pcon conTask [S.PVar "io2"])
                                                 (C.CVar "io2")
                                             ]
                                         )
@@ -548,7 +552,7 @@ builtinCoreDecls =
             ( C.CCase
                 (C.CVar "ta")
                 [ C.CoreAlt
-                    (S.PCon conTask [S.PVar "ioA"])
+                    (pcon conTask [S.PVar "ioA"])
                     ( C.CApp
                         (C.CVar conTask)
                         ( C.CApp
@@ -558,18 +562,18 @@ builtinCoreDecls =
                                 ( C.CCase
                                     (C.CVar "r")
                                     [ C.CoreAlt
-                                        (S.PCon conErr [S.PVar "e"])
+                                        (pcon conErr [S.PVar "e"])
                                         ( C.CApp
                                             (C.CVar "$primIOPure")
                                             (C.CApp (C.CVar conErr) (C.CVar "e"))
                                         )
                                     , C.CoreAlt
-                                        (S.PCon conOk [S.PWildcard])
+                                        (pcon conOk [S.PWildcard])
                                         -- Delay pattern match on tb until here!
                                         ( C.CCase
                                             (C.CVar "tb")
                                             [ C.CoreAlt
-                                                (S.PCon conTask [S.PVar "ioB"])
+                                                (pcon conTask [S.PVar "ioB"])
                                                 (C.CVar "ioB")
                                             ]
                                         )
@@ -591,10 +595,10 @@ builtinCoreDecls =
                   ( C.CCase
                       (C.CVar "r")
                       [ C.CoreAlt
-                          (S.PCon conErr [S.PVar "e"])
+                          (pcon conErr [S.PVar "e"])
                           (C.CApp (C.CVar conErr) (C.CVar "e"))
                       , C.CoreAlt
-                          (S.PCon conOk [S.PVar "a"])
+                          (pcon conOk [S.PVar "a"])
                           (C.CApp (C.CVar conOk) (C.CApp (C.CVar "f") (C.CVar "a")))
                       ]
                   )
@@ -617,14 +621,14 @@ builtinCoreDecls =
             [S.PVar "rf", S.PVar "ra"]
             ( C.CCase
                 (C.CVar "rf")
-                [ C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                [ C.CoreAlt (pcon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
                 , C.CoreAlt
-                    (S.PCon conOk [S.PVar "f"])
+                    (pcon conOk [S.PVar "f"])
                     ( C.CCase
                         (C.CVar "ra")
-                        [ C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                        [ C.CoreAlt (pcon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
                         , C.CoreAlt
-                            (S.PCon conOk [S.PVar "a"])
+                            (pcon conOk [S.PVar "a"])
                             (C.CApp (C.CVar conOk) (C.CApp (C.CVar "f") (C.CVar "a")))
                         ]
                     )
@@ -646,8 +650,8 @@ builtinCoreDecls =
             [S.PVar "m", S.PVar "k"]
             ( C.CCase
                 (C.CVar "m")
-                [ C.CoreAlt (S.PCon conOk [S.PVar "a"]) (C.CApp (C.CVar "k") (C.CVar "a"))
-                , C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                [ C.CoreAlt (pcon conOk [S.PVar "a"]) (C.CApp (C.CVar "k") (C.CVar "a"))
+                , C.CoreAlt (pcon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
                 ]
             )
 
@@ -656,8 +660,8 @@ builtinCoreDecls =
             [S.PVar "ra", S.PVar "rb"]
             ( C.CCase
                 (C.CVar "ra")
-                [ C.CoreAlt (S.PCon conOk [S.PWildcard]) (C.CVar "rb")
-                , C.CoreAlt (S.PCon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
+                [ C.CoreAlt (pcon conOk [S.PWildcard]) (C.CVar "rb")
+                , C.CoreAlt (pcon conErr [S.PVar "e"]) (C.CApp (C.CVar conErr) (C.CVar "e"))
                 ]
             )
 

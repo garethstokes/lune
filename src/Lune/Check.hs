@@ -172,12 +172,12 @@ checkInstanceMethods env0 aliasEnv classEnv instanceCandidates instanceEnv =
       mapM_ (checkMethod inst instEnv methodSchemes) (Map.toList (IE.instanceInfoMethods inst))
       pure ()
 
-    checkMethod inst instEnv expectedSchemes (methodName, methodExpr) =
+    checkMethod inst instEnv expectedSchemes (methodName, lmethodExpr) =
       case Map.lookup methodName expectedSchemes of
         Nothing ->
           pure ()
         Just scheme ->
-          case runInferM (inferAgainstScheme instEnv (methodLabel inst methodName) [] methodExpr scheme) of
+          case runInferM (inferAgainstScheme instEnv (methodLabel inst methodName) [] (S.unLoc lmethodExpr) scheme) of
             Left err ->
               Left (InInstanceMethod (methodLabel inst methodName) err)
             Right (givenConstraints, wantedConstraints) ->
@@ -197,14 +197,14 @@ specializeMethodScheme className classParam instTy instVars (Forall vars constra
     constraintsFinal = filter (/= Constraint className [instTy]) constraintsSub
     varsFinal = Set.toList (Set.fromList (instVars <> vars'))
 
-checkDecl :: CE.ClassEnv -> [InstanceCandidate] -> TypeEnv -> TypeEnv -> (Text, [S.Pattern], S.Expr) -> Either TypecheckError (Text, Scheme)
-checkDecl classEnv instanceCandidates env sigEnv (name, args, body) =
+checkDecl :: CE.ClassEnv -> [InstanceCandidate] -> TypeEnv -> TypeEnv -> (Text, [S.Located S.Pattern], S.Located S.Expr) -> Either TypecheckError (Text, Scheme)
+checkDecl classEnv instanceCandidates env sigEnv (name, largs, lbody) =
   case Map.lookup name sigEnv of
     Just scheme -> do
-      checkAgainstScheme classEnv instanceCandidates env name args body scheme
+      checkAgainstScheme classEnv instanceCandidates env name (map S.unLoc largs) (S.unLoc lbody) scheme
       pure (name, scheme)
     Nothing ->
-      case runInferM (inferExpr env (S.Lam args body)) of
+      case runInferM (inferExpr env (S.Lam largs lbody)) of
         Left err ->
           Left (InValue name err)
         Right (s, constraints, ty) ->
@@ -369,14 +369,14 @@ bindTopLevelArgs pats tys =
         _ ->
           inferFail (UnsupportedPattern pat)
 
-valueDecls :: [S.Decl] -> [(Text, [S.Pattern], S.Expr)]
+valueDecls :: [S.Decl] -> [(Text, [S.Located S.Pattern], S.Located S.Expr)]
 valueDecls =
   foldr go []
   where
     go decl acc =
       case decl of
-        S.DeclValue name args expr ->
-          (name, args, expr) : acc
+        S.DeclValue name largs lexpr ->
+          (name, largs, lexpr) : acc
         _ ->
           acc
 

@@ -270,8 +270,10 @@ processDeriveAnnotationAdt typeName vars ctors maybeArgs =
 extractDeriveKind :: Expr -> Maybe (Text, Text)
 extractDeriveKind expr =
   case expr of
-    App (Var kind) (StringLit arg) ->
-      Just (kind, arg)
+    App lKind lArg
+      | Var kind <- unLoc lKind
+      , StringLit arg <- unLoc lArg ->
+          Just (kind, arg)
     Var kind ->
       Just (kind, kind)  -- For derives without string arg
     _ ->

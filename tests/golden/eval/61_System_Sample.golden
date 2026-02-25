@@ -1,7 +1,7 @@
-dt_ms=2788
-cpu_usage_percent=9
-net_rx_bytes_per_sec=7534
-net_tx_bytes_per_sec=9090
+dt_ms=7107
+cpu_usage_percent=22
+net_rx_bytes_per_sec=13600
+net_tx_bytes_per_sec=23978
 disk_read_bytes_per_sec=0
-disk_write_bytes_per_sec=164544
+disk_write_bytes_per_sec=403432
 gpu_metrics=[]

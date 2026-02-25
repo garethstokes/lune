@@ -181,8 +181,8 @@ patternBinds pat =
       Set.empty
     S.PString _ ->
       Set.empty
-    S.PCon _ ps ->
-      Set.unions (map patternBinds ps)
+    S.PCon _ lps ->
+      Set.unions (map (patternBinds . S.unLoc) lps)
 
 codegenDecl :: Map Text C.CoreExpr -> Text -> Either CodegenError Text
 codegenDecl declMap declName = do
@@ -321,9 +321,9 @@ emitMatch scrutExpr pat env k =
               <> " {"
           footer = "}"
       pure ([header] <> indentLines 2 (("_ = " <> tmpName) : inner) <> [footer])
-    S.PCon conName ps -> do
+    S.PCon conName lps -> do
       argsName <- freshTemp "_args"
-      inner <- emitMatches argsName ps 0 env k
+      inner <- emitMatches argsName (map S.unLoc lps) 0 env k
       let header =
             "if "
               <> argsName
@@ -332,7 +332,7 @@ emitMatch scrutExpr pat env k =
               <> ", "
               <> renderGoString conName
               <> ", "
-              <> T.pack (show (length ps))
+              <> T.pack (show (length lps))
               <> "); ok {"
           footer = "}"
       pure ([header] <> indentLines 2 (("_ = " <> argsName) : inner) <> [footer])

@@ -128,31 +128,31 @@ collectDoStmtCountsModule m =
   where
     collectDecl d =
       case d of
-        S.DeclValue _ _ body ->
-          collectExpr body
+        S.DeclValue _ _ lbody ->
+          collectExpr (S.unLoc lbody)
         S.DeclInstance _ _ methods ->
-          concatMap (\(S.InstanceMethodDef _ e) -> collectExpr e) methods
+          concatMap (\(S.InstanceMethodDef _ le) -> collectExpr (S.unLoc le)) methods
         _ ->
           []
 
     collectExpr e =
       case e of
         S.DoBlock stmts ->
-          length stmts : concatMap collectStmt stmts
-        S.App f x ->
-          collectExpr f <> collectExpr x
-        S.Lam _ body ->
-          collectExpr body
-        S.LetIn _ bound body ->
-          collectExpr bound <> collectExpr body
-        S.Case scrut alts ->
-          collectExpr scrut <> concatMap (\(S.Alt _ b) -> collectExpr b) alts
+          length stmts : concatMap (collectStmt . S.unLoc) stmts
+        S.App lf lx ->
+          collectExpr (S.unLoc lf) <> collectExpr (S.unLoc lx)
+        S.Lam _ lbody ->
+          collectExpr (S.unLoc lbody)
+        S.LetIn _ lbound lbody ->
+          collectExpr (S.unLoc lbound) <> collectExpr (S.unLoc lbody)
+        S.Case lscrut lalts ->
+          collectExpr (S.unLoc lscrut) <> concatMap (\lalt -> let S.Alt _ lb = S.unLoc lalt in collectExpr (S.unLoc lb)) lalts
         S.RecordLiteral fields ->
-          concatMap (collectExpr . snd) fields
-        S.RecordUpdate base fields ->
-          collectExpr base <> concatMap (collectExpr . snd) fields
-        S.FieldAccess e' _ ->
-          collectExpr e'
+          concatMap (collectExpr . S.unLoc . snd) fields
+        S.RecordUpdate lbase fields ->
+          collectExpr (S.unLoc lbase) <> concatMap (collectExpr . S.unLoc . snd) fields
+        S.FieldAccess le' _ ->
+          collectExpr (S.unLoc le')
         S.TemplateLit _ parts ->
           concatMap collectPart parts
         _ ->
@@ -162,19 +162,19 @@ collectDoStmtCountsModule m =
       case part of
         S.TemplateText _ ->
           []
-        S.TemplateHole e ->
-          collectExpr e
+        S.TemplateHole le ->
+          collectExpr (S.unLoc le)
 
     collectStmt stmt =
       case stmt of
-        S.BindStmt _ rhs ->
-          collectExpr rhs
-        S.DiscardBindStmt rhs ->
-          collectExpr rhs
-        S.LetStmt _ rhs ->
-          collectExpr rhs
-        S.ExprStmt e ->
-          collectExpr e
+        S.BindStmt _ lrhs ->
+          collectExpr (S.unLoc lrhs)
+        S.DiscardBindStmt lrhs ->
+          collectExpr (S.unLoc lrhs)
+        S.LetStmt _ lrhs ->
+          collectExpr (S.unLoc lrhs)
+        S.ExprStmt le ->
+          collectExpr (S.unLoc le)
 
 alignDoLayouts :: [Int] -> [Fmt.DoLayout] -> ([Maybe Fmt.DoLayout], [Int])
 alignDoLayouts counts layouts0 =

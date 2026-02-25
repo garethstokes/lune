@@ -398,11 +398,11 @@ matchPattern pat v =
               Just Map.empty
         _ ->
           Nothing
-    S.PCon name ps ->
+    S.PCon name lps ->
       case v of
         VCon name' args
-          | name == name' && length ps == length args ->
-              fmap Map.unions (zipWithM matchPattern ps args)
+          | name == name' && length lps == length args ->
+              fmap Map.unions (zipWithM (\lp arg -> matchPattern (S.unLoc lp) arg) lps args)
         _ ->
           Nothing
   where

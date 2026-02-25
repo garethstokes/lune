@@ -206,5 +206,5 @@ collectNamesPat pat =
       Set.empty
     S.PString _ ->
       Set.empty
-    S.PCon conName ps ->
-      Set.insert conName (Set.unions (map collectNamesPat ps))
+    S.PCon conName lps ->
+      Set.insert conName (Set.unions (map (collectNamesPat . S.unLoc) lps))

@@ -24,7 +24,7 @@ data InstanceInfo = InstanceInfo
   , instanceInfoHead :: S.Type
   , instanceInfoHeadCon :: Text
   , instanceInfoHeadVars :: [Text]
-  , instanceInfoMethods :: Map Text S.Expr
+  , instanceInfoMethods :: Map Text (S.Located S.Expr)
   }
   deriving (Show)
 

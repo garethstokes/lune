@@ -66,9 +66,9 @@ generateJsonForAdt typeName vars ctors = do
 
   pure
     [ DeclTypeSig decoderName (QualType [] decoderSigTy)
-    , DeclValue decoderName [] decoderExpr
+    , DeclValue decoderName [] (noLoc decoderExpr)
     , DeclTypeSig encoderName (QualType [] encoderSigTy)
-    , DeclValue encoderName [PVar (encoderParamName typeName)] encoderExpr
+    , DeclValue encoderName [noLoc (PVar (encoderParamName typeName))] (noLoc encoderExpr)
     ]
 
 -- ===== Codegen: records =====
@@ -88,16 +88,16 @@ generateRecordAlias typeName fields = do
 
   pure
     [ DeclTypeSig decoderName (QualType [] decoderSigTy)
-    , DeclValue decoderName [] decoderExpr
+    , DeclValue decoderName [] (noLoc decoderExpr)
     , DeclTypeSig encoderName (QualType [] encoderSigTy)
-    , DeclValue encoderName [PVar (encoderParamName typeName)] encoderExpr
+    , DeclValue encoderName [noLoc (PVar (encoderParamName typeName))] (noLoc encoderExpr)
     ]
 
 recordDecoderExpr :: [(Text, Type, [Annotation])] -> Either JsonError Expr
 recordDecoderExpr fields = do
   let fieldNames = map (\(n, _, _) -> n) fields
-      recordExpr = RecordLiteral [(n, Var n) | n <- fieldNames]
-      succeedRecord = App (d "succeed") recordExpr
+      recordExpr = RecordLiteral [(n, noLoc (Var n)) | n <- fieldNames]
+      succeedRecord = App (noLoc (d "succeed")) (noLoc recordExpr)
 
   fieldDecoders <- mapM recordFieldDecoder fields
 
@@ -107,8 +107,8 @@ recordDecoderExpr fields = do
     _ ->
       case dMapN (length fieldNames) of
         Just mapFn ->
-          let builder = Lam (map PVar fieldNames) recordExpr
-              applied = foldl App (App mapFn builder) fieldDecoders
+          let builder = Lam (map (noLoc . PVar) fieldNames) (noLoc recordExpr)
+              applied = foldl (\acc dec -> App (noLoc acc) (noLoc dec)) (App (noLoc mapFn) (noLoc builder)) fieldDecoders
            in pure applied
         Nothing ->
           -- Fallback for >5 fields: chain decoders with andThen.
@@ -117,89 +117,89 @@ recordDecoderExpr fields = do
 recordFieldDecoder :: (Text, Type, [Annotation]) -> Either JsonError Expr
 recordFieldDecoder (fieldName, fieldTy, _anns) = do
   dec <- decoderExprOfType fieldTy
-  pure (App (App (d "field") (StringLit fieldName)) dec)
+  pure (App (noLoc (App (noLoc (d "field")) (noLoc (StringLit fieldName)))) (noLoc dec))
 
 recordEncodeValueExpr :: Expr -> [(Text, Type, [Annotation])] -> Either JsonError Expr
 recordEncodeValueExpr recordValue fields = do
   pairs <-
     mapM
       ( \(fieldName, fieldTy, _anns) -> do
-          value <- encodeValueOfType fieldTy (FieldAccess recordValue fieldName)
-          pure (RecordLiteral [("key", StringLit fieldName), ("value", value)])
+          value <- encodeValueOfType fieldTy (FieldAccess (noLoc recordValue) fieldName)
+          pure (RecordLiteral [("key", noLoc (StringLit fieldName)), ("value", noLoc value)])
       )
       fields
 
-  pure (App (e "object") (listExpr pairs))
+  pure (App (noLoc (e "object")) (noLoc (listExpr pairs)))
 
 -- ===== Codegen: ADTs =====
 
 adtEncoderExpr :: Text -> [TypeCtor] -> Either JsonError Expr
 adtEncoderExpr valueName ctors = do
   alts <- mapM adtEncoderAlt ctors
-  pure (Case (Var valueName) alts)
+  pure (Case (noLoc (Var valueName)) alts)
 
-adtEncoderAlt :: TypeCtor -> Either JsonError Alt
+adtEncoderAlt :: TypeCtor -> Either JsonError (Located Alt)
 adtEncoderAlt (TypeCtor ctorName argTys) = do
   let argNames = ctorArgNames (length argTys)
-      pat = PCon ctorName (map PVar argNames)
+      pat = PCon ctorName (map (noLoc . PVar) argNames)
 
   encodedArgs <- zipWithM encodeValueOfType argTys (map Var argNames)
   let fieldsJson =
         App
-          (App (e "list") identityLam)
-          (listExpr encodedArgs)
+          (noLoc (App (noLoc (e "list")) (noLoc identityLam)))
+          (noLoc (listExpr encodedArgs))
       obj =
         App
-          (e "object")
-          ( listExpr
-              [ RecordLiteral [("key", StringLit "tag"), ("value", App (e "string") (StringLit ctorName))]
-              , RecordLiteral [("key", StringLit "fields"), ("value", fieldsJson)]
-              ]
+          (noLoc (e "object"))
+          ( noLoc (listExpr
+              [ RecordLiteral [("key", noLoc (StringLit "tag")), ("value", noLoc (App (noLoc (e "string")) (noLoc (StringLit ctorName))))]
+              , RecordLiteral [("key", noLoc (StringLit "fields")), ("value", noLoc fieldsJson)]
+              ])
           )
 
-  pure (Alt pat obj)
+  pure (noLoc (Alt (noLoc pat) (noLoc obj)))
 
 adtDecoderExpr :: [TypeCtor] -> Either JsonError Expr
 adtDecoderExpr ctors = do
   alts <- mapM adtDecoderAlt ctors
   let defaultAlt =
-        Alt
-          (PVar "other")
-          (App (d "fail") (App (App (Var "prim_appendString") (StringLit "Unknown tag: ")) (Var "other")))
+        noLoc (Alt
+          (noLoc (PVar "other"))
+          (noLoc (App (noLoc (d "fail")) (noLoc (App (noLoc (App (noLoc (Var "prim_appendString")) (noLoc (StringLit "Unknown tag: ")))) (noLoc (Var "other")))))))
       tagCase =
-        Lam [PVar "tag"] (Case (Var "tag") (alts <> [defaultAlt]))
+        Lam [noLoc (PVar "tag")] (noLoc (Case (noLoc (Var "tag")) (alts <> [defaultAlt])))
       tagDecoder =
-        App (App (d "field") (StringLit "tag")) (d "string")
-  pure (App (App (d "andThen") tagCase) tagDecoder)
+        App (noLoc (App (noLoc (d "field")) (noLoc (StringLit "tag")))) (noLoc (d "string"))
+  pure (App (noLoc (App (noLoc (d "andThen")) (noLoc tagCase))) (noLoc tagDecoder))
 
-adtDecoderAlt :: TypeCtor -> Either JsonError Alt
+adtDecoderAlt :: TypeCtor -> Either JsonError (Located Alt)
 adtDecoderAlt (TypeCtor ctorName argTys) = do
   decoder <- ctorDecoderExpr ctorName argTys
-  pure (Alt (PString ctorName) decoder)
+  pure (noLoc (Alt (noLoc (PString ctorName)) (noLoc decoder)))
 
 ctorDecoderExpr :: Text -> [Type] -> Either JsonError Expr
 ctorDecoderExpr ctorName argTys =
   case argTys of
     [] ->
-      pure (App (d "succeed") (Var ctorName))
+      pure (App (noLoc (d "succeed")) (noLoc (Var ctorName)))
     _ -> do
       argDecoders <- zipWithM ctorArgDecoder [0 ..] argTys
       let ctorVar = Var ctorName
       case dMapN (length argTys) of
         Just mapFn ->
-          pure (foldl App (App mapFn ctorVar) argDecoders)
+          pure (foldl (\acc dec -> App (noLoc acc) (noLoc dec)) (App (noLoc mapFn) (noLoc ctorVar)) argDecoders)
         Nothing -> do
           let argNames = ctorArgNames (length argTys)
-              ctorApp = foldl App ctorVar (map Var argNames)
-              succeedCtor = App (d "succeed") ctorApp
+              ctorApp = foldl (\acc name -> App (noLoc acc) (noLoc (Var name))) ctorVar argNames
+              succeedCtor = App (noLoc (d "succeed")) (noLoc ctorApp)
           pure (andThenChain (zip argNames argDecoders) succeedCtor)
 
 ctorArgDecoder :: Int -> Type -> Either JsonError Expr
 ctorArgDecoder idx ty = do
   dec <- decoderExprOfType ty
   let idxExpr = IntLit (fromIntegral idx)
-      fieldsDecoder = App (App (d "index") idxExpr) dec
-  pure (App (App (d "field") (StringLit "fields")) fieldsDecoder)
+      fieldsDecoder = App (noLoc (App (noLoc (d "index")) (noLoc idxExpr))) (noLoc dec)
+  pure (App (noLoc (App (noLoc (d "field")) (noLoc (StringLit "fields")))) (noLoc fieldsDecoder))
 
 -- ===== Type mapping =====
 
@@ -211,9 +211,9 @@ decoderExprOfType ty =
     TypeCon "String" -> pure (d "string")
     TypeCon "Bool" -> pure (d "bool")
     TypeApp (TypeCon "List") inner ->
-      App (d "list") <$> decoderExprOfType inner
+      App (noLoc (d "list")) . noLoc <$> decoderExprOfType inner
     TypeApp (TypeCon "Maybe") inner ->
-      App (d "maybe") <$> decoderExprOfType inner
+      App (noLoc (d "maybe")) . noLoc <$> decoderExprOfType inner
     TypeRecord fields ->
       recordDecoderExpr fields
     TypeCon name ->
@@ -229,11 +229,11 @@ encoderFnExprOfType ty =
     TypeCon "String" -> pure (e "string")
     TypeCon "Bool" -> pure (e "bool")
     TypeApp (TypeCon "List") inner ->
-      App (e "list") <$> encoderFnExprOfType inner
+      App (noLoc (e "list")) . noLoc <$> encoderFnExprOfType inner
     TypeApp (TypeCon "Maybe") inner ->
       maybeEncoderExpr inner
     TypeRecord fields ->
-      Lam [PVar "r"] <$> recordEncodeValueExpr (Var "r") fields
+      Lam [noLoc (PVar "r")] . noLoc <$> recordEncodeValueExpr (Var "r") fields
     TypeCon name ->
       pure (Var (lowerFirst name <> "Encoder"))
     _ ->
@@ -242,20 +242,20 @@ encoderFnExprOfType ty =
 encodeValueOfType :: Type -> Expr -> Either JsonError Expr
 encodeValueOfType ty value =
   case ty of
-    TypeCon "Int" -> pure (App (e "int") value)
-    TypeCon "Float" -> pure (App (e "float") value)
-    TypeCon "String" -> pure (App (e "string") value)
-    TypeCon "Bool" -> pure (App (e "bool") value)
+    TypeCon "Int" -> pure (App (noLoc (e "int")) (noLoc value))
+    TypeCon "Float" -> pure (App (noLoc (e "float")) (noLoc value))
+    TypeCon "String" -> pure (App (noLoc (e "string")) (noLoc value))
+    TypeCon "Bool" -> pure (App (noLoc (e "bool")) (noLoc value))
     TypeApp (TypeCon "List") inner -> do
       innerEnc <- encoderFnExprOfType inner
-      pure (App (App (e "list") innerEnc) value)
+      pure (App (noLoc (App (noLoc (e "list")) (noLoc innerEnc))) (noLoc value))
     TypeApp (TypeCon "Maybe") inner -> do
       enc <- maybeEncoderExpr inner
-      pure (App enc value)
+      pure (App (noLoc enc) (noLoc value))
     TypeRecord fields ->
       recordEncodeValueExpr value fields
     TypeCon name ->
-      pure (App (Var (lowerFirst name <> "Encoder")) value)
+      pure (App (noLoc (Var (lowerFirst name <> "Encoder"))) (noLoc value))
     _ ->
       Left (JsonUnsupportedType ty)
 
@@ -265,36 +265,36 @@ maybeEncoderExpr innerTy =
     innerEnc <- encoderFnExprOfType innerTy
     pure $
       Lam
-        [PVar "v"]
-        ( Case
-            (Var "v")
-            [ Alt (PCon "Nothing" []) (e "null")
-            , Alt (PCon "Just" [PVar "x"]) (App innerEnc (Var "x"))
-            ]
+        [noLoc (PVar "v")]
+        ( noLoc (Case
+            (noLoc (Var "v"))
+            [ noLoc (Alt (noLoc (PCon "Nothing" [])) (noLoc (e "null")))
+            , noLoc (Alt (noLoc (PCon "Just" [noLoc (PVar "x")])) (noLoc (App (noLoc innerEnc) (noLoc (Var "x")))))
+            ])
         )
 
 -- ===== Small expression helpers =====
 
 d :: Text -> Expr
 d name =
-  FieldAccess (Var decodeAlias) name
+  FieldAccess (noLoc (Var decodeAlias)) name
 
 e :: Text -> Expr
 e name =
-  FieldAccess (Var encodeAlias) name
+  FieldAccess (noLoc (Var encodeAlias)) name
 
 identityLam :: Expr
 identityLam =
-  Lam [PVar "x"] (Var "x")
+  Lam [noLoc (PVar "x")] (noLoc (Var "x"))
 
 listExpr :: [Expr] -> Expr
 listExpr =
-  foldr (\x xs -> App (App (Var "Cons") x) xs) (Var "Nil")
+  foldr (\x xs -> App (noLoc (App (noLoc (Var "Cons")) (noLoc x))) (noLoc xs)) (Var "Nil")
 
 andThenChain :: [(Text, Expr)] -> Expr -> Expr
 andThenChain bindings terminal =
   foldr
-    (\(name, dec) acc -> App (App (d "andThen") (Lam [PVar name] acc)) dec)
+    (\(name, dec) acc -> App (noLoc (App (noLoc (d "andThen")) (noLoc (Lam [noLoc (PVar name)] (noLoc acc))))) (noLoc dec))
     terminal
     bindings
 

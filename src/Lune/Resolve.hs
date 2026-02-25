@@ -18,6 +18,7 @@ import qualified Lune.Builtins as Builtins
 import qualified Lune.Desugar as Desugar
 import qualified Lune.ModuleGraph as MG
 import qualified Lune.Syntax as S
+import Lune.Syntax (Located, mapLoc, unLoc, noLoc)
 
 data ResolveError
   = DuplicateImportAlias Text Text Text
@@ -510,11 +511,11 @@ resolveDecl scope decl =
     S.DeclTypeSig name qualTy -> do
       qualTy' <- resolveQualType scope qualTy
       Right (S.DeclTypeSig (qualifyName (scopeModule scope) name) qualTy')
-    S.DeclValue name args expr -> do
-      args' <- mapM (resolvePatternHead scope) args
-      let bound' = scopeBound scope <> Set.fromList (patVars args)
-      expr' <- resolveExpr scope {scopeBound = bound'} expr
-      Right (S.DeclValue (qualifyName (scopeModule scope) name) args' expr')
+    S.DeclValue name args lexpr -> do
+      args' <- mapM (resolveLPattern scope) args
+      let bound' = scopeBound scope <> Set.fromList (patVarsL args)
+      lexpr' <- resolveLExpr scope {scopeBound = bound'} lexpr
+      Right (S.DeclValue (qualifyName (scopeModule scope) name) args' lexpr')
     S.DeclType typeName vars ctors ->
       Right (S.DeclType typeName vars [qualCtor c | c <- ctors])
     S.DeclTypeAnn anns typeName vars ctors ->
@@ -528,9 +529,9 @@ resolveDecl scope decl =
     S.DeclInstance cls headTy methods -> do
       methods' <-
         mapM
-          ( \(S.InstanceMethodDef methodName methodExpr) -> do
-              e <- resolveExpr scope methodExpr
-              Right (S.InstanceMethodDef methodName e)
+          ( \(S.InstanceMethodDef methodName lmethodExpr) -> do
+              le <- resolveLExpr scope lmethodExpr
+              Right (S.InstanceMethodDef methodName le)
           )
           methods
       Right (S.DeclInstance cls headTy methods')
@@ -590,6 +591,12 @@ resolveTypeName scope ty =
       fields' <- mapM (\(n, t, anns) -> do t' <- resolveTypeName scope t; Right (n, t', anns)) fields
       Right (S.TypeRecord fields')
 
+-- | Resolve a Located Expr
+resolveLExpr :: Scope -> Located S.Expr -> Either ResolveError (Located S.Expr)
+resolveLExpr scope lexpr = do
+  expr' <- resolveExpr scope (unLoc lexpr)
+  Right (mapLoc (const expr') lexpr)
+
 resolveExpr :: Scope -> S.Expr -> Either ResolveError S.Expr
 resolveExpr scope expr =
   case expr of
@@ -606,39 +613,39 @@ resolveExpr scope expr =
       Right expr
     S.CharLit _ ->
       Right expr
-    S.App f x ->
-      S.App <$> resolveExpr scope f <*> resolveExpr scope x
-    S.Lam pats body -> do
-      pats' <- mapM (resolvePatternHead scope) pats
-      let bound' = scopeBound scope <> Set.fromList (patVars pats)
-      body' <- resolveExpr scope {scopeBound = bound'} body
-      Right (S.Lam pats' body')
-    S.LetIn name bound body -> do
-      bound' <- resolveExpr scope bound
+    S.App lf lx ->
+      S.App <$> resolveLExpr scope lf <*> resolveLExpr scope lx
+    S.Lam lpats lbody -> do
+      lpats' <- mapM (resolveLPattern scope) lpats
+      let bound' = scopeBound scope <> Set.fromList (patVarsL lpats)
+      lbody' <- resolveLExpr scope {scopeBound = bound'} lbody
+      Right (S.Lam lpats' lbody')
+    S.LetIn name lbound lbody -> do
+      lbound' <- resolveLExpr scope lbound
       let bodyScope = scope {scopeBound = Set.insert name (scopeBound scope)}
-      body' <- resolveExpr bodyScope body
-      Right (S.LetIn name bound' body')
-    S.Case scrut alts -> do
-      scrut' <- resolveExpr scope scrut
-      alts' <- mapM (resolveAlt scope) alts
-      Right (S.Case scrut' alts')
-    S.DoBlock stmts -> do
-      stmts' <- resolveDo scope stmts
-      Right (S.DoBlock stmts')
+      lbody' <- resolveLExpr bodyScope lbody
+      Right (S.LetIn name lbound' lbody')
+    S.Case lscrut lalts -> do
+      lscrut' <- resolveLExpr scope lscrut
+      lalts' <- mapM (resolveLAlt scope) lalts
+      Right (S.Case lscrut' lalts')
+    S.DoBlock lstmts -> do
+      lstmts' <- resolveDo scope lstmts
+      Right (S.DoBlock lstmts')
     S.RecordLiteral fields ->
-      S.RecordLiteral <$> mapM (\(n, e) -> do e' <- resolveExpr scope e; pure (n, e')) fields
-    S.RecordUpdate base fields ->
-      S.RecordUpdate <$> resolveExpr scope base <*> mapM (\(n, e) -> do e' <- resolveExpr scope e; pure (n, e')) fields
-    S.FieldAccess base field ->
-      resolveFieldAccess scope base field
+      S.RecordLiteral <$> mapM (\(n, le) -> do le' <- resolveLExpr scope le; pure (n, le')) fields
+    S.RecordUpdate lbase fields ->
+      S.RecordUpdate <$> resolveLExpr scope lbase <*> mapM (\(n, le) -> do le' <- resolveLExpr scope le; pure (n, le')) fields
+    S.FieldAccess lbase field ->
+      resolveFieldAccess scope lbase field
 
 resolveTemplatePart :: Scope -> S.TemplatePart -> Either ResolveError S.TemplatePart
 resolveTemplatePart scope part =
   case part of
     S.TemplateText _ ->
       Right part
-    S.TemplateHole e ->
-      S.TemplateHole <$> resolveExpr scope e
+    S.TemplateHole le ->
+      S.TemplateHole <$> resolveLExpr scope le
 
 resolveVar :: Scope -> Text -> Either ResolveError S.Expr
 resolveVar scope name
@@ -653,9 +660,9 @@ resolveVar scope name
   | otherwise =
       Left (UnboundName (scopeModule scope) name)
 
-resolveFieldAccess :: Scope -> S.Expr -> Text -> Either ResolveError S.Expr
-resolveFieldAccess scope base field =
-  case base of
+resolveFieldAccess :: Scope -> Located S.Expr -> Text -> Either ResolveError S.Expr
+resolveFieldAccess scope lbase field =
+  case unLoc lbase of
     S.Var q
       | q `Set.notMember` scopeBound scope
       , Map.notMember q (scopeLocalValues scope) ->
@@ -671,8 +678,8 @@ resolveFieldAccess scope base field =
                     Nothing ->
                       Left (UnboundName (scopeModule scope) field)
                 else do
-                  base' <- resolveExpr scope base
-                  Right (S.FieldAccess base' field)
+                  lbase' <- resolveLExpr scope lbase
+                  Right (S.FieldAccess lbase' field)
             Just targetModule -> do
               if targetModule == scopeModule scope
                 then
@@ -685,8 +692,8 @@ resolveFieldAccess scope base field =
                   ensureExported targetModule field
                   Right (S.Var (qualifyName targetModule field))
     _ -> do
-      base' <- resolveExpr scope base
-      Right (S.FieldAccess base' field)
+      lbase' <- resolveLExpr scope lbase
+      Right (S.FieldAccess lbase' field)
   where
     ensureExported targetModule name =
       case Map.lookup targetModule (eeModules (scopeExports scope)) of
@@ -697,12 +704,22 @@ resolveFieldAccess scope base field =
             then Right ()
             else Left (QualifiedAccessNotExported (scopeModule scope) targetModule name)
 
+resolveLAlt :: Scope -> Located S.Alt -> Either ResolveError (Located S.Alt)
+resolveLAlt scope lalt = do
+  alt' <- resolveAlt scope (unLoc lalt)
+  Right (mapLoc (const alt') lalt)
+
 resolveAlt :: Scope -> S.Alt -> Either ResolveError S.Alt
-resolveAlt scope (S.Alt pat body) = do
-  pat' <- resolvePatternHead scope pat
-  let bound' = scopeBound scope <> Set.fromList (patVars [pat])
-  body' <- resolveExpr scope {scopeBound = bound'} body
-  Right (S.Alt pat' body')
+resolveAlt scope (S.Alt lpat lbody) = do
+  lpat' <- resolveLPattern scope lpat
+  let bound' = scopeBound scope <> Set.fromList (patVarsL [lpat])
+  lbody' <- resolveLExpr scope {scopeBound = bound'} lbody
+  Right (S.Alt lpat' lbody')
+
+resolveLPattern :: Scope -> Located S.Pattern -> Either ResolveError (Located S.Pattern)
+resolveLPattern scope lpat = do
+  pat' <- resolvePatternHead scope (unLoc lpat)
+  Right (mapLoc (const pat') lpat)
 
 resolvePatternHead :: Scope -> S.Pattern -> Either ResolveError S.Pattern
 resolvePatternHead scope pat =
@@ -713,10 +730,10 @@ resolvePatternHead scope pat =
       Right pat
     S.PString _ ->
       Right pat
-    S.PCon name ps -> do
+    S.PCon name lps -> do
       name' <- resolveCtorName scope name
-      ps' <- mapM (resolvePatternHead scope) ps
-      Right (S.PCon name' ps')
+      lps' <- mapM (resolveLPattern scope) lps
+      Right (S.PCon name' lps')
 
 resolveCtorName :: Scope -> Text -> Either ResolveError Text
 resolveCtorName scope name
@@ -729,37 +746,37 @@ resolveCtorName scope name
   | otherwise =
       Left (UnboundName (scopeModule scope) name)
 
-patVars :: [S.Pattern] -> [Text]
-patVars =
-  concatMap go
-  where
-    go pat =
-      case pat of
-        S.PVar name -> [name]
-        S.PWildcard -> []
-        S.PString _ -> []
-        S.PCon _ ps -> concatMap go ps
+patVarsL :: [Located S.Pattern] -> [Text]
+patVarsL = concatMap (patVars . unLoc)
 
-resolveDo :: Scope -> [S.Stmt] -> Either ResolveError [S.Stmt]
-resolveDo scope stmts =
-  go scope [] stmts
+patVars :: S.Pattern -> [Text]
+patVars pat =
+  case pat of
+    S.PVar name -> [name]
+    S.PWildcard -> []
+    S.PString _ -> []
+    S.PCon _ lps -> concatMap (patVars . unLoc) lps
+
+resolveDo :: Scope -> [Located S.Stmt] -> Either ResolveError [Located S.Stmt]
+resolveDo scope lstmts =
+  go scope [] lstmts
   where
     go _ acc [] =
       Right (reverse acc)
-    go scope0 acc (stmt : rest) =
-      case stmt of
-        S.BindStmt pat rhs -> do
-          pat' <- resolvePatternHead scope0 pat
-          rhs' <- resolveExpr scope0 rhs
-          let bound' = scopeBound scope0 <> Set.fromList (patVars [pat])
-          go scope0 {scopeBound = bound'} (S.BindStmt pat' rhs' : acc) rest
-        S.DiscardBindStmt rhs -> do
-          rhs' <- resolveExpr scope0 rhs
-          go scope0 (S.DiscardBindStmt rhs' : acc) rest
-        S.LetStmt name rhs -> do
-          rhs' <- resolveExpr scope0 rhs
+    go scope0 acc (lstmt : rest) =
+      case unLoc lstmt of
+        S.BindStmt lpat lrhs -> do
+          lpat' <- resolveLPattern scope0 lpat
+          lrhs' <- resolveLExpr scope0 lrhs
+          let bound' = scopeBound scope0 <> Set.fromList (patVarsL [lpat])
+          go scope0 {scopeBound = bound'} (mapLoc (const (S.BindStmt lpat' lrhs')) lstmt : acc) rest
+        S.DiscardBindStmt lrhs -> do
+          lrhs' <- resolveLExpr scope0 lrhs
+          go scope0 (mapLoc (const (S.DiscardBindStmt lrhs')) lstmt : acc) rest
+        S.LetStmt name lrhs -> do
+          lrhs' <- resolveLExpr scope0 lrhs
           let bound' = Set.insert name (scopeBound scope0)
-          go scope0 {scopeBound = bound'} (S.LetStmt name rhs' : acc) rest
-        S.ExprStmt rhs -> do
-          rhs' <- resolveExpr scope0 rhs
-          go scope0 (S.ExprStmt rhs' : acc) rest
+          go scope0 {scopeBound = bound'} (mapLoc (const (S.LetStmt name lrhs')) lstmt : acc) rest
+        S.ExprStmt lrhs -> do
+          lrhs' <- resolveLExpr scope0 lrhs
+          go scope0 (mapLoc (const (S.ExprStmt lrhs')) lstmt : acc) rest
