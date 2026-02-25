@@ -12,6 +12,7 @@ module Lune.Parser
 
 import Control.Applicative (empty, many, optional, some)
 import Control.Monad (guard, void)
+import Control.Monad.State.Strict (StateT, evalStateT, get, modify, put)
 import Data.Functor (($>))
 import Data.Char (isUpper)
 import Data.Text (Text)
@@ -50,7 +51,7 @@ import Text.Megaparsec.Char
   )
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void Text
+type Parser = StateT ParserState (Parsec Void Text)
 
 -- | Parser state to track pending comments
 data ParserState = ParserState
@@ -80,7 +81,7 @@ parseTextEither path contents =
 
 parseTextBundle :: FilePath -> Text -> Either (ParseErrorBundle Text Void) Module
 parseTextBundle path contents =
-  runParser (scnOptional *> parseModule <* eof) path contents
+  runParser (evalStateT (scnOptional *> parseModule <* eof) initialParserState) path contents
 
 parseModule :: Parser Module
 parseModule = do
@@ -636,7 +637,7 @@ parseMultilineTemplateLiteral = do
       Left msg -> fail msg
       Right t -> pure t
   parts <-
-    case runParser (templatePartsFromText <* eof) "<template>" content of
+    case runParser (evalStateT (templatePartsFromText <* eof) initialParserState) "<template>" content of
       Left err -> fail (errorBundlePretty err)
       Right ps -> pure (mergeTemplateTextParts ps)
   pure (TemplateLit TemplateBlock parts)
