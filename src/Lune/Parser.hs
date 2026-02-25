@@ -19,6 +19,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Data.Void (Void)
 import Lune.Syntax
+import Lune.Syntax.Comment (Comment(..), CommentKind(..), CommentPosition(..), Comments(..), emptyComments)
+import Lune.Syntax.Located (Span(..), Located(..), withLoc, withComments)
 import Text.Megaparsec
   ( Parsec
   , ParseErrorBundle
@@ -49,6 +51,14 @@ import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void Text
+
+-- | Parser state to track pending comments
+data ParserState = ParserState
+  { psPendingComments :: ![Comment]  -- ^ Comments not yet attached to an AST node
+  }
+
+initialParserState :: ParserState
+initialParserState = ParserState []
 
 parseFile :: FilePath -> IO Module
 parseFile path = do
