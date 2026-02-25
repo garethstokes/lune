@@ -11,6 +11,8 @@ build-type:         Simple
 library
   exposed-modules:
       Lune.Syntax
+      Lune.Syntax.Comment
+      Lune.Syntax.Located
       Lune.Parser
       Lune.Derive
       Lune.Derive.Table

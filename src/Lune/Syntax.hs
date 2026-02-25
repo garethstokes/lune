@@ -1,6 +1,13 @@
-module Lune.Syntax where
+module Lune.Syntax
+  ( module Lune.Syntax
+  , module Lune.Syntax.Comment
+  , module Lune.Syntax.Located
+  ) where
 
 import Data.Text (Text)
+
+import Lune.Syntax.Comment
+import Lune.Syntax.Located
 
 -- | An annotation like @derive(Table "users") or @primaryKey
 data Annotation = Annotation
