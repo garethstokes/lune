@@ -1171,7 +1171,7 @@ lexeme = L.lexeme sc
 
 scTypeSig :: Parser ()
 scTypeSig =
-  L.space consumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space consumer collectLineComment collectBlockComment
   where
     consumer =
       choice
@@ -1187,7 +1187,7 @@ scTypeSig =
 -- sibling signature line.
 scTypeSigFrom :: P.Pos -> Parser ()
 scTypeSigFrom ref =
-  L.space consumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space consumer collectLineComment collectBlockComment
   where
     consumer =
       choice
@@ -1204,19 +1204,19 @@ scTypeSigFrom ref =
 
 sc :: Parser ()
 sc =
-  L.space (void $ some (satisfy (\c -> c == ' ' || c == '\t'))) (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space (void $ some (satisfy (\c -> c == ' ' || c == '\t'))) collectLineComment collectBlockComment
 
 scIndent :: Parser ()
 scIndent =
-  L.space (void $ some (char ' ' <|> char '\t')) (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space (void $ some (char ' ' <|> char '\t')) collectLineComment collectBlockComment
 
 scn :: Parser ()
 scn =
-  L.space space1 (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space space1 collectLineComment collectBlockComment
 
 skipNewlines :: Parser ()
 skipNewlines =
-  L.space whitespaceConsumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space whitespaceConsumer collectLineComment collectBlockComment
   where
     -- Consume newlines and horizontal whitespace so we can skip across
     -- comment lines like:
@@ -1225,21 +1225,74 @@ skipNewlines =
     --     x = 1
     whitespaceConsumer = void $ some (char '\n' <|> char ' ' <|> char '\t')
 
--- ===== Comment-collecting functions (used after Task 6 updates Parser type) =====
+-- ===== Comment-capturing functions =====
 
--- | Collect a line comment and add to pending comments
--- Note: This placeholder version just skips comments. After Task 6 updates
--- the Parser type to include StateT, this will be updated to actually collect.
+-- | Parse and capture a line comment, adding to pending comments
 collectLineComment :: Parser ()
-collectLineComment = L.skipLineComment "--"
+collectLineComment = do
+  startPos <- P.getSourcePos
+  _ <- string "--"
+  -- Capture everything until end of line (but don't consume the newline)
+  commentText <- P.takeWhileP (Just "comment") (/= '\n')
+  endPos <- P.getSourcePos
+  let comment = Comment
+        { commentKind = LineComment
+        , commentPosition = Leading  -- Will be refined when attached to AST
+        , commentText = commentText
+        , commentLine = P.unPos (P.sourceLine startPos)
+        , commentCol = P.unPos (P.sourceColumn startPos)
+        , commentEndLine = P.unPos (P.sourceLine endPos)
+        , commentEndCol = P.unPos (P.sourceColumn endPos)
+        }
+  modify (\s -> s { psPendingComments = psPendingComments s ++ [comment] })
 
--- | Collect a block comment and add to pending comments
--- Note: Placeholder - will be updated in Task 6
+-- | Parse and capture a block comment (handling nesting), adding to pending comments
 collectBlockComment :: Parser ()
-collectBlockComment = L.skipBlockCommentNested "{-" "-}"
+collectBlockComment = do
+  startPos <- P.getSourcePos
+  _ <- string "{-"
+  commentText <- captureBlockBody 1 ""
+  endPos <- P.getSourcePos
+  -- Check if it's a doc comment (starts with |)
+  let kind = if T.isPrefixOf "|" commentText then DocComment else BlockComment
+      text = if kind == DocComment then T.drop 1 commentText else commentText
+  let comment = Comment
+        { commentKind = kind
+        , commentPosition = Leading
+        , commentText = text
+        , commentLine = P.unPos (P.sourceLine startPos)
+        , commentCol = P.unPos (P.sourceColumn startPos)
+        , commentEndLine = P.unPos (P.sourceLine endPos)
+        , commentEndCol = P.unPos (P.sourceColumn endPos)
+        }
+  modify (\s -> s { psPendingComments = psPendingComments s ++ [comment] })
+  where
+    -- Capture block comment body, handling nested {- -} pairs
+    captureBlockBody :: Int -> Text -> Parser Text
+    captureBlockBody 0 acc = pure acc
+    captureBlockBody depth acc = do
+      mc <- P.optional P.anySingle
+      case mc of
+        Nothing -> pure acc  -- EOF reached (shouldn't happen in valid code)
+        Just c -> case c of
+          '-' -> do
+            mc2 <- P.optional (P.lookAhead P.anySingle)
+            case mc2 of
+              Just '}' -> do
+                _ <- P.anySingle  -- consume the '}'
+                if depth == 1
+                  then pure acc  -- Done - don't include closing -}
+                  else captureBlockBody (depth - 1) (acc <> "-}")
+              _ -> captureBlockBody depth (acc <> T.singleton c)
+          '{' -> do
+            mc2 <- P.optional (P.lookAhead P.anySingle)
+            case mc2 of
+              Just '-' -> do
+                _ <- P.anySingle  -- consume the '-'
+                captureBlockBody (depth + 1) (acc <> "{-")
+              _ -> captureBlockBody depth (acc <> T.singleton c)
+          _ -> captureBlockBody depth (acc <> T.singleton c)
 
--- | Space consumer that will collect comments (placeholder)
--- Note: Currently identical to scn. After Task 6, this will use
--- collectLineComment and collectBlockComment with state.
+-- | Space consumer that collects comments into parser state
 scCollect :: Parser ()
 scCollect = L.space space1 collectLineComment collectBlockComment
