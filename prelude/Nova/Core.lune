@@ -1,36 +1,43 @@
 module Nova.Core exposing (
-  -- Collections
-  Dict,
-  Set,
-  dictEmpty,
-  dictFromList,
-  dictGet,
-  dictInsert,
-  setEmpty,
-  setFromList,
-  setMember,
-  setInsert,
-
-  -- Core types
-  Provider(..),
-  openrouter,
-  ollama,
-  providerId,
-  Usage,
-  Response,
-  Error(..),
-  Request,
-  ProviderSettings,
-  ProviderConfig,
-  Capability(..),
-  ProviderImpl,
-  ProviderRegistry,
-  defaultProviderConfig,
-  defaultProviderRegistry,
-  callProvider
+  Dict
+  , Set
+  , dictEmpty
+  , dictFromList
+  , dictGet
+  , dictInsert
+  , setEmpty
+  , setFromList
+  , setMember
+  , setInsert
+  , Provider(..)
+  , openrouter
+  , ollama
+  , providerId
+  , Usage
+  , Response
+  , Error(..)
+  , Request
+  , ProviderSettings
+  , ProviderConfig
+  , Capability(..)
+  , ProviderImpl
+  , ProviderRegistry
+  , defaultProviderConfig
+  , defaultProviderRegistry
+  , callProvider
 )
 
-import Lune.Prelude exposing (Bool(..), Int, String, List(..), Maybe(..), Result(..), Pair(..), Unit, unit)
+import Lune.Prelude exposing (
+  Bool(..)
+  , Int
+  , String
+  , List(..)
+  , Maybe(..)
+  , Result(..)
+  , Pair(..)
+  , Unit
+  , unit
+)
 import Lune.Int as Int
 import Lune.String as Str
 import Lune.IO as IO
@@ -38,33 +45,36 @@ import Lune.Net.Socket as Socket exposing (Connection)
 import Lune.Json as Json
 import Lune.Json.Encode as Encode
 import Lune.Json.Decode as Decode
+-- Collections
+
+-- Core types
 
 --------------------------------------------------------------------------------
 -- Collections (minimal, deterministic)
 --------------------------------------------------------------------------------
 
 type alias Dict k v =
-  List { key : k, value : v }
+  List { key : k
+    , value : v
+    }
 
 dictEmpty : Dict k v
-dictEmpty =
-  []
+dictEmpty = []
 
-dictFromList : List { key : k, value : v } -> Dict k v
-dictFromList pairs =
-  pairs
+dictFromList : List { key : k
+      , value : v
+      } -> Dict k v
+dictFromList pairs = pairs
 
 dictGet : (k -> k -> Bool) -> k -> Dict k v -> Maybe v
 dictGet eq key dict =
   case dict of
     [] ->
       Nothing
-
     Cons entry rest ->
       case eq key entry.key of
         True ->
           Just entry.value
-
         False ->
           dictGet eq key rest
 
@@ -72,13 +82,11 @@ dictInsert : (k -> k -> Bool) -> k -> v -> Dict k v -> Dict k v
 dictInsert eq key value dict =
   case dict of
     [] ->
-      Cons { key = key, value = value } []
-
+      [{ key = key, value = value }]
     Cons entry rest ->
       case eq key entry.key of
         True ->
           Cons { key = key, value = value } rest
-
         False ->
           Cons entry (dictInsert eq key value rest)
 
@@ -86,24 +94,20 @@ type alias Set a =
   List a
 
 setEmpty : Set a
-setEmpty =
-  []
+setEmpty = []
 
 setFromList : (a -> a -> Bool) -> List a -> Set a
-setFromList eq xs =
-  setFromListGo eq xs []
+setFromList eq xs = setFromListGo eq xs []
 
 setFromListGo : (a -> a -> Bool) -> List a -> Set a -> Set a
 setFromListGo eq xs acc =
   case xs of
     [] ->
       acc
-
     Cons x rest ->
       case setMember eq x acc of
         True ->
           setFromListGo eq rest acc
-
         False ->
           setFromListGo eq rest (setInsert eq x acc)
 
@@ -112,20 +116,20 @@ setMember eq x xs =
   case xs of
     [] ->
       False
-
     Cons y rest ->
       case eq x y of
         True ->
           True
-
         False ->
           setMember eq x rest
 
 setInsert : (a -> a -> Bool) -> a -> Set a -> Set a
 setInsert eq x xs =
   case setMember eq x xs of
-    True -> xs
-    False -> Cons x xs
+    True ->
+      xs
+    False ->
+      Cons x xs
 
 --------------------------------------------------------------------------------
 -- Core types
@@ -137,20 +141,18 @@ type Provider =
 providerId : Provider -> String
 providerId p =
   case p of
-    Provider s -> s
+    Provider s ->
+      s
 
 eqProvider : Provider -> Provider -> Bool
-eqProvider a b =
-  Str.eq (providerId a) (providerId b)
+eqProvider a b = Str.eq (providerId a) (providerId b)
 
 -- Convenience values matching spec naming.
 openrouter : Provider
-openrouter =
-  Provider "openrouter"
+openrouter = Provider "openrouter"
 
 ollama : Provider
-ollama =
-  Provider "ollama"
+ollama = Provider "ollama"
 
 type alias Usage =
   { inputTokens : Int
@@ -191,19 +193,19 @@ defaultProviderConfig : ProviderConfig
 defaultProviderConfig =
   dictFromList
     [ { key = openrouter
-      , value =
-          { baseUrl = "https://openrouter.ai/api/v1"
-          , apiKey = Nothing
-          , appName = Nothing
-          }
+    , value =
+      { baseUrl = "https://openrouter.ai/api/v1"
+      , apiKey = Nothing
+      , appName = Nothing
       }
+    }
     , { key = ollama
-      , value =
-          { baseUrl = "http://localhost:11434"
-          , apiKey = Nothing
-          , appName = Nothing
-          }
+    , value =
+      { baseUrl = "http://localhost:11434"
+      , apiKey = Nothing
+      , appName = Nothing
       }
+    }
     ]
 
 type Capability =
@@ -216,26 +218,30 @@ eqCapability a b =
   case a of
     SupportsTools ->
       case b of
-        SupportsTools -> True
-        _ -> False
+        SupportsTools ->
+          True
+        _ ->
+          False
     SupportsStreaming ->
       case b of
-        SupportsStreaming -> True
-        _ -> False
+        SupportsStreaming ->
+          True
+        _ ->
+          False
     SupportsJsonMode ->
       case b of
-        SupportsJsonMode -> True
-        _ -> False
+        SupportsJsonMode ->
+          True
+        _ ->
+          False
 
 type alias ProviderImpl =
   { id : Provider
-  , call :
-      ProviderConfig
-      -> String  -- model
-      -> String  -- prompt
-      -> IO (Result Error Response)
+  , call : ProviderConfig -> String -> String -> IO (Result Error Response)
   , capabilities : Set Capability
   }
+-- model
+-- prompt
 
 type alias ProviderRegistry =
   Dict Provider ProviderImpl
@@ -248,17 +254,19 @@ defaultProviderRegistry =
     ]
 
 callProvider :
-  ProviderRegistry
-  -> ProviderConfig
-  -> Provider
-  -> String
-  -> String
-  -> IO (Result Error Response)
+    ProviderRegistry
+      -> ProviderConfig
+      -> Provider
+      -> String
+      -> String
+      -> IO (Result Error Response)
 callProvider registry cfg provider model prompt =
   case dictGet eqProvider provider registry of
     Nothing ->
-      IO.pure (Err (ProviderError (Str.append "Unknown provider: " (providerId provider))))
-
+      IO.pure
+        (Err
+          (ProviderError
+            (Str.append "Unknown provider: " (providerId provider))))
     Just impl ->
       impl.call cfg model prompt
 
@@ -272,11 +280,8 @@ getSettings provider cfg =
     Just s ->
       s
     Nothing ->
-      -- Missing config should not crash; use a safe default.
-      { baseUrl = ""
-      , apiKey = Nothing
-      , appName = Nothing
-      }
+      { baseUrl = "", apiKey = Nothing, appName = Nothing }
+-- Missing config should not crash; use a safe default.
 
 openrouterImpl : ProviderImpl
 openrouterImpl =
@@ -286,82 +291,96 @@ openrouterImpl =
   }
 
 ollamaImpl : ProviderImpl
-ollamaImpl =
-  { id = ollama
-  , call = callOllama
-  , capabilities = setEmpty
-  }
+ollamaImpl = { id = ollama, call = callOllama, capabilities = setEmpty }
 
-callOpenRouter : ProviderConfig -> String -> String -> IO (Result Error Response)
+callOpenRouter :
+    ProviderConfig -> String -> String -> IO (Result Error Response)
 callOpenRouter cfg _ _ =
-  let settings = getSettings openrouter cfg in
-  case settings.apiKey of
-    Nothing ->
-      IO.pure (Err Unauthorized)
-
-    Just _ ->
-      IO.pure (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
+  let
+    settings = getSettings openrouter cfg
+  in
+    case settings.apiKey of
+      Nothing ->
+        IO.pure (Err Unauthorized)
+      Just _ ->
+        IO.pure
+          (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
 
 callOllama : ProviderConfig -> String -> String -> IO (Result Error Response)
 callOllama cfg modelId prompt =
-  let settings = getSettings ollama cfg in
-  case Str.startsWith "mock://" settings.baseUrl of
-    True ->
-      IO.pure (mockOllama modelId prompt)
+  let
+    settings = getSettings ollama cfg
+  in
+    case Str.startsWith "mock://" settings.baseUrl of
+      True ->
+        IO.pure (mockOllama modelId prompt)
+      False ->
+        callOllamaHttp settings modelId prompt
 
-    False ->
-      callOllamaHttp settings modelId prompt
-
-callOllamaHttp : ProviderSettings -> String -> String -> IO (Result Error Response)
+callOllamaHttp :
+    ProviderSettings -> String -> String -> IO (Result Error Response)
 callOllamaHttp settings modelId prompt =
   let
     hostPort = parseHostPort settings.baseUrl
-    requestBody = Encode.object
-      [ { key = "model", value = Encode.string modelId }
-      , { key = "prompt", value = Encode.string prompt }
-      , { key = "stream", value = Encode.bool False }
-      ]
+    requestBody =
+      Encode.object
+        [ { key = "model", value = Encode.string modelId }
+        , { key = "prompt", value = Encode.string prompt }
+        , { key = "stream", value = Encode.bool False }
+        ]
     bodyStr = Json.stringify requestBody
     httpRequest = buildHttpPost hostPort.host "/api/generate" bodyStr
   in
-    IO.andThen (prim_tcpConnect hostPort.host hostPort.port) (\connResult ->
-      case connResult of
-        Err _ ->
-          IO.pure (Err (NetworkError (Str.append "Failed to connect to Ollama at " settings.baseUrl)))
+    IO.andThen
+      (prim_tcpConnect hostPort.host hostPort.port)
+      (\connResult ->
+        case connResult of
+          Err _ ->
+            IO.pure
+              (Err
+                (NetworkError
+                  (Str.append
+                    "Failed to connect to Ollama at "
+                    settings.baseUrl)))
+          Ok conn ->
+            IO.andThen
+              (prim_connSend conn httpRequest)
+              (\sendResult ->
+                case sendResult of
+                  Err _ ->
+                    IO.andThen
+                      (prim_connClose conn)
+                      (\_ ->
+                        IO.pure (Err (NetworkError "Failed to send request")))
+                  Ok _ ->
+                    IO.andThen
+                      (recvHttpResponse conn "")
+                      (\responseStr ->
+                        IO.andThen
+                          (prim_connClose conn)
+                          (\_ -> IO.pure (parseOllamaResponse responseStr)))))
 
-        Ok conn ->
-          IO.andThen (prim_connSend conn httpRequest) (\sendResult ->
-            case sendResult of
-              Err _ ->
-                IO.andThen (prim_connClose conn) (\_ ->
-                  IO.pure (Err (NetworkError "Failed to send request"))
-                )
-
-              Ok _ ->
-                IO.andThen (recvHttpResponse conn "") (\responseStr ->
-                  IO.andThen (prim_connClose conn) (\_ ->
-                    IO.pure (parseOllamaResponse responseStr)
-                  )
-                )
-          )
-    )
-
-parseHostPort : String -> { host : String, port : Int }
+parseHostPort : String -> { host : String
+      , port : Int
+      }
 parseHostPort url =
   let
-    -- Strip http:// or https:// prefix
     stripped =
       case Str.startsWith "http://" url of
-        True -> Str.drop 7 url
+        True ->
+          Str.drop 7 url
         False ->
           case Str.startsWith "https://" url of
-            True -> Str.drop 8 url
-            False -> url
-    -- Find port separator
+            True ->
+              Str.drop 8 url
+            False ->
+              url
     hostAndPort =
       case Str.indexOf "/" stripped of
-        Just idx -> Str.take idx stripped
-        Nothing -> stripped
+        Just idx ->
+          Str.take idx stripped
+        Nothing ->
+          stripped
   in
     case Str.indexOf ":" hostAndPort of
       Nothing ->
@@ -372,15 +391,20 @@ parseHostPort url =
           portStr = Str.drop (Int.add idx 1) hostAndPort
         in
           case Str.toInt portStr of
-            Ok p -> { host = host, port = p }
-            Err _ -> { host = host, port = 11434 }
+            Ok p ->
+              { host = host, port = p }
+            Err _ ->
+              { host = host, port = 11434 }
+-- Strip http:// or https:// prefix
+-- Find port separator
 
 buildHttpPost : String -> String -> String -> String
 buildHttpPost host path body =
   let
     contentLength = Str.length body
   in
-    Str.join "\r\n"
+    Str.join
+      "\r\n"
       [ Str.append "POST " (Str.append path " HTTP/1.1")
       , Str.append "Host: " host
       , "Content-Type: application/json"
@@ -392,84 +416,91 @@ buildHttpPost host path body =
 
 recvHttpResponse : Connection -> String -> IO String
 recvHttpResponse conn acc =
-  IO.andThen (prim_connRecv conn) (\result ->
-    case result of
-      Err _ ->
-        -- Connection closed or error, return what we have
-        IO.pure acc
-
-      Ok chunk ->
-        case Str.isEmpty chunk of
-          True ->
-            IO.pure acc
-
-          False ->
-            recvHttpResponse conn (Str.append acc chunk)
-  )
+  IO.andThen
+    (prim_connRecv conn)
+    (\result ->
+      case result of
+        Err _ ->
+          IO.pure acc
+        Ok chunk ->
+          case Str.isEmpty chunk of
+            True ->
+              IO.pure acc
+            False ->
+              recvHttpResponse conn (Str.append acc chunk))
+-- Connection closed or error, return what we have
 
 parseOllamaResponse : String -> Result Error Response
 parseOllamaResponse raw =
-  -- Find the body (after \r\n\r\n or \n\n)
   let
     body =
       case Str.indexOf "\r\n\r\n" raw of
-        Just idx -> Str.drop (Int.add idx 4) raw
+        Just idx ->
+          Str.drop (Int.add idx 4) raw
         Nothing ->
           case Str.indexOf "\n\n" raw of
-            Just idx -> Str.drop (Int.add idx 2) raw
-            Nothing -> raw
+            Just idx ->
+              Str.drop (Int.add idx 2) raw
+            Nothing ->
+              raw
   in
     case Json.parse body of
       Err msg ->
         Err (DecodeError (Str.append "Failed to parse Ollama response: " msg))
-
       Ok json ->
         case Decode.decodeValue (Decode.field "response" Decode.string) json of
           Err decodeErr ->
-            Err (DecodeError (Str.append "Missing 'response' field: " decodeErr.message))
-
+            Err
+              (DecodeError
+                (Str.append "Missing 'response' field: " decodeErr.message))
           Ok responseText ->
-            Ok { text = responseText, usage = Nothing }
+            Ok
+              { text = responseText, usage = Nothing }
+-- Find the body (after \r\n\r\n or \n\n)
 
 mockOllama : String -> String -> Result Error Response
 mockOllama modelId prompt =
   case Str.eq modelId "mock-tool-wrapper" of
     True ->
-      let pre = countOccurrences "You must output exactly one JSON value and nothing else." prompt in
-      let post = countOccurrences "Output ONLY JSON now." prompt in
-      Ok
-        { text =
+      let
+        pre =
+          countOccurrences
+            "You must output exactly one JSON value and nothing else."
+            prompt
+        post = countOccurrences "Output ONLY JSON now." prompt
+      in
+        Ok
+          { text =
             Str.append
               (Str.append "[" (Str.fromInt pre))
               (Str.append (Str.append "," (Str.fromInt post)) "]")
-        , usage = Nothing
-        }
-
+          , usage = Nothing
+          }
     False ->
       case Str.eq modelId "mock-pure" of
         True ->
-          Ok { text = "{\"n\":1}", usage = Nothing }
-
+          Ok
+            { text = "{\"n\":1}", usage = Nothing }
         False ->
           case Str.eq modelId "mock-prose-prefix" of
             True ->
-              Ok { text = "Sure.\n{\"n\":1}", usage = Nothing }
-
+              Ok
+                { text = "Sure.\n{\"n\":1}", usage = Nothing }
             False ->
               case Str.eq modelId "mock-prose-suffix" of
                 True ->
-                  Ok { text = "{\"n\":1}\nThanks!", usage = Nothing }
-
+                  Ok
+                    { text = "{\"n\":1}\nThanks!", usage = Nothing }
                 False ->
                   case Str.eq modelId "mock-invalid" of
                     True ->
-                      Ok { text = "Ok: {not json}", usage = Nothing }
-
+                      Ok
+                        { text = "Ok: {not json}", usage = Nothing }
                     False ->
                       case Str.eq modelId "mock-no-json" of
                         True ->
-                          Ok { text = "No JSON here.", usage = Nothing }
-
+                          Ok
+                            { text = "No JSON here.", usage = Nothing }
                         False ->
                           Err (ProviderError "Unknown mock model id.")
 
@@ -478,7 +509,6 @@ countOccurrences needle haystack =
   case Str.isEmpty needle of
     True ->
       0
-
     False ->
       countOccurrencesFrom needle (Str.length needle) 0 haystack
 
@@ -487,7 +517,8 @@ countOccurrencesFrom needle needleLen acc s =
   case Str.indexOf needle s of
     Nothing ->
       acc
-
     Just i ->
-      let next = Str.drop (Int.add i needleLen) s in
-      countOccurrencesFrom needle needleLen (Int.add acc 1) next
+      let
+        next = Str.drop (Int.add i needleLen) s
+      in
+        countOccurrencesFrom needle needleLen (Int.add acc 1) next

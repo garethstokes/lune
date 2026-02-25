@@ -3,6 +3,9 @@ module Lune.System exposing (
   , OS(..)
   , Arch(..)
   , Error(..)
+  , errorToString
+  , osToString
+  , archToString
   , Inventory
   , CpuInfo
   , MemInfo
@@ -97,6 +100,40 @@ type Error =
   | ReadError String
   | ParseError String
   | PermissionDenied String
+
+errorToString : Error -> String
+errorToString err =
+  case err of
+    NotImplemented os ->
+      Str.append "NotImplemented(" (Str.append (osToString os) ")")
+    ReadError msg ->
+      Str.append "ReadError(" (Str.append msg ")")
+    ParseError msg ->
+      Str.append "ParseError(" (Str.append msg ")")
+    PermissionDenied msg ->
+      Str.append "PermissionDenied(" (Str.append msg ")")
+
+osToString : OS -> String
+osToString os =
+  case os of
+    Linux ->
+      "linux"
+    Darwin ->
+      "darwin"
+    Windows ->
+      "windows"
+
+archToString : Arch -> String
+archToString arch =
+  case arch of
+    X86_64 ->
+      "x86_64"
+    AArch64 ->
+      "aarch64"
+    RiscV64 ->
+      "riscv64"
+    UnknownArch s ->
+      Str.append "unknown(" (Str.append s ")")
 
 -- =============================================================================
 -- Public inventory types

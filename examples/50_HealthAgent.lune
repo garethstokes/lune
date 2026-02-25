@@ -31,11 +31,10 @@ import Lune.List as List
 import Lune.Json as RawJson exposing (Json)
 import Lune.Json.Decode as D
 import Lune.Json.Encode as E
-import Lune.System as System exposing (Error(..), OS(..))
+import Lune.System as System
 import Template exposing (render)
 import Nova exposing (withModel, tool)
-import Nova.Core as Core exposing (Error(..))
-
+import Nova.Core as Core
 
 -- Data Types ----------------------------------------------------------------
 
@@ -67,7 +66,10 @@ type alias CpuUsage =
 type alias NetworkUsage =
   { rxBytesPerSec : Int
   , txBytesPerSec : Int
-  , interfaces : List { name : String, rxBytesPerSec : Int, txBytesPerSec : Int }
+  , interfaces : List { name : String
+    , rxBytesPerSec : Int
+    , txBytesPerSec : Int
+    }
   }
 
 @derive(Json)
@@ -127,21 +129,31 @@ type alias HealthAnalysis =
   }
 
 type AgentError =
-  LlmError Core.Error
-  | DecodeError String
-  | SystemError System.Error
-
+  LlmErrorMsg String
+  | AgentDecodeError String
+  | SystemErrorMsg String
 
 -- Data Collection -----------------------------------------------------------
 
 collectHealthReport : Task AgentError HealthReport
 collectHealthReport =
   do
-    s1 <- System.sample |> Task.mapError SystemError
-    _ <- IO.sleepMs 500
-    s2 <- System.sample |> Task.mapError SystemError
-    let d = System.diff s1 s2
-    Task.succeed (diffToReport s2 d)
+    r1 <- Task.result System.sample
+    case r1 of
+      Err e ->
+        Task.fail (SystemErrorMsg (System.errorToString e))
+      Ok s1 ->
+        do
+          _ <- IO.sleepMs 500
+          r2 <- Task.result System.sample
+          case r2 of
+            Err e ->
+              Task.fail (SystemErrorMsg (System.errorToString e))
+            Ok s2 ->
+              let
+                d = System.diff s1 s2
+              in
+                Task.succeed (diffToReport s2 d)
 
 diffToReport : System.Sample -> System.Diff -> HealthReport
 diffToReport s d =
@@ -237,7 +249,6 @@ procsFromDiff p =
       })
     p.top
 
-
 -- Display -------------------------------------------------------------------
 
 showSeverity : Severity -> String
@@ -279,7 +290,6 @@ showAction current total act =
       +-------------------------------------------------+
     ''
 
-
 -- LLM Configuration ---------------------------------------------------------
 
 analysisSystemPrompt : String
@@ -314,10 +324,7 @@ buildAnalysisPrompt report =
     ''
 
 makeClient : Nova.Client
-makeClient =
-  Nova.defaultClient
-    |> withModel "qwen3"
-
+makeClient = Nova.defaultClient |> withModel "qwen3"
 
 -- Agent ---------------------------------------------------------------------
 
@@ -325,14 +332,20 @@ analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
 analyzeHealth report =
   do
     let prompt = buildAnalysisPrompt report
-    analysisJson <-
+    toolResult <-
       tool
         makeClient
         prompt
-      |> Task.mapError LlmError
-    D.decodeValue healthAnalysisDecoder analysisJson
-      |> Task.fromResult
-      |> Task.mapError (\d -> DecodeError d.message)
+      |> Task.result
+    case toolResult of
+      Err e ->
+        Task.fail (LlmErrorMsg (Nova.showError e))
+      Ok analysisJson ->
+        case D.decodeValue healthAnalysisDecoder analysisJson of
+          Err d ->
+            Task.fail (AgentDecodeError d.message)
+          Ok analysis ->
+            Task.succeed analysis
 
 displayAnalysis : HealthAnalysis -> Task e Unit
 displayAnalysis analysis =
@@ -354,35 +367,12 @@ displayAnalysis analysis =
 showAgentError : AgentError -> String
 showAgentError err =
   case err of
-    LlmError e ->
-      render "LLM analysis failed: ${Nova.showError e}"
-    DecodeError msg ->
+    LlmErrorMsg msg ->
+      render "LLM analysis failed: ${msg}"
+    AgentDecodeError msg ->
       render "Failed to decode response: ${msg}"
-    SystemError e ->
-      render "System check failed: ${systemErrorToString e}"
-
-systemErrorToString : System.Error -> String
-systemErrorToString err =
-  case err of
-    NotImplemented os ->
-      Str.append "NotImplemented(" (Str.append (osToString os) ")")
-    ReadError msg ->
-      Str.append "ReadError(" (Str.append msg ")")
-    ParseError msg ->
-      Str.append "ParseError(" (Str.append msg ")")
-    PermissionDenied msg ->
-      Str.append "PermissionDenied(" (Str.append msg ")")
-
-osToString : System.OS -> String
-osToString os =
-  case os of
-    Linux ->
-      "linux"
-    Darwin ->
-      "darwin"
-    Windows ->
-      "windows"
-
+    SystemErrorMsg msg ->
+      render "System check failed: ${msg}"
 
 -- Human-in-the-Loop ---------------------------------------------------------
 
@@ -460,7 +450,6 @@ processActionsGo current total actions =
               IO.println "Action recorded."
               processActionsGo (Int.add current 1) total rest
 
-
 -- Main ----------------------------------------------------------------------
 
 runAgent : Task AgentError Unit
@@ -468,7 +457,9 @@ runAgent =
   do
     IO.println "Collecting system health data..."
     report <- collectHealthReport
-    IO.println (render "Health data collected (sampled over ${Str.fromInt report.dtMs}ms).")
+    IO.println
+      (render
+        "Health data collected (sampled over ${Str.fromInt report.dtMs}ms).")
     IO.println ""
     IO.println "Analysing with LLM..."
     analysis <- analyzeHealth report

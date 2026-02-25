@@ -390,11 +390,11 @@ pathItemToString item =
 --------------------------------------------------------------------------------
 
 type Stream a =
-  Stream IO Result Error (StreamStep a)
+  Stream (IO (Result Error (StreamStep a)))
 
 type StreamStep a =
   StreamEnd
-  | StreamYield a Stream a
+  | StreamYield a (Stream a)
 
 next : Stream a -> IO (Result Error (StreamStep a))
 next stream =
