@@ -61,6 +61,46 @@ data ParserState = ParserState
 initialParserState :: ParserState
 initialParserState = ParserState []
 
+-- ===== Located helpers =====
+
+-- | Wrap a parsed value with location and attach pending comments
+located :: Parser a -> Parser (Located a)
+located p = do
+  startPos <- P.getSourcePos
+  leading <- consumePendingComments
+  result <- p
+  endPos <- P.getSourcePos
+  let span = Span
+        (P.unPos (P.sourceLine startPos))
+        (P.unPos (P.sourceColumn startPos))
+        (P.unPos (P.sourceLine endPos))
+        (P.unPos (P.sourceColumn endPos))
+      comments = Comments leading [] []
+  pure (Located span comments result)
+
+-- | Consume all pending comments, marking them as leading
+consumePendingComments :: Parser [Comment]
+consumePendingComments = do
+  s <- get
+  put s { psPendingComments = [] }
+  pure (map (\c -> c { commentPosition = Leading }) (psPendingComments s))
+
+-- | Attach trailing comments (on same line) to a Located value
+-- Note: Placeholder for trailing comment detection (complex to implement)
+attachTrailing :: Located a -> Parser (Located a)
+attachTrailing loc = do
+  -- Trailing comment detection is complex and deferred to later
+  -- For now, just return the Located value unchanged
+  pure loc
+
+-- | Collect comments that appear on the given line
+-- Note: Placeholder - implementing trailing comments is complex
+collectTrailingComments :: Int -> Parser [Comment]
+collectTrailingComments _line = do
+  -- Placeholder - trailing comment detection requires looking ahead
+  -- without consuming, which is tricky
+  pure []
+
 parseFile :: FilePath -> IO Module
 parseFile path = do
   result <- parseFileEither path
