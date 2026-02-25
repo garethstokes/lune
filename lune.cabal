@@ -13,6 +13,7 @@ library
       Lune.Syntax
       Lune.Syntax.Comment
       Lune.Syntax.Located
+      Lune.Syntax.AST
       Lune.Parser
       Lune.Derive
       Lune.Derive.Table
