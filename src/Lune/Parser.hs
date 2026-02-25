@@ -1156,6 +1156,11 @@ scn =
 
 skipNewlines :: Parser ()
 skipNewlines =
-  L.space newlineConsumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
+  L.space whitespaceConsumer (L.skipLineComment "--") (L.skipBlockCommentNested "{-" "-}")
   where
-    newlineConsumer = void $ some (char '\n')
+    -- Consume newlines and horizontal whitespace so we can skip across
+    -- comment lines like:
+    --   let
+    --     -- comment here
+    --     x = 1
+    whitespaceConsumer = void $ some (char '\n' <|> char ' ' <|> char '\t')
