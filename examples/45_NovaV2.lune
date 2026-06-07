@@ -36,12 +36,12 @@ import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
 mockProvider : Provider
 mockProvider = provider "mock"
 
-mockCall _ model prompt =
+mockCall _ model messages =
   case model of
     "echo" ->
       IO.pure
         <| Ok
-          { text = prompt
+          { text = Core.messagesToPrompt messages
           , usage = Just
               { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
           }

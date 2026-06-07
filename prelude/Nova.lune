@@ -300,8 +300,9 @@ composeToolPrompt = Prompt.composeToolPrompt
 askRaw : Client -> String -> Task Error Response
 askRaw client prompt =
   let
+    messages = [ Core.user prompt ]
     request =
-      { provider = client.provider, model = client.model, prompt = prompt }
+      { provider = client.provider, model = client.model, messages = messages }
   in
     Task.andThen
       (liftResult
@@ -310,7 +311,7 @@ askRaw client prompt =
           client.providerConfig
           client.provider
           client.model
-          prompt))
+          messages))
       (\response ->
         case client.hooks of
           Nothing ->
