@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "lune",
+  "project_id": "79b95613-861e-4b4b-b88b-7f1970241d21"
+}
