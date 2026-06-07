@@ -1,0 +1,88 @@
+processor	: 0
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 0
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 1
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 0
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 2
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 1
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 3
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 1
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 4
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 2
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 5
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 2
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 6
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 3
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
+processor	: 7
+vendor_id	: GenuineLune
+cpu family	: 6
+model		: 1
+model name	: Lune Test CPU @ 3.00GHz
+cpu MHz		: 3000.000
+physical id	: 0
+core id		: 3
+cpu cores	: 4
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat lm constant_tsc
+
