@@ -45,7 +45,11 @@ import System.Process
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.Golden (goldenVsStringDiff)
-import Test.Tasty.HUnit (assertFailure, testCase, assertEqual)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, assertEqual)
+import Data.Text (Text)
+import Lune.Syntax
+import qualified Lune.Syntax.Comments.Attach as Attach
+import qualified Lune.Parser as Parser
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
 import Data.Maybe (fromMaybe)
@@ -85,7 +89,32 @@ main = do
     , testGroup "Process" (map processTest processCases)
     , testGroup "Process Go" (map processGoTest goProcessCases)
     , testGroup "LSP" [lspIntegrationTest, hoverIntegrationTest, typedHoverIntegrationTest, unicodeHoverIntegrationTest, hoverRetentionIntegrationTest, vfsImportPropagationTest]
+    , attachTests
     ]
+
+-- =============================================================================
+-- Attach (comment attachment pass) Tests
+-- =============================================================================
+
+attachTests :: TestTree
+attachTests = testGroup "Attach"
+  [ testCase "trailing comment attaches to RHS expr on same line" $ do
+      let src = "module M exposing (x)\n\nx = 1  -- note\n"
+      case Parser.parseTextWithComments "M" src of
+        Left e -> assertFailure (show e)
+        Right (m, cs) -> do
+          let m' = Attach.attachComments m cs
+          assertBool "trailing comment present on a node" (moduleHasTrailing "note" m')
+          assertEqual "no leftover top-level comments" [] (map commentText (modComments m'))
+  ]
+
+moduleHasTrailing :: Text -> Module -> Bool
+moduleHasTrailing needle m = any declHasTrailing (modDecls m)
+  where
+    declHasTrailing (DeclValue _ _ rhs) = locHasTrailing rhs
+    declHasTrailing _ = False
+    locHasTrailing l = any (needleIn . commentText) (commentsTrailing (locComments l))
+    needleIn t = needle `T.isInfixOf` t
 
 -- | Discover .lune files in a directory, sorted for determinism.
 discoverExamples :: FilePath -> IO [FilePath]

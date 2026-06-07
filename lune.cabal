@@ -12,6 +12,7 @@ library
   exposed-modules:
       Lune.Syntax
       Lune.Syntax.Comment
+      Lune.Syntax.Comments.Attach
       Lune.Syntax.Located
       Lune.Syntax.AST
       Lune.Parser
@@ -108,7 +109,8 @@ test-suite golden
       tasty,
       tasty-golden,
       tasty-hunit,
-      text
+      text,
+      lune
 
   default-language: Haskell2010
   default-extensions: OverloadedStrings
