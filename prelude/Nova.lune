@@ -26,6 +26,10 @@ module Nova exposing (
   , ask
   , json
   , tool
+  , askRawMessages
+  , askMessages
+  , jsonMessages
+  , toolMessages
   , Stream
   , StreamStep(..)
   , next
@@ -66,6 +70,8 @@ import Nova.Core as Core exposing (
   , Response
   , Error(..)
   , Request
+  , Role(..)
+  , Message
   , ProviderSettings
   , ProviderConfig
   , ProviderRegistry
@@ -297,11 +303,11 @@ composeToolPrompt = Prompt.composeToolPrompt
 -- Public API
 --------------------------------------------------------------------------------
 
-askRaw : Client -> String -> Task Error Response
-askRaw client prompt =
+askRawMessages : Client -> List Message -> Task Error Response
+askRawMessages client messages =
   let
     request =
-      { provider = client.provider, model = client.model, prompt = prompt }
+      { provider = client.provider, model = client.model, messages = messages }
   in
     Task.andThen
       (liftResult
@@ -310,7 +316,7 @@ askRaw client prompt =
           client.providerConfig
           client.provider
           client.model
-          prompt))
+          messages))
       (\response ->
         case client.hooks of
           Nothing ->
@@ -323,40 +329,97 @@ askRaw client prompt =
                   { request = request, response = response }))
               (\_ -> Task.succeed response))
 
+askRaw : Client -> String -> Task Error Response
+askRaw client prompt = askRawMessages client [ Core.user prompt ]
+
 liftResult : IO (Result e a) -> Task e a
 liftResult io = Task io
 
-ask : Client -> String -> Task Error String
-ask client prompt = Task.map (\response -> response.text) (askRaw client prompt)
+-- Shared decode helpers (factored out of json/tool so the string and
+-- messages variants share ONE implementation).
 
-json : Json.Decode a => Client -> String -> Task Error a
-json client prompt =
-  Task.andThen
-    (askRaw client prompt)
-    (\response ->
-      case Json.decodeDetailed response.text of
+decodeJsonResponse : Json.Decode a => Response -> Task Error a
+decodeJsonResponse response =
+  case Json.decodeDetailed response.text of
+    Ok a ->
+      Task.succeed a
+    Err decodeErr ->
+      Task.fail (Core.DecodeError (formatDecodeError decodeErr))
+
+decodeExtractedJson : Json.Decode a => Response -> Task Error a
+decodeExtractedJson response =
+  case extractJson response.text of
+    Err e ->
+      Task.fail e
+    Ok rawJson ->
+      case Json.decodeDetailed rawJson of
         Ok a ->
           Task.succeed a
         Err decodeErr ->
-          Task.fail (Core.DecodeError (formatDecodeError decodeErr)))
+          Task.fail (Core.DecodeError (formatDecodeError decodeErr))
+
+-- Wrap the content of the LAST User message exactly as `tool` wraps a
+-- single prompt string. For [ user p ] this yields [ user (wrap p) ],
+-- which is what today's `tool` sends (so eval goldens stay identical).
+wrapToolPrompt : String -> String
+wrapToolPrompt prompt = Str.unlines [toolPreamble, "", prompt, "", toolPostamble]
+
+wrapLastUserForTool : List Message -> List Message
+wrapLastUserForTool messages =
+  case lastUserIndex messages 0 Nothing of
+    Nothing ->
+      messages
+    Just target ->
+      wrapMessageAt target messages 0
+
+lastUserIndex : List Message -> Int -> Maybe Int -> Maybe Int
+lastUserIndex messages idx found =
+  case messages of
+    [] ->
+      found
+    Cons m rest ->
+      case m.role of
+        User ->
+          lastUserIndex rest (Int.add idx 1) (Just idx)
+        _ ->
+          lastUserIndex rest (Int.add idx 1) found
+
+wrapMessageAt : Int -> List Message -> Int -> List Message
+wrapMessageAt target messages idx =
+  case messages of
+    [] ->
+      []
+    Cons m rest ->
+      case prim_eqInt idx target of
+        True ->
+          Cons
+            { role = m.role, content = wrapToolPrompt m.content }
+            rest
+        False ->
+          Cons m (wrapMessageAt target rest (Int.add idx 1))
+
+ask : Client -> String -> Task Error String
+ask client prompt = askMessages client [ Core.user prompt ]
+
+askMessages : Client -> List Message -> Task Error String
+askMessages client messages =
+  Task.map (\response -> response.text) (askRawMessages client messages)
+
+json : Json.Decode a => Client -> String -> Task Error a
+json client prompt = jsonMessages client [ Core.user prompt ]
+
+jsonMessages : Json.Decode a => Client -> List Message -> Task Error a
+jsonMessages client messages =
+  Task.andThen (askRawMessages client messages) decodeJsonResponse
 
 tool : Json.Decode a => Client -> String -> Task Error a
-tool client prompt =
-  let
-    wrapped = Str.unlines [toolPreamble, "", prompt, "", toolPostamble]
-  in
-    Task.andThen
-      (askRaw client wrapped)
-      (\response ->
-        case extractJson response.text of
-          Err e ->
-            Task.fail e
-          Ok rawJson ->
-            case Json.decodeDetailed rawJson of
-              Ok a ->
-                Task.succeed a
-              Err decodeErr ->
-                Task.fail (Core.DecodeError (formatDecodeError decodeErr)))
+tool client prompt = toolMessages client [ Core.user prompt ]
+
+toolMessages : Json.Decode a => Client -> List Message -> Task Error a
+toolMessages client messages =
+  Task.andThen
+    (askRawMessages client (wrapLastUserForTool messages))
+    decodeExtractedJson
 
 formatDecodeError : DecodeError -> String
 formatDecodeError err =

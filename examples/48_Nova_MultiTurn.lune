@@ -1,0 +1,74 @@
+module Main exposing (main)
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.String as Str
+import Nova exposing (
+  newClient
+  , provider
+  , askMessages
+  )
+import Nova.Core as Core exposing (
+  Error(..)
+  , Provider
+  , Message
+  , user
+  , assistant
+  )
+
+-- | Convert a failable Task into a Task that always succeeds with a Result.
+toResult : Task e a -> Task x (Result e a)
+toResult task = Task.onError (Task.map Ok task) (\e -> Task.succeed (Err e))
+
+showError : Error -> String
+showError e =
+  case e of
+    NetworkError msg ->
+      Str.append "NetworkError " msg
+    RateLimited ->
+      "RateLimited"
+    Unauthorized ->
+      "Unauthorized"
+    BadRequest msg ->
+      Str.append "BadRequest " msg
+    ProviderError msg ->
+      Str.append "ProviderError " msg
+    DecodeError msg ->
+      Str.append "DecodeError " msg
+
+showAskResult : Result Error String -> String
+showAskResult r =
+  case r of
+    Err e ->
+      showError e
+    Ok s ->
+      s
+
+mockProvider : Provider
+mockProvider = provider "mock"
+
+mockCall _ model messages = IO.pure (Core.mockOllama model messages)
+
+mockProviderImpl =
+  { id = mockProvider, call = mockCall, capabilities = Core.setEmpty }
+
+main : Task Unit Unit
+main =
+  do
+    let providers =
+      Core.dictInsert
+        Nova.providerEq
+        mockProvider
+        mockProviderImpl
+        Core.defaultProviderRegistry
+    let client = newClient providers mockProvider "mock-echo-count"
+    let msgs1 = [ Core.user "first question" ]
+    r1 <- toResult (askMessages client msgs1)
+    let reply1 = showAskResult r1
+    IO.println (Str.append "turn1: " reply1)
+    let msgs2 =
+      [ Core.user "first question"
+      , Core.assistant reply1
+      , Core.user "follow up"
+      ]
+    r2 <- toResult (askMessages client msgs2)
+    IO.println (Str.append "turn2: " (showAskResult r2))

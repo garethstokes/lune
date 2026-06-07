@@ -17,6 +17,13 @@ module Nova.Core exposing (
   , Response
   , Error(..)
   , Request
+  , Role(..)
+  , Message
+  , system
+  , user
+  , assistant
+  , roleId
+  , messagesToPrompt
   , ProviderSettings
   , ProviderConfig
   , Capability(..)
@@ -25,6 +32,7 @@ module Nova.Core exposing (
   , defaultProviderConfig
   , defaultProviderRegistry
   , callProvider
+  , mockOllama
 )
 
 import Lune.Prelude exposing (
@@ -40,6 +48,7 @@ import Lune.Prelude exposing (
 )
 import Lune.Int as Int
 import Lune.String as Str
+import Lune.List as List
 import Lune.IO as IO
 import Lune.Net.Socket as Socket exposing (Connection)
 import Lune.Json as Json
@@ -176,8 +185,44 @@ type Error =
 type alias Request =
   { provider : Provider
   , model : String
-  , prompt : String
+  , messages : List Message
   }
+
+type Role
+  = System
+  | User
+  | Assistant
+
+type alias Message =
+  { role : Role
+  , content : String
+  }
+
+system : String -> Message
+system content = { role = System, content = content }
+
+user : String -> Message
+user content = { role = User, content = content }
+
+assistant : String -> Message
+assistant content = { role = Assistant, content = content }
+
+roleId : Role -> String
+roleId role =
+  case role of
+    System ->
+      "system"
+    User ->
+      "user"
+    Assistant ->
+      "assistant"
+
+-- | Flatten messages into a single prompt string (newline-joined contents).
+-- For a single [user p] message this returns exactly p, preserving the
+-- existing single-shot mock/prompt behavior.
+messagesToPrompt : List Message -> String
+messagesToPrompt messages =
+  Str.join "\n" (List.map (\m -> m.content) messages)
 
 -- Provider configuration is a provider-keyed dictionary of settings.
 type alias ProviderSettings =
@@ -237,11 +282,11 @@ eqCapability a b =
 
 type alias ProviderImpl =
   { id : Provider
-  , call : ProviderConfig -> String -> String -> IO (Result Error Response)
+  , call : ProviderConfig -> String -> List Message -> IO (Result Error Response)
   , capabilities : Set Capability
   }
 -- model
--- prompt
+-- messages
 
 type alias ProviderRegistry =
   Dict Provider ProviderImpl
@@ -258,9 +303,9 @@ callProvider :
       -> ProviderConfig
       -> Provider
       -> String
-      -> String
+      -> List Message
       -> IO (Result Error Response)
-callProvider registry cfg provider model prompt =
+callProvider registry cfg provider model messages =
   case dictGet eqProvider provider registry of
     Nothing ->
       IO.pure
@@ -268,7 +313,7 @@ callProvider registry cfg provider model prompt =
           (ProviderError
             (Str.append "Unknown provider: " (providerId provider))))
     Just impl ->
-      impl.call cfg model prompt
+      impl.call cfg model messages
 
 --------------------------------------------------------------------------------
 -- Provider implementations (v2 stubs; deterministic)
@@ -294,7 +339,7 @@ ollamaImpl : ProviderImpl
 ollamaImpl = { id = ollama, call = callOllama, capabilities = setEmpty }
 
 callOpenRouter :
-    ProviderConfig -> String -> String -> IO (Result Error Response)
+    ProviderConfig -> String -> List Message -> IO (Result Error Response)
 callOpenRouter cfg _ _ =
   let
     settings = getSettings openrouter cfg
@@ -306,30 +351,39 @@ callOpenRouter cfg _ _ =
         IO.pure
           (Err (ProviderError "OpenRouter: HTTP client not implemented (v2)."))
 
-callOllama : ProviderConfig -> String -> String -> IO (Result Error Response)
-callOllama cfg modelId prompt =
+callOllama :
+    ProviderConfig -> String -> List Message -> IO (Result Error Response)
+callOllama cfg modelId messages =
   let
     settings = getSettings ollama cfg
   in
     case Str.startsWith "mock://" settings.baseUrl of
       True ->
-        IO.pure (mockOllama modelId prompt)
+        IO.pure (mockOllama modelId messages)
       False ->
-        callOllamaHttp settings modelId prompt
+        callOllamaHttp settings modelId messages
 
 callOllamaHttp :
-    ProviderSettings -> String -> String -> IO (Result Error Response)
-callOllamaHttp settings modelId prompt =
+    ProviderSettings -> String -> List Message -> IO (Result Error Response)
+callOllamaHttp settings modelId messages =
   let
     hostPort = parseHostPort settings.baseUrl
+    messageValues =
+      List.map
+        (\m ->
+          Encode.object
+            [ { key = "role", value = Encode.string (roleId m.role) }
+            , { key = "content", value = Encode.string m.content }
+            ])
+        messages
     requestBody =
       Encode.object
         [ { key = "model", value = Encode.string modelId }
-        , { key = "prompt", value = Encode.string prompt }
+        , { key = "messages", value = Encode.list (\v -> v) messageValues }
         , { key = "stream", value = Encode.bool False }
         ]
     bodyStr = Json.stringify requestBody
-    httpRequest = buildHttpPost hostPort.host "/api/generate" bodyStr
+    httpRequest = buildHttpPost hostPort.host "/api/chat" bodyStr
   in
     IO.andThen
       (prim_tcpConnect hostPort.host hostPort.port)
@@ -448,18 +502,29 @@ parseOllamaResponse raw =
       Err msg ->
         Err (DecodeError (Str.append "Failed to parse Ollama response: " msg))
       Ok json ->
-        case Decode.decodeValue (Decode.field "response" Decode.string) json of
+        case Decode.decodeValue (Decode.at ["message", "content"] Decode.string) json of
           Err decodeErr ->
             Err
               (DecodeError
-                (Str.append "Missing 'response' field: " decodeErr.message))
+                (Str.append "Missing 'message.content' field: " decodeErr.message))
           Ok responseText ->
             Ok
               { text = responseText, usage = Nothing }
 -- Find the body (after \r\n\r\n or \n\n)
 
-mockOllama : String -> String -> Result Error Response
-mockOllama modelId prompt =
+mockOllama : String -> List Message -> Result Error Response
+mockOllama modelId messages =
+  case Str.eq modelId "mock-echo-count" of
+    True ->
+      Ok
+        { text = Str.append "turns=" (Str.fromInt (List.length messages))
+        , usage = Nothing
+        }
+    False ->
+      mockOllamaForPrompt modelId (messagesToPrompt messages)
+
+mockOllamaForPrompt : String -> String -> Result Error Response
+mockOllamaForPrompt modelId prompt =
   case Str.eq modelId "mock-tool-wrapper" of
     True ->
       let
