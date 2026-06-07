@@ -652,9 +652,33 @@ formatExprWithInnerM prec cs expr =
         _ ->
           formatExprM prec expr
 
--- | Helper for rhsSepFor with Located wrapper
+-- | Helper for rhsSepFor with Located wrapper. A record literal/update or list
+-- that is forced multi-line by interleaved comments must place its opener
+-- (@{@/@[@) on its own indented line after the @=@, matching the canonical
+-- (no-comment) multi-line layout. That opener placement is produced by the
+-- declaration wrapper breaking the right-hand side onto its own line, so such
+-- expressions are treated here like block expressions (a hard break before the
+-- opener).
 rhsSepForL :: Located S.Expr -> Doc
-rhsSepForL = rhsSepFor . unLoc
+rhsSepForL loc =
+  if isCommentForcedMultiline loc
+    then hardLine
+    else rhsSepFor (unLoc loc)
+
+-- | True when a Located expression is a record literal/update or a list whose
+-- attached comments force it onto multiple lines (so the comment-forced
+-- renderer is selected). Used to give such expressions block-like @=@ spacing.
+isCommentForcedMultiline :: Located S.Expr -> Bool
+isCommentForcedMultiline loc =
+  let expr = unLoc loc
+      innerCs = S.commentsInner (locComments loc)
+   in case listExpr expr of
+        Just xs -> any elemHasComments xs
+        Nothing ->
+          case expr of
+            S.RecordLiteral _ -> not (null innerCs)
+            S.RecordUpdate _ _ -> not (null innerCs)
+            _ -> False
 
 -- | Format a Located pattern, rendering its /leading/ comments only. A pattern
 -- is always followed by an operator (@->@, @<-@, @=@) so a trailing comment

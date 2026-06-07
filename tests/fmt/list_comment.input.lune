@@ -1,7 +1,6 @@
 module FmtListComment exposing (xs)
 
-xs =
-  [ 1
+xs = [ 1
   -- comment before two
   , 2
   , 3
