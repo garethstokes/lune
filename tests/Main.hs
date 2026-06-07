@@ -113,6 +113,14 @@ attachTests = testGroup "Attach"
         Right (m, cs) -> do
           let m' = Attach.attachComments m cs
           assertBool "leading comment on the RHS literal" (moduleHasLeading "leading" m')
+  , testCase "standalone comment between do-stmts is inner on the block" $ do
+      let src = "module M exposing (main)\n\nmain =\n  do\n    a\n    -- between\n    b\n"
+      case Parser.parseTextWithComments "M" src of
+        Left e -> assertFailure (show e)
+        Right (m, cs) -> do
+          let m' = Attach.attachComments m cs
+          assertBool "inner comment on the do-block"
+            (any (T.isInfixOf "between" . commentText) (doBlockInner m'))
   ]
 
 moduleHasTrailing :: Text -> Module -> Bool
@@ -122,6 +130,35 @@ moduleHasTrailing needle m = any declHasTrailing (modDecls m)
     declHasTrailing _ = False
     locHasTrailing l = any (needleIn . commentText) (commentsTrailing (locComments l))
     needleIn t = needle `T.isInfixOf` t
+
+-- | Collect commentsInner from every DoBlock node anywhere in the module.
+doBlockInner :: Module -> [Comment]
+doBlockInner m = concatMap declDo (modDecls m)
+  where
+    declDo (DeclValue _ _ rhs) = exprDo rhs
+    declDo (DeclInstance _ _ methods) = concatMap (exprDo . instanceMethodExpr) methods
+    declDo _ = []
+    exprDo l =
+      let here = case locValue l of
+                   DoBlock _ -> commentsInner (locComments l)
+                   _ -> []
+      in here ++ childDo (locValue l)
+    childDo e = case e of
+      App f x -> exprDo f ++ exprDo x
+      Lam _ body -> exprDo body
+      LetIn _ rhs body -> exprDo rhs ++ exprDo body
+      Case scrut alts -> exprDo scrut ++ concatMap altDo alts
+      DoBlock stmts -> concatMap stmtDo stmts
+      RecordLiteral fields -> concatMap (exprDo . snd) fields
+      RecordUpdate base fields -> exprDo base ++ concatMap (exprDo . snd) fields
+      FieldAccess base _ -> exprDo base
+      _ -> []
+    altDo la = let Alt _ body = locValue la in exprDo body
+    stmtDo ls = case locValue ls of
+      BindStmt _ e -> exprDo e
+      DiscardBindStmt e -> exprDo e
+      LetStmt _ e -> exprDo e
+      ExprStmt e -> exprDo e
 
 moduleHasLeading :: Text -> Module -> Bool
 moduleHasLeading needle m = any declHasLeading (modDecls m)

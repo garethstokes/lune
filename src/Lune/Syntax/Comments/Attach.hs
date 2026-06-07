@@ -6,9 +6,18 @@
 -- The pass is total: every input comment lands in exactly one slot, and the
 -- total number of attached comments equals the length of the input list (see
 -- the internal invariant check in 'attachComments').
+--
+-- Design: we walk the module once in a fixed pre-order, assigning each
+-- real-spanned 'Located' node a unique integer id. (Spans alone are not a safe
+-- identity: distinct nested nodes can share a span — e.g. a single-statement
+-- do-block and its statement.) Comments are matched positionally against those
+-- numbered nodes, producing per-id assignments, which a second pass in the
+-- identical pre-order applies back onto the tree.
 module Lune.Syntax.Comments.Attach (attachComments) where
 
+import Control.Monad.State (State, evalState, get, put)
 import Data.List (sortOn)
+import qualified Data.Map.Strict as Map
 
 import Lune.Syntax
 
@@ -35,24 +44,34 @@ attachComments m comments =
 -- trailing, leading, inner, or top-level/leftover.
 placeComments :: Module -> [Comment] -> Module
 placeComments m comments =
-  let decls = modDecls m
-      -- All real-spanned Located nodes across the module, with their spans.
-      nodes = concatMap declNodes decls
+  let -- Number every real-spanned Located node in a fixed pre-order.
+      nodes = numberModule m
 
       -- 1. Trailing: comment starts on the same line a node ends, after it.
       (trailingAssign, rest1) = classify (matchTrailing nodes) comments
-      -- 2. Leading: comment on its own line(s) immediately above a node.
-      (leadingAssign, rest2) = classify (matchLeading nodes) rest1
-      -- 3. Inner: comment falling strictly inside a compound container's span.
-      (innerAssign, rest3) = classify (matchInner nodes) rest2
+      -- 2. Inner: comment on its own line strictly between a compound
+      --    container's first and last line. This takes precedence over Leading
+      --    so a comment sitting between two siblings of a do-block / list /
+      --    record / case lands on the container rather than as Leading on the
+      --    following sibling.
+      (innerAssign, rest2) = classify (matchInner nodes) rest1
+      -- 3. Leading: comment on its own line(s) immediately above a node.
+      (leadingAssign, rest3) = classify (matchLeading nodes) rest2
       -- 4. Everything else -> top-level modComments (between-decl + leftovers).
       topLevel = rest3
 
-      -- Apply node-targeted assignments to the declarations.
-      decls' = map (applyDecl trailingAssign leadingAssign innerAssign) decls
+      assigns = Assigns
+        { asTrailing = toMap trailingAssign
+        , asLeading = toMap leadingAssign
+        , asInner = toMap innerAssign
+        }
+
+      decls' = applyModule assigns (modDecls m)
   in m { modDecls = decls'
        , modComments = sortOn commentLine (map (setPos Leading) topLevel)
        }
+  where
+    toMap = Map.fromListWith (flip (++)) . map (\(nid, c) -> (nid, [c]))
 
 -- | Run a per-comment classifier, partitioning input comments into
 -- (assignments keyed by target node id) and the unmatched remainder.
@@ -68,93 +87,118 @@ classify f = go [] []
         Just a -> go (a : accA) accR cs
         Nothing -> go accA (c : accR) cs
 
+-- | Per-slot assignment tables, keyed by unique node id.
+data Assigns = Assigns
+  { asTrailing :: Map.Map NodeId [Comment]
+  , asLeading :: Map.Map NodeId [Comment]
+  , asInner :: Map.Map NodeId [Comment]
+  }
+
 -- =============================================================================
--- Node identity and the generic Located traversal
+-- Node identity, numbering and the generic Located traversal
 -- =============================================================================
 
--- | A stable identity for a Located node within the module: its source span.
--- Spans are unique enough for placement because we only ever match real-spanned
--- nodes (dummy zero-spans are excluded), and ties are broken by deepest span.
-type NodeId = Span
+-- | A unique integer identity assigned to each real-spanned Located node in a
+-- fixed pre-order traversal.
+type NodeId = Int
 
 -- | A flattened record of a real-spanned Located node encountered in traversal.
 data NodeInfo = NodeInfo
-  { niId :: !NodeId        -- ^ The node's span, used as identity.
-  , niSpan :: !Span        -- ^ The node's span (same as niId).
+  { niId :: !NodeId        -- ^ Unique pre-order id.
+  , niSpan :: !Span        -- ^ The node's source span.
   , niCompound :: !Bool    -- ^ Whether this node is a compound container
                            --   (DoBlock, Case, RecordLiteral, RecordUpdate)
                            --   eligible to own inner comments.
   }
+
+-- | The counter monad used by both numbering and application so their
+-- pre-orders stay in lockstep.
+type Counter = State Int
+
+-- | Produce the next id, but only "spend" one when the span is real. Dummy
+-- (zero) spans are skipped entirely so they never consume an id — this keeps
+-- numbering and application perfectly aligned (both skip the same nodes).
+nextId :: Counter NodeId
+nextId = do
+  n <- get
+  put (n + 1)
+  pure n
 
 -- | True for dummy/synthetic spans that can never own a comment by position.
 isDummySpan :: Span -> Bool
 isDummySpan (Span 0 0 0 0) = True
 isDummySpan _ = False
 
--- | Collect every real-spanned Located node reachable from a declaration.
-declNodes :: Decl -> [NodeInfo]
-declNodes (DeclValue _ pats rhs) =
-  concatMap patNodes pats ++ exprNodes rhs
-declNodes (DeclInstance _ _ methods) =
-  concatMap (exprNodes . instanceMethodExpr) methods
-declNodes _ = []
+-- | Number every real-spanned Located node reachable from the module.
+numberModule :: Module -> [NodeInfo]
+numberModule m = evalState (concat <$> mapM numberDecl (modDecls m)) 0
 
--- | Collect nodes from a Located Expr (including itself).
-exprNodes :: Located Expr -> [NodeInfo]
-exprNodes le =
-  let sp = locSpan le
-      compound = isCompound (locValue le)
-      self = [NodeInfo sp sp compound | not (isDummySpan sp)]
-  in self ++ exprChildNodes (locValue le)
+numberDecl :: Decl -> Counter [NodeInfo]
+numberDecl (DeclValue _ pats rhs) = do
+  ps <- concat <$> mapM numberPat pats
+  r <- numberExpr rhs
+  pure (ps ++ r)
+numberDecl (DeclInstance _ _ methods) =
+  concat <$> mapM (numberExpr . instanceMethodExpr) methods
+numberDecl _ = pure []
 
--- | Collect nodes from the children of an Expr value.
-exprChildNodes :: Expr -> [NodeInfo]
-exprChildNodes e = case e of
-  Var _ -> []
-  StringLit _ -> []
-  TemplateLit _ parts -> concatMap templatePartNodes parts
-  IntLit _ -> []
-  FloatLit _ -> []
-  CharLit _ -> []
-  App f x -> exprNodes f ++ exprNodes x
-  Lam pats body -> concatMap patNodes pats ++ exprNodes body
-  LetIn _ rhs body -> exprNodes rhs ++ exprNodes body
-  Case scrut alts -> exprNodes scrut ++ concatMap altNodes alts
-  DoBlock stmts -> concatMap stmtNodes stmts
-  RecordLiteral fields -> concatMap (exprNodes . snd) fields
-  RecordUpdate base fields -> exprNodes base ++ concatMap (exprNodes . snd) fields
-  FieldAccess base _ -> exprNodes base
+-- | Number a Located node: allocate an id only when its span is real, then
+-- recurse into children. Returns the self-NodeInfo (if real) plus children.
+numberLoc :: Bool -> Span -> Counter [NodeInfo] -> Counter [NodeInfo]
+numberLoc compound sp children
+  | isDummySpan sp = children
+  | otherwise = do
+      nid <- nextId
+      cs <- children
+      pure (NodeInfo nid sp compound : cs)
 
-templatePartNodes :: TemplatePart -> [NodeInfo]
-templatePartNodes (TemplateText _) = []
-templatePartNodes (TemplateHole e) = exprNodes e
+numberExpr :: Located Expr -> Counter [NodeInfo]
+numberExpr le =
+  numberLoc (isCompound (locValue le)) (locSpan le) (numberExprChildren (locValue le))
 
-altNodes :: Located Alt -> [NodeInfo]
-altNodes la =
-  let sp = locSpan la
-      self = [NodeInfo sp sp False | not (isDummySpan sp)]
-      Alt pat body = locValue la
-  in self ++ patNodes pat ++ exprNodes body
+numberExprChildren :: Expr -> Counter [NodeInfo]
+numberExprChildren e = case e of
+  Var _ -> pure []
+  StringLit _ -> pure []
+  TemplateLit _ parts -> concat <$> mapM numberTemplatePart parts
+  IntLit _ -> pure []
+  FloatLit _ -> pure []
+  CharLit _ -> pure []
+  App f x -> (++) <$> numberExpr f <*> numberExpr x
+  Lam pats body -> (++) <$> (concat <$> mapM numberPat pats) <*> numberExpr body
+  LetIn _ rhs body -> (++) <$> numberExpr rhs <*> numberExpr body
+  Case scrut alts -> (++) <$> numberExpr scrut <*> (concat <$> mapM numberAlt alts)
+  DoBlock stmts -> concat <$> mapM numberStmt stmts
+  RecordLiteral fields -> concat <$> mapM (numberExpr . snd) fields
+  RecordUpdate base fields ->
+    (++) <$> numberExpr base <*> (concat <$> mapM (numberExpr . snd) fields)
+  FieldAccess base _ -> numberExpr base
 
-stmtNodes :: Located Stmt -> [NodeInfo]
-stmtNodes ls =
-  let sp = locSpan ls
-      self = [NodeInfo sp sp False | not (isDummySpan sp)]
-  in self ++ case locValue ls of
-       BindStmt pat e -> patNodes pat ++ exprNodes e
-       DiscardBindStmt e -> exprNodes e
-       LetStmt _ e -> exprNodes e
-       ExprStmt e -> exprNodes e
+numberTemplatePart :: TemplatePart -> Counter [NodeInfo]
+numberTemplatePart (TemplateText _) = pure []
+numberTemplatePart (TemplateHole e) = numberExpr e
 
-patNodes :: Located Pattern -> [NodeInfo]
-patNodes lp =
-  let sp = locSpan lp
-      self = [NodeInfo sp sp False | not (isDummySpan sp)]
-  in self ++ case locValue lp of
-       PVar _ -> []
-       PWildcard -> []
-       PCon _ args -> concatMap patNodes args
-       PString _ -> []
+numberAlt :: Located Alt -> Counter [NodeInfo]
+numberAlt la =
+  numberLoc False (locSpan la) $ do
+    let Alt pat body = locValue la
+    (++) <$> numberPat pat <*> numberExpr body
+
+numberStmt :: Located Stmt -> Counter [NodeInfo]
+numberStmt ls =
+  numberLoc False (locSpan ls) $ case locValue ls of
+    BindStmt pat e -> (++) <$> numberPat pat <*> numberExpr e
+    DiscardBindStmt e -> numberExpr e
+    LetStmt _ e -> numberExpr e
+    ExprStmt e -> numberExpr e
+
+numberPat :: Located Pattern -> Counter [NodeInfo]
+numberPat lp =
+  numberLoc False (locSpan lp) $ case locValue lp of
+    PVar _ -> pure []
+    PWildcard -> pure []
+    PCon _ args -> concat <$> mapM numberPat args
+    PString _ -> pure []
 
 -- | Which Expr constructors are compound containers eligible for inner comments.
 isCompound :: Expr -> Bool
@@ -210,9 +254,10 @@ matchLeading nodes c =
              best = minGapDeepest gap candidates
          in Just (niId best, setPos Leading c)
 
--- | Inner: comment falling strictly inside a compound container's span (between
--- the container's start and end lines). Attach to the innermost (deepest)
--- compound container whose span contains the comment line.
+-- | Inner: comment on its own line strictly between a compound container's
+-- first and last lines (so it genuinely sits between the container's children,
+-- not before/after the container). Attach to the innermost (deepest) such
+-- compound container.
 matchInner :: [NodeInfo] -> Comment -> Maybe (NodeId, Comment)
 matchInner nodes c =
   let cl = commentLine c
@@ -221,8 +266,8 @@ matchInner nodes c =
         | ni <- nodes
         , niCompound ni
         , let sp = niSpan ni
-        , spanStartLine sp <= cl
-        , spanEndLine sp >= cl
+        , spanStartLine sp < cl
+        , spanEndLine sp > cl
         ]
   in case candidates of
        [] -> Nothing
@@ -255,95 +300,96 @@ setPos :: CommentPosition -> Comment -> Comment
 setPos p c = c { commentPosition = p }
 
 -- =============================================================================
--- Applying assignments back onto the AST
+-- Applying assignments back onto the AST (same pre-order as numbering)
 -- =============================================================================
 
--- | Apply all node-targeted assignments to a declaration, rebuilding its
--- Located children with the attached comments.
-applyDecl
-  :: [(NodeId, Comment)]   -- ^ trailing
-  -> [(NodeId, Comment)]   -- ^ leading
-  -> [(NodeId, Comment)]   -- ^ inner
-  -> Decl
-  -> Decl
-applyDecl tr ld inr decl = case decl of
+applyModule :: Assigns -> [Decl] -> [Decl]
+applyModule as decls = evalState (mapM (applyDecl as) decls) 0
+
+applyDecl :: Assigns -> Decl -> Counter Decl
+applyDecl as decl = case decl of
   DeclValue n pats rhs ->
-    DeclValue n (map applyPat pats) (applyExpr rhs)
+    DeclValue n <$> mapM (applyPat as) pats <*> applyExpr as rhs
   DeclInstance n ty methods ->
-    DeclInstance n ty (map applyMethod methods)
-  other -> other
+    DeclInstance n ty <$> mapM applyMethod methods
+  other -> pure other
   where
-    applyMethod md = md { instanceMethodExpr = applyExpr (instanceMethodExpr md) }
+    applyMethod md = do
+      e <- applyExpr as (instanceMethodExpr md)
+      pure md { instanceMethodExpr = e }
 
-    -- Add comments to a Located node based on the assignment tables.
-    addCs :: Located a -> Located a
-    addCs la =
-      let sp = locSpan la
-          cs0 = locComments la
-          mine table = [c | (nid, c) <- table, nid == sp]
-          newLeading = mine ld
-          newTrailing = mine tr
-          newInner = sortOn commentLine (mine inr)
+-- | Apply assignments to a Located node, in lockstep with numbering: spend an
+-- id only for real spans, attach any comments keyed to that id, then recurse.
+applyLoc :: Assigns -> Span -> (a -> Counter a) -> Located a -> Counter (Located a)
+applyLoc as sp recurse la
+  | isDummySpan sp = do
+      v' <- recurse (locValue la)
+      pure la { locValue = v' }
+  | otherwise = do
+      nid <- nextId
+      let cs0 = locComments la
+          lk tbl = Map.findWithDefault [] nid tbl
           cs' = cs0
-            { commentsLeading = commentsLeading cs0 ++ newLeading
-            , commentsTrailing = commentsTrailing cs0 ++ newTrailing
-            , commentsInner = commentsInner cs0 ++ newInner
+            { commentsLeading = commentsLeading cs0 ++ lk (asLeading as)
+            , commentsTrailing = commentsTrailing cs0 ++ lk (asTrailing as)
+            , commentsInner = commentsInner cs0 ++ sortOn commentLine (lk (asInner as))
             }
-      in la { locComments = cs' }
+      v' <- recurse (locValue la)
+      pure la { locComments = cs', locValue = v' }
 
-    applyExpr :: Located Expr -> Located Expr
-    applyExpr le =
-      let le' = addCs le
-          v' = applyExprValue (locValue le')
-      in le' { locValue = v' }
+applyExpr :: Assigns -> Located Expr -> Counter (Located Expr)
+applyExpr as le = applyLoc as (locSpan le) (applyExprValue as) le
 
-    applyExprValue :: Expr -> Expr
-    applyExprValue e = case e of
-      Var _ -> e
-      StringLit _ -> e
-      TemplateLit fl parts -> TemplateLit fl (map applyTemplatePart parts)
-      IntLit _ -> e
-      FloatLit _ -> e
-      CharLit _ -> e
-      App f x -> App (applyExpr f) (applyExpr x)
-      Lam pats body -> Lam (map applyPat pats) (applyExpr body)
-      LetIn n rhs body -> LetIn n (applyExpr rhs) (applyExpr body)
-      Case scrut alts -> Case (applyExpr scrut) (map applyAlt alts)
-      DoBlock stmts -> DoBlock (map applyStmt stmts)
-      RecordLiteral fields -> RecordLiteral (map applyField fields)
-      RecordUpdate base fields -> RecordUpdate (applyExpr base) (map applyField fields)
-      FieldAccess base f -> FieldAccess (applyExpr base) f
+applyExprValue :: Assigns -> Expr -> Counter Expr
+applyExprValue as e = case e of
+  Var _ -> pure e
+  StringLit _ -> pure e
+  TemplateLit fl parts -> TemplateLit fl <$> mapM (applyTemplatePart as) parts
+  IntLit _ -> pure e
+  FloatLit _ -> pure e
+  CharLit _ -> pure e
+  App f x -> App <$> applyExpr as f <*> applyExpr as x
+  Lam pats body -> Lam <$> mapM (applyPat as) pats <*> applyExpr as body
+  LetIn n rhs body -> LetIn n <$> applyExpr as rhs <*> applyExpr as body
+  Case scrut alts -> Case <$> applyExpr as scrut <*> mapM (applyAlt as) alts
+  DoBlock stmts -> DoBlock <$> mapM (applyStmt as) stmts
+  RecordLiteral fields -> RecordLiteral <$> mapM (applyField as) fields
+  RecordUpdate base fields ->
+    RecordUpdate <$> applyExpr as base <*> mapM (applyField as) fields
+  FieldAccess base f -> (\b -> FieldAccess b f) <$> applyExpr as base
 
-    applyField (lbl, e) = (lbl, applyExpr e)
+applyField :: Assigns -> (a, Located Expr) -> Counter (a, Located Expr)
+applyField as (lbl, e) = (,) lbl <$> applyExpr as e
 
-    applyTemplatePart (TemplateText t) = TemplateText t
-    applyTemplatePart (TemplateHole e) = TemplateHole (applyExpr e)
+applyTemplatePart :: Assigns -> TemplatePart -> Counter TemplatePart
+applyTemplatePart _ (TemplateText t) = pure (TemplateText t)
+applyTemplatePart as (TemplateHole e) = TemplateHole <$> applyExpr as e
 
-    applyAlt :: Located Alt -> Located Alt
-    applyAlt la =
-      let la' = addCs la
-          Alt pat body = locValue la'
-      in la' { locValue = Alt (applyPat pat) (applyExpr body) }
+applyAlt :: Assigns -> Located Alt -> Counter (Located Alt)
+applyAlt as la =
+  applyLoc as (locSpan la) recurse la
+  where
+    recurse (Alt pat body) = Alt <$> applyPat as pat <*> applyExpr as body
 
-    applyStmt :: Located Stmt -> Located Stmt
-    applyStmt ls =
-      let ls' = addCs ls
-          v' = case locValue ls' of
-                 BindStmt pat e -> BindStmt (applyPat pat) (applyExpr e)
-                 DiscardBindStmt e -> DiscardBindStmt (applyExpr e)
-                 LetStmt n e -> LetStmt n (applyExpr e)
-                 ExprStmt e -> ExprStmt (applyExpr e)
-      in ls' { locValue = v' }
+applyStmt :: Assigns -> Located Stmt -> Counter (Located Stmt)
+applyStmt as ls =
+  applyLoc as (locSpan ls) recurse ls
+  where
+    recurse v = case v of
+      BindStmt pat e -> BindStmt <$> applyPat as pat <*> applyExpr as e
+      DiscardBindStmt e -> DiscardBindStmt <$> applyExpr as e
+      LetStmt n e -> LetStmt n <$> applyExpr as e
+      ExprStmt e -> ExprStmt <$> applyExpr as e
 
-    applyPat :: Located Pattern -> Located Pattern
-    applyPat lp =
-      let lp' = addCs lp
-          v' = case locValue lp' of
-                 PVar n -> PVar n
-                 PWildcard -> PWildcard
-                 PCon n args -> PCon n (map applyPat args)
-                 PString s -> PString s
-      in lp' { locValue = v' }
+applyPat :: Assigns -> Located Pattern -> Counter (Located Pattern)
+applyPat as lp =
+  applyLoc as (locSpan lp) recurse lp
+  where
+    recurse v = case v of
+      PVar n -> pure (PVar n)
+      PWildcard -> pure PWildcard
+      PCon n args -> PCon n <$> mapM (applyPat as) args
+      PString s -> pure (PString s)
 
 -- =============================================================================
 -- Counting attached comments (for the total-count invariant)
