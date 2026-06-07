@@ -17,6 +17,13 @@ module Nova.Core exposing (
   , Response
   , Error(..)
   , Request
+  , Role(..)
+  , Message
+  , system
+  , user
+  , assistant
+  , roleId
+  , messagesToPrompt
   , ProviderSettings
   , ProviderConfig
   , Capability(..)
@@ -40,6 +47,7 @@ import Lune.Prelude exposing (
 )
 import Lune.Int as Int
 import Lune.String as Str
+import Lune.List as List
 import Lune.IO as IO
 import Lune.Net.Socket as Socket exposing (Connection)
 import Lune.Json as Json
@@ -178,6 +186,42 @@ type alias Request =
   , model : String
   , prompt : String
   }
+
+type Role
+  = System
+  | User
+  | Assistant
+
+type alias Message =
+  { role : Role
+  , content : String
+  }
+
+system : String -> Message
+system content = { role = System, content = content }
+
+user : String -> Message
+user content = { role = User, content = content }
+
+assistant : String -> Message
+assistant content = { role = Assistant, content = content }
+
+roleId : Role -> String
+roleId role =
+  case role of
+    System ->
+      "system"
+    User ->
+      "user"
+    Assistant ->
+      "assistant"
+
+-- | Flatten messages into a single prompt string (newline-joined contents).
+-- For a single [user p] message this returns exactly p, preserving the
+-- existing single-shot mock/prompt behavior.
+messagesToPrompt : List Message -> String
+messagesToPrompt messages =
+  Str.join "\n" (List.map (\m -> m.content) messages)
 
 -- Provider configuration is a provider-keyed dictionary of settings.
 type alias ProviderSettings =
