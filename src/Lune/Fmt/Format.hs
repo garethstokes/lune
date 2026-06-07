@@ -710,6 +710,13 @@ formatExprWithInnerM prec cs expr =
           formatDoBlockWithInnerM innerCs stmts
         S.DoBlock stmts ->
           parensBlock <$> formatDoBlockWithInnerM innerCs stmts
+        S.Case scrut alts | not (null innerCs) ->
+          let body = formatCaseWithInnerM innerCs scrut alts
+           in if prec == PrecExprTop then body else parensBlock <$> body
+        S.RecordLiteral fields | not (null innerCs) ->
+          formatRecordLiteralWithInnerM innerCs fields
+        S.RecordUpdate base fields | not (null innerCs) ->
+          formatRecordUpdateWithInnerM innerCs base fields
         _ ->
           formatExprM prec expr
 
@@ -772,8 +779,11 @@ withNodeComments cs inner =
 formatExprM :: ExprPrec -> S.Expr -> FmtM Doc
 formatExprM prec expr =
   case listExpr expr of
-    Just xs ->
-      formatList <$> mapM (formatLExprM PrecExprTop) xs
+    Just xs
+      | any elemHasComments xs ->
+          formatListWithComments xs
+      | otherwise ->
+          formatList <$> mapM (formatLExprM PrecExprTop) xs
     Nothing ->
       case tupleExpr expr of
         Just xs ->
@@ -1031,6 +1041,77 @@ formatRecordLiteralM fields =
                 <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
                 <> line
                 <> text "}"
+
+-- | A record entry to lay out vertically: either a field (gets a leading
+-- comma when not first) or an interleaved inner comment (never gets a comma).
+data RecEntry
+  = RecField !Int !Doc  -- ^ source start line, field doc
+  | RecComment !Int !Doc  -- ^ source line, comment doc
+
+recEntryLine :: RecEntry -> Int
+recEntryLine (RecField l _) = l
+recEntryLine (RecComment l _) = l
+
+-- | Record literal renderer that interleaves inner comments among the fields,
+-- forcing the multi-line layout (a record carrying comments cannot be inlined).
+formatRecordLiteralWithInnerM :: [S.Comment] -> [(Text, Located S.Expr)] -> FmtM Doc
+formatRecordLiteralWithInnerM innerCs fields = do
+  entries <- recordFieldEntries fields
+  let commentEntries =
+        [ RecComment (S.commentLine c) (renderComment c) | c <- innerCs ]
+      rows = sortRecEntries (entries <> commentEntries)
+  pure (layoutRecEntries Nothing rows)
+
+-- | Record update renderer with interleaved inner comments.
+formatRecordUpdateWithInnerM :: [S.Comment] -> Located S.Expr -> [(Text, Located S.Expr)] -> FmtM Doc
+formatRecordUpdateWithInnerM innerCs base fields = do
+  baseDoc <- formatLExprM PrecExprTop base
+  entries <- recordFieldEntries fields
+  let commentEntries =
+        [ RecComment (S.commentLine c) (renderComment c) | c <- innerCs ]
+      rows = sortRecEntries (entries <> commentEntries)
+  pure (layoutRecEntries (Just baseDoc) rows)
+
+recordFieldEntries :: [(Text, Located S.Expr)] -> FmtM [RecEntry]
+recordFieldEntries =
+  mapM
+    ( \f@(_, e) -> do
+        d <- formatRecordFieldM f
+        pure (RecField (spanStartLine (locSpan e)) d)
+    )
+
+sortRecEntries :: [RecEntry] -> [RecEntry]
+sortRecEntries = go
+  where
+    go [] = []
+    go (x : xs) =
+      go [a | a <- xs, recEntryLine a < recEntryLine x]
+        <> [x]
+        <> go [a | a <- xs, recEntryLine a >= recEntryLine x]
+
+-- | Lay out record entries vertically. With a base, emits a record-update
+-- @{ base | f, ... }@; otherwise a record literal @{ f, ... }@. Fields get a
+-- leading comma when they are not the first field; comments never do.
+layoutRecEntries :: Maybe Doc -> [RecEntry] -> Doc
+layoutRecEntries mbase rows =
+  let opener =
+        case mbase of
+          Nothing -> text "{" <> space
+          Just baseDoc -> text "{" <> space <> baseDoc <> hardLine <> text "|" <> space
+   in opener <> go True True rows <> hardLine <> text "}"
+  where
+    -- isFirstRow: this row directly follows the opener (no leading hardLine).
+    -- firstFieldPending: no field has been emitted yet (so the next field omits
+    -- its leading comma).
+    go _ _ [] = mempty
+    go isFirstRow firstFieldPending (e : es) =
+      let sepBefore = if isFirstRow then mempty else hardLine
+       in case e of
+            RecField _ d ->
+              let prefix = if firstFieldPending then mempty else text "," <> space
+               in sepBefore <> prefix <> d <> go False False es
+            RecComment _ d ->
+              sepBefore <> d <> go False firstFieldPending es
 
 -- | Check if an expression contains multi-line content (template literals, etc.)
 hasMultiLineContent :: S.Expr -> Bool
@@ -1312,6 +1393,30 @@ formatCaseM scrut alts = do
       )
       <> nest indentSize (hardLine <> vsep altDocs)
 
+-- | Case renderer that interleaves the container's inner comments among the
+-- alternatives by source line (blank lines preserved from span gaps).
+formatCaseWithInnerM :: [S.Comment] -> Located S.Expr -> [Located S.Alt] -> FmtM Doc
+formatCaseWithInnerM innerCs scrut alts = do
+  scrutDoc <- formatLExprM PrecExprTop scrut
+  altRows <-
+    mapM
+      ( \la -> do
+          d <- formatLAltM la
+          pure (Row (spanStartLine (locSpan la)) (spanEndLine (locSpan la)) d)
+      )
+      alts
+  let commentRows =
+        [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c) | c <- innerCs ]
+      rows = sortOnStart (altRows <> commentRows)
+  pure $
+    group
+      ( text "case"
+          <> nest indentSize (line <> scrutDoc)
+          <> line
+          <> text "of"
+      )
+      <> nest indentSize (hardLine <> joinRowsWithBlanks rows)
+
 formatAlt :: Located S.Alt -> Doc
 formatAlt alt =
   evalState (formatLAltM alt) []
@@ -1562,6 +1667,36 @@ formatList elems =
           <> mconcat (map (\d -> lineBreak <> text "," <+> d) rest)
           <> lineBreak
           <> text "]"
+
+-- | True when a list element carries any attached comment. Lists have no
+-- compound container, so a comment between elements attaches as Leading on the
+-- following element (see 'Lune.Syntax.Comments.Attach'); we therefore render it
+-- on its own line above that element in a forced multi-line list.
+elemHasComments :: Located S.Expr -> Bool
+elemHasComments le = S.hasComments (locComments le)
+
+-- | Render a list that contains comment-bearing elements in a forced multi-line
+-- layout. Each element's leading comments appear on their own line(s) above the
+-- element; a trailing comment stays inline after the element. The element's own
+-- comments are rendered here (not via the wrapping group) so they never get
+-- folded into a single line where a line comment would swallow the rest.
+formatListWithComments :: [Located S.Expr] -> FmtM Doc
+formatListWithComments xs = do
+  pieces <- mapM renderElem xs
+  case pieces of
+    [] -> pure (text "[]")
+    ((lead0, body0) : rest) ->
+      let firstDoc = lead0 <> text "[" <> space <> body0
+          restDocs =
+            map (\(lead, body) -> hardLine <> lead <> text "," <+> body) rest
+       in pure (firstDoc <> mconcat restDocs <> hardLine <> text "]")
+  where
+    renderElem le = do
+      d <- formatExprM PrecExprTop (unLoc le)
+      let cs = locComments le
+          leading = leadingCommentsDoc (S.commentsLeading cs)
+          trailing = trailingCommentsDoc (S.commentsTrailing cs)
+      pure (leading, d <> trailing)
 
 formatTuple :: [Doc] -> Doc
 formatTuple elems =
