@@ -2,7 +2,8 @@ module Nova.Runtime exposing (
   RuntimeConfig,
   ToolExecError(..),
   executeWithGuards,
-  executeWithGuardsUsing
+  executeWithGuardsUsing,
+  withTimeout
 )
 
 import Lune.Prelude exposing (Int, Bool(..), Result(..), Maybe(..), Unit, unit, Task(..), Applicative(..), Monad(..))
