@@ -106,6 +106,13 @@ attachTests = testGroup "Attach"
           let m' = Attach.attachComments m cs
           assertBool "trailing comment present on a node" (moduleHasTrailing "note" m')
           assertEqual "no leftover top-level comments" [] (map commentText (modComments m'))
+  , testCase "leading own-line comment attaches to the following node" $ do
+      let src = "module M exposing (x)\n\nx =\n  -- leading\n  1\n"
+      case Parser.parseTextWithComments "M" src of
+        Left e -> assertFailure (show e)
+        Right (m, cs) -> do
+          let m' = Attach.attachComments m cs
+          assertBool "leading comment on the RHS literal" (moduleHasLeading "leading" m')
   ]
 
 moduleHasTrailing :: Text -> Module -> Bool
@@ -114,6 +121,37 @@ moduleHasTrailing needle m = any declHasTrailing (modDecls m)
     declHasTrailing (DeclValue _ _ rhs) = locHasTrailing rhs
     declHasTrailing _ = False
     locHasTrailing l = any (needleIn . commentText) (commentsTrailing (locComments l))
+    needleIn t = needle `T.isInfixOf` t
+
+moduleHasLeading :: Text -> Module -> Bool
+moduleHasLeading needle m = any declHasLeading (modDecls m)
+  where
+    declHasLeading (DeclValue _ _ rhs) = exprHasLeading rhs
+    declHasLeading _ = False
+    exprHasLeading l =
+      any (needleIn . commentText) (commentsLeading (locComments l))
+        || childExprHasLeading (locValue l)
+    childExprHasLeading e = case e of
+      App f x -> exprHasLeading f || exprHasLeading x
+      Lam _ body -> exprHasLeading body
+      LetIn _ rhs body -> exprHasLeading rhs || exprHasLeading body
+      Case scrut alts -> exprHasLeading scrut || any altHasLeading alts
+      DoBlock stmts -> any stmtHasLeading stmts
+      RecordLiteral fields -> any (exprHasLeading . snd) fields
+      RecordUpdate base fields -> exprHasLeading base || any (exprHasLeading . snd) fields
+      FieldAccess base _ -> exprHasLeading base
+      _ -> False
+    altHasLeading la =
+      let Alt _ body = locValue la
+      in any (needleIn . commentText) (commentsLeading (locComments la))
+           || exprHasLeading body
+    stmtHasLeading ls =
+      any (needleIn . commentText) (commentsLeading (locComments ls))
+        || case locValue ls of
+             BindStmt _ e -> exprHasLeading e
+             DiscardBindStmt e -> exprHasLeading e
+             LetStmt _ e -> exprHasLeading e
+             ExprStmt e -> exprHasLeading e
     needleIn t = needle `T.isInfixOf` t
 
 -- | Discover .lune files in a directory, sorted for determinism.
