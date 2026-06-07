@@ -37,7 +37,11 @@ formatText path src =
       Left (FmtParseError (T.pack (errorBundlePretty err)))
     Right (m, comments) ->
       let m' = Attach.attachComments m comments
-       in Right (ensureSingleTrailingNewline (D.render 80 (Fmt.formatModuleDocWithAttached src m')))
+          -- Lines that lie within any comment span. The top-level line scan in
+          -- the renderer uses this to avoid mistaking comment interiors (e.g.
+          -- code examples inside a block doc comment) for declarations.
+          commentLineRanges = [(S.commentLine c, S.commentEndLine c) | c <- comments]
+       in Right (ensureSingleTrailingNewline (D.render 80 (Fmt.formatModuleDocWithAttached src commentLineRanges m')))
 
 data CommentKind
   = CommentLine

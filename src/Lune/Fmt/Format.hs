@@ -77,9 +77,9 @@ ensureSingleTrailingNewline t =
 -- (needed to preserve blank lines and to interleave standalone 'modComments')
 -- are recovered with a small column-1 line scan of the original source. Node
 -- level comments (leading / trailing / inner) come entirely from the AST.
-formatModuleDocWithAttached :: Text -> S.Module -> Doc
-formatModuleDocWithAttached src m =
-  let lns = topLevelScan src
+formatModuleDocWithAttached :: Text -> [(Int, Int)] -> S.Module -> Doc
+formatModuleDocWithAttached src commentRanges m =
+  let lns = topLevelScan commentRanges src
       headerLine = tlHeaderLine lns
       importLines = tlImportLines lns
       declLines = tlDeclLines lns
@@ -128,7 +128,7 @@ formatModuleDocWithAttached src m =
           [] -> mempty
           _ ->
             let gap = if blankAfterHeader then hardLine <> hardLine else hardLine
-             in gap <> joinRowsWithBlanks importRows
+             in gap <> joinRowsWithBlanksSrc src importRows
 
       blankBeforeDecls =
         case declBlockRows of
@@ -143,7 +143,7 @@ formatModuleDocWithAttached src m =
           [] -> mempty
           _ ->
             let gap = if blankBeforeDecls then hardLine <> hardLine else hardLine
-             in gap <> joinRowsWithBlanks declBlockRows
+             in gap <> joinRowsWithBlanksSrc src declBlockRows
    in leadingDoc <> header <> importsDoc <> declsDoc
   where
     notElemBy c xs = not (any (sameComment c) xs)
@@ -163,10 +163,12 @@ data TopLevelLines = TopLevelLines
   }
 
 -- | Scan for column-1 lines that begin top-level constructs. We deliberately
--- ignore comment and blank lines and any indented continuation lines.
-topLevelScan :: Text -> TopLevelLines
-topLevelScan src =
-  let ls = zip [1 ..] (T.splitOn "\n" src)
+-- ignore comment and blank lines and any indented continuation lines. Lines
+-- that lie within a comment span (e.g. code examples inside a block doc
+-- comment) are masked out so they are never mistaken for declarations.
+topLevelScan :: [(Int, Int)] -> Text -> TopLevelLines
+topLevelScan commentRanges src =
+  let ls = [ (n, t) | (n, t) <- zip [1 ..] (T.splitOn "\n" src), not (inComment n) ]
       headerLine =
         case [n | (n, t) <- ls, startsTopKeyword "module" t] of
           (x : _) -> x
@@ -180,6 +182,10 @@ topLevelScan src =
         ]
    in TopLevelLines headerLine importLs declLs
   where
+    -- A line is masked if it falls strictly after a comment's start line and up
+    -- to its end line (the comment's own start line may still legitimately
+    -- begin with the comment marker, which 'isTopDeclStart' already rejects).
+    inComment n = any (\(s, e) -> n > s && n <= e) commentRanges
     startsTopKeyword kw t =
       case T.stripPrefix kw t of
         Nothing -> False
@@ -563,7 +569,8 @@ formatValueDeclM name args body =
                 <> nest indentSize (mconcat (map (\p -> line <> formatLPattern p) rest))
    in do
         bodyDoc <- formatLExprM PrecExprTop body
-        pure (group (lhs <+> text "=" <> nest indentSize (rhsSepForL body <> bodyDoc)))
+        let argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
+        pure (group (lhs <+> text "=" <> nest indentSize (rhsSepForL body <> bodyDoc)) <> argsTrailing)
 
 -- ===== Types / constraints =====
 
@@ -724,10 +731,27 @@ formatExprWithInnerM prec cs expr =
 rhsSepForL :: Located S.Expr -> Doc
 rhsSepForL = rhsSepFor . unLoc
 
--- | Format a Located pattern, rendering attached comments.
+-- | Format a Located pattern, rendering its /leading/ comments only. A pattern
+-- is always followed by an operator (@->@, @<-@, @=@) so a trailing comment
+-- rendered inline here would land between the pattern and that operator and
+-- break the syntax. Trailing comments on patterns are therefore collected by
+-- 'lPatternTrailing' and appended after the enclosing construct's body.
 formatLPattern :: Located S.Pattern -> Doc
 formatLPattern lp =
-  withNodeComments (locComments lp) (formatPattern (unLoc lp))
+  let cs = locComments lp
+      leading = leadingCommentsDoc (S.commentsLeading cs)
+   in leading <> formatPattern (unLoc lp)
+
+-- | The trailing comments attached anywhere within a pattern (the pattern node
+-- itself and any nested sub-patterns). These are relocated to after the body of
+-- the construct the pattern belongs to.
+lPatternTrailing :: Located S.Pattern -> [S.Comment]
+lPatternTrailing lp =
+  S.commentsTrailing (locComments lp) ++ childTrailing (unLoc lp)
+  where
+    childTrailing p = case p of
+      S.PCon _ args -> concatMap lPatternTrailing args
+      _ -> []
 
 -- ===== Comment rendering =====
 
@@ -827,8 +851,9 @@ formatExprM prec expr =
                       _ -> hsep (map formatLPattern args)
                in do
                     bodyDoc <- formatLExprM PrecExprTop body
-                    let doc =
-                          group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> bodyDoc))
+                    let argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
+                        doc =
+                          group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> bodyDoc)) <> argsTrailing
                     pure (parenthesizeIf (prec /= PrecExprTop) doc)
 
             S.LetIn _ _ _ ->
@@ -1429,9 +1454,10 @@ formatLAltM lalt = do
 formatAltM :: S.Alt -> FmtM Doc
 formatAltM (S.Alt pat body) = do
   bodyDoc <- formatLExprM PrecExprTop body
+  let patTrailing = trailingCommentsDoc (lPatternTrailing pat)
   pure $
     group (formatLPattern pat <+> text "->")
-      <> nest indentSize (hardLine <> bodyDoc)
+      <> nest indentSize (hardLine <> bodyDoc <> patTrailing)
 
 formatDoBlock :: [Located S.Stmt] -> Doc
 formatDoBlock stmts =
@@ -1550,6 +1576,26 @@ joinRowsWithBlanks rows =
               else hardLine
        in blank <> rowDoc r <> go r rs
 
+-- | Like 'joinRowsWithBlanks', but decides blank lines by inspecting the
+-- original source for an actual blank line between two rows' start lines.
+-- This is used at the top level where declarations are not 'Located' (so their
+-- span-derived end lines are unreliable); declaration body continuation lines
+-- are never blank, so any blank line strictly between two start lines is a
+-- genuine separator. The blank line is emitted at indentation 0.
+joinRowsWithBlanksSrc :: Text -> [Row] -> Doc
+joinRowsWithBlanksSrc src rows =
+  case rows of
+    [] -> mempty
+    r : rs -> rowDoc r <> go r rs
+  where
+    go _ [] = mempty
+    go prev (r : rs) =
+      let blank =
+            if anyBlankBetween src (rowStart prev) (rowStart r)
+              then hardLine <> hardLine
+              else hardLine
+       in blank <> rowDoc r <> go r rs
+
 formatStmt :: Located S.Stmt -> Doc
 formatStmt stmt =
   evalState (formatLStmtM stmt) []
@@ -1562,8 +1608,9 @@ formatLStmtM lstmt = do
 formatStmtM :: S.Stmt -> FmtM Doc
 formatStmtM stmt =
   case stmt of
-    S.BindStmt pat rhs ->
-      formatBindLikeM (formatLPattern pat) "<-" rhs
+    S.BindStmt pat rhs -> do
+      d <- formatBindLikeM (formatLPattern pat) "<-" rhs
+      pure (d <> trailingCommentsDoc (lPatternTrailing pat))
     S.DiscardBindStmt rhs ->
       formatBindLikeM (text "_") "<-" rhs
     S.LetStmt name rhs ->
