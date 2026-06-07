@@ -7,7 +7,6 @@ module Lune.Fmt.Format
   , formatDecl
   ) where
 
-import Control.Monad.Trans.State.Strict (State, evalState)
 import Data.List (intersperse)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -32,11 +31,6 @@ import Lune.Fmt.Doc
   , vsep
   , (<+>)
   )
-
--- | The expression formatters thread a (now-trivial) State value. The legacy
--- do-block layout stream has been removed; the state is retained only so the
--- many @evalState m []@ call sites continue to typecheck without churn.
-type FmtM a = State [()] a
 
 indentSize :: Int
 indentSize = 2
@@ -345,37 +339,33 @@ formatExpose ex =
 
 formatDecl :: S.Decl -> Doc
 formatDecl decl =
-  evalState (formatDeclM decl) []
-
-formatDeclM :: S.Decl -> FmtM Doc
-formatDeclM decl =
   case decl of
     S.DeclTypeSig name qualTy ->
-      pure (group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy)))
+      group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy))
 
     S.DeclValue name args body ->
       formatValueDeclM name args body
 
     S.DeclType typeName vars ctors ->
-      pure (formatTypeDecl typeName vars ctors)
+      formatTypeDecl typeName vars ctors
 
     S.DeclTypeAnn anns typeName vars ctors ->
-      pure (formatTypeDeclAnn anns typeName vars ctors)
+      formatTypeDeclAnn anns typeName vars ctors
 
     S.DeclTypeAlias anns name vars bodyTy ->
-      pure (formatTypeAliasDecl anns name vars bodyTy)
+      formatTypeAliasDecl anns name vars bodyTy
 
     S.DeclNewtype name vars ctorName ctorTy ->
-      pure (formatNewtypeDecl name vars ctorName ctorTy)
+      formatNewtypeDecl name vars ctorName ctorTy
 
     S.DeclClass name params supers methods ->
-      pure (formatClassDecl name params supers methods)
+      formatClassDecl name params supers methods
 
     S.DeclInstance cls headTy methods ->
       formatInstanceDeclM cls headTy methods
 
     S.DeclForeignImport conv symbolName name qualTy ->
-      pure (formatForeignImport conv symbolName name qualTy)
+      formatForeignImport conv symbolName name qualTy
 
 formatForeignImport :: S.ForeignConvention -> Text -> Text -> S.QualType -> Doc
 formatForeignImport conv symbolName name qualTy =
@@ -460,25 +450,25 @@ formatClassMethodSig :: S.ClassMethodSig -> Doc
 formatClassMethodSig (S.ClassMethodSig name qualTy) =
   group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy))
 
-formatInstanceDeclM :: Text -> S.Type -> [S.InstanceMethodDef] -> FmtM Doc
-formatInstanceDeclM cls headTy methods = do
+formatInstanceDeclM :: Text -> S.Type -> [S.InstanceMethodDef] -> Doc
+formatInstanceDeclM cls headTy methods =
   let header =
         text "instance" <+> text cls <+> formatType PrecTop headTy <+> text "where"
-  methodsDoc <-
-    case methods of
-      [] ->
-        pure mempty
-      _ -> do
-        docs <- mapM formatInstanceMethodDefM methods
-        pure (nest indentSize (hardLine <> vsep docs))
-  pure (header <> methodsDoc)
+      methodsDoc =
+        case methods of
+          [] ->
+            mempty
+          _ ->
+            let docs = map formatInstanceMethodDefM methods
+             in nest indentSize (hardLine <> vsep docs)
+   in header <> methodsDoc
 
-formatInstanceMethodDefM :: S.InstanceMethodDef -> FmtM Doc
-formatInstanceMethodDefM (S.InstanceMethodDef name expr) = do
-  exprDoc <- formatLExprM PrecExprTop expr
-  pure (group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc)))
+formatInstanceMethodDefM :: S.InstanceMethodDef -> Doc
+formatInstanceMethodDefM (S.InstanceMethodDef name expr) =
+  let exprDoc = formatLExprM PrecExprTop expr
+   in group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc))
 
-formatValueDeclM :: Text -> [Located S.Pattern] -> Located S.Expr -> FmtM Doc
+formatValueDeclM :: Text -> [Located S.Pattern] -> Located S.Expr -> Doc
 formatValueDeclM name args body =
   let lhs =
         case args of
@@ -489,10 +479,9 @@ formatValueDeclM name args body =
               text name
                 <+> formatLPattern a
                 <> nest indentSize (mconcat (map (\p -> line <> formatLPattern p) rest))
-   in do
-        bodyDoc <- formatLExprM PrecExprTop body
-        let argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
-        pure (group (lhs <+> text "=" <> nest indentSize (rhsSepForL body <> bodyDoc)) <> argsTrailing)
+      bodyDoc = formatLExprM PrecExprTop body
+      argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
+   in group (lhs <+> text "=" <> nest indentSize (rhsSepForL body <> bodyDoc)) <> argsTrailing
 
 -- ===== Types / constraints =====
 
@@ -609,30 +598,30 @@ data ExprPrec
 
 formatExpr :: ExprPrec -> S.Expr -> Doc
 formatExpr prec expr =
-  evalState (formatExprM prec expr) []
+  formatExprM prec expr
 
 -- | Format a Located expression, unwrapping the Located wrapper and rendering
 -- any attached leading/trailing comments around the produced Doc. Inner
 -- comments (attached to compound containers) are threaded into the relevant
 -- renderer so they land at the right source-line slot among the children.
-formatLExprM :: ExprPrec -> Located S.Expr -> FmtM Doc
-formatLExprM prec loc = do
-  inner <- formatExprWithInnerM prec (locComments loc) (unLoc loc)
-  pure (withNodeComments (locComments loc) inner)
+formatLExprM :: ExprPrec -> Located S.Expr -> Doc
+formatLExprM prec loc =
+  let inner = formatExprWithInnerM prec (locComments loc) (unLoc loc)
+   in withNodeComments (locComments loc) inner
 
 -- | Dispatch compound exprs with their container's inner comments; everything
 -- else ignores inner comments and goes through 'formatExprM'.
-formatExprWithInnerM :: ExprPrec -> S.Comments -> S.Expr -> FmtM Doc
+formatExprWithInnerM :: ExprPrec -> S.Comments -> S.Expr -> Doc
 formatExprWithInnerM prec cs expr =
   let innerCs = S.commentsInner cs
    in case expr of
         S.DoBlock stmts | prec == PrecExprTop ->
           formatDoBlockWithInnerM innerCs stmts
         S.DoBlock stmts ->
-          parensBlock <$> formatDoBlockWithInnerM innerCs stmts
+          parensBlock (formatDoBlockWithInnerM innerCs stmts)
         S.Case scrut alts | not (null innerCs) ->
           let body = formatCaseWithInnerM innerCs scrut alts
-           in if prec == PrecExprTop then body else parensBlock <$> body
+           in if prec == PrecExprTop then body else parensBlock body
         S.RecordLiteral fields | not (null innerCs) ->
           formatRecordLiteralWithInnerM innerCs fields
         S.RecordUpdate base fields | not (null innerCs) ->
@@ -737,37 +726,37 @@ withNodeComments cs inner =
         [] -> withLead
         _ -> withLead <> trailingCommentsDoc trailing
 
-formatExprM :: ExprPrec -> S.Expr -> FmtM Doc
+formatExprM :: ExprPrec -> S.Expr -> Doc
 formatExprM prec expr =
   case listExpr expr of
     Just xs
       | any elemHasComments xs ->
           formatListWithComments xs
       | otherwise ->
-          formatList <$> mapM (formatLExprM PrecExprTop) xs
+          formatList (map (formatLExprM PrecExprTop) xs)
     Nothing ->
       case tupleExpr expr of
         Just xs ->
-          formatTuple <$> mapM (formatLExprM PrecExprTop) xs
+          formatTuple (map (formatLExprM PrecExprTop) xs)
         Nothing ->
           case expr of
             S.Var name ->
-              pure (formatVar name)
+              formatVar name
 
             S.StringLit s ->
-              pure (formatStringLiteral s)
+              formatStringLiteral s
 
             S.TemplateLit flavor parts ->
               formatTemplateLitM flavor parts
 
             S.IntLit n ->
-              pure (text (T.pack (show n)))
+              text (T.pack (show n))
 
             S.FloatLit f ->
-              pure (text (T.pack (show f)))
+              text (T.pack (show f))
 
             S.CharLit c ->
-              pure (formatCharLiteral c)
+              formatCharLiteral c
 
             S.RecordLiteral fields ->
               formatRecordLiteralM fields
@@ -776,7 +765,8 @@ formatExprM prec expr =
               formatRecordUpdateM base fields
 
             S.FieldAccess e field ->
-              (\eDoc -> eDoc <> text "." <> text field) <$> formatLExprM PrecExprAtom e
+              let eDoc = formatLExprM PrecExprAtom e
+               in eDoc <> text "." <> text field
 
             S.App _ _ ->
               formatAppLikeM prec expr
@@ -786,22 +776,21 @@ formatExprM prec expr =
                     case args of
                       [] -> mempty
                       _ -> hsep (map formatLPattern args)
-               in do
-                    bodyDoc <- formatLExprM PrecExprTop body
-                    let argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
-                        doc =
-                          group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> bodyDoc)) <> argsTrailing
-                    pure (parenthesizeIf (prec /= PrecExprTop) doc)
+                  bodyDoc = formatLExprM PrecExprTop body
+                  argsTrailing = trailingCommentsDoc (concatMap lPatternTrailing args)
+                  doc =
+                    group (text "\\" <> argsDoc <+> text "->" <> nest indentSize (line <> bodyDoc)) <> argsTrailing
+               in parenthesizeIf (prec /= PrecExprTop) doc
 
             S.LetIn _ _ _ ->
               if prec == PrecExprTop
                 then formatLetBlockM expr
-                else parensBlock <$> formatLetBlockM expr
+                else parensBlock (formatLetBlockM expr)
 
             S.Case scrut alts ->
               if prec == PrecExprTop
                 then formatCaseM scrut alts
-                else parensBlock <$> formatCaseM scrut alts
+                else parensBlock (formatCaseM scrut alts)
 
             S.DoBlock stmts ->
               -- Reached only when a do-block is formatted without its Located
@@ -809,7 +798,7 @@ formatExprM prec expr =
               -- live on the wrapper, are therefore unavailable here.
               if prec == PrecExprTop
                 then formatDoBlockWithInnerM [] stmts
-                else parensBlock <$> formatDoBlockWithInnerM [] stmts
+                else parensBlock (formatDoBlockWithInnerM [] stmts)
 
 isBlockExpr :: S.Expr -> Bool
 isBlockExpr e =
@@ -878,7 +867,7 @@ formatCharLiteral c =
         '\t' -> "\\t"
         _ -> T.singleton ch
 
-formatTemplateLitM :: S.TemplateFlavor -> [S.TemplatePart] -> FmtM Doc
+formatTemplateLitM :: S.TemplateFlavor -> [S.TemplatePart] -> Doc
 formatTemplateLitM flavor parts =
   case flavor of
     S.TemplateInline ->
@@ -886,28 +875,27 @@ formatTemplateLitM flavor parts =
     S.TemplateBlock ->
       formatBlockTemplateM parts
 
-formatInlineTemplateM :: [S.TemplatePart] -> FmtM Doc
-formatInlineTemplateM parts = do
-  rendered <- renderInlineTemplatePartsM parts
-  pure (text "\"" <> text rendered <> text "\"")
+formatInlineTemplateM :: [S.TemplatePart] -> Doc
+formatInlineTemplateM parts =
+  let rendered = renderInlineTemplatePartsM parts
+   in text "\"" <> text rendered <> text "\""
 
-formatBlockTemplateM :: [S.TemplatePart] -> FmtM Doc
-formatBlockTemplateM parts = do
+formatBlockTemplateM :: [S.TemplatePart] -> Doc
+formatBlockTemplateM parts =
   -- Canonical form:
   -- ''\n
   --   <content>\n
   -- ''
-  content <- renderBlockTemplatePartsM parts
-  let ls = T.splitOn "\n" content
+  let content = renderBlockTemplatePartsM parts
+      ls = T.splitOn "\n" content
       -- Strip trailing whitespace from blank lines (lines that are all whitespace)
       -- This ensures empty lines don't have trailing spaces
       cleanedLines = map stripIfBlank ls
       -- Use hardLineNoIndent before empty lines so they're truly empty (no indentation)
       bodyDoc = intersperseWithBlankAware cleanedLines
-  pure $
-    if T.null content
-      then text "''" <> hardLine <> text "''"
-      else text "''" <> nest indentSize (hardLine <> bodyDoc) <> hardLine <> text "''"
+   in if T.null content
+        then text "''" <> hardLine <> text "''"
+        else text "''" <> nest indentSize (hardLine <> bodyDoc) <> hardLine <> text "''"
   where
     stripIfBlank line =
       if T.all isWhitespace line then T.empty else line
@@ -924,29 +912,29 @@ formatBlockTemplateM parts = do
       | T.null x  = hardLineNoIndent <> text x <> go xs  -- Empty line: no indent
       | otherwise = hardLine <> text x <> go xs          -- Content line: normal indent
 
-renderInlineTemplatePartsM :: [S.TemplatePart] -> FmtM Text
+renderInlineTemplatePartsM :: [S.TemplatePart] -> Text
 renderInlineTemplatePartsM =
-  fmap T.concat . mapM renderOne
+  T.concat . map renderOne
   where
     renderOne p =
       case p of
         S.TemplateText t ->
-          pure (escapeInlineTemplateText t)
-        S.TemplateHole e -> do
-          rendered <- renderFlatLExprM e
-          pure ("${" <> rendered <> "}")
+          escapeInlineTemplateText t
+        S.TemplateHole e ->
+          let rendered = renderFlatLExprM e
+           in "${" <> rendered <> "}"
 
-renderBlockTemplatePartsM :: [S.TemplatePart] -> FmtM Text
+renderBlockTemplatePartsM :: [S.TemplatePart] -> Text
 renderBlockTemplatePartsM =
-  fmap T.concat . mapM renderOne
+  T.concat . map renderOne
   where
     renderOne p =
       case p of
         S.TemplateText t ->
-          pure (escapeBlockTemplateText t)
-        S.TemplateHole e -> do
-          rendered <- renderFlatLExprM e
-          pure ("${" <> rendered <> "}")
+          escapeBlockTemplateText t
+        S.TemplateHole e ->
+          let rendered = renderFlatLExprM e
+           in "${" <> rendered <> "}"
 
 escapeInlineTemplateText :: Text -> Text
 escapeInlineTemplateText =
@@ -957,43 +945,41 @@ escapeBlockTemplateText =
   -- Only escape interpolation starts; keep newlines as-is.
   T.replace "${" "\\${"
 
-renderFlatExprM :: S.Expr -> FmtM Text
-renderFlatExprM e = do
+renderFlatExprM :: S.Expr -> Text
+renderFlatExprM e =
   -- Best-effort single-line rendering for interpolation holes.
-  doc <- formatExprM PrecExprTop e
-  pure (render defaultWidth (group doc))
+  let doc = formatExprM PrecExprTop e
+   in render defaultWidth (group doc)
 
-renderFlatLExprM :: Located S.Expr -> FmtM Text
+renderFlatLExprM :: Located S.Expr -> Text
 renderFlatLExprM = renderFlatExprM . unLoc
 
-formatRecordLiteralM :: [(Text, Located S.Expr)] -> FmtM Doc
+formatRecordLiteralM :: [(Text, Located S.Expr)] -> Doc
 formatRecordLiteralM fields =
   case fields of
     [] ->
-      pure (text "{}")
+      text "{}"
     (f : fs)
       -- If any field has multi-line content, use hardLine for all fields
-      | any hasMultiLineContentL (map snd fields) -> do
-          firstDoc <- formatRecordFieldM f
-          restDocs <- mapM formatRecordFieldM fs
-          pure $
-            text "{"
-              <> space
-              <> firstDoc
-              <> mconcat (map (\x -> hardLine <> text "," <+> x) restDocs)
-              <> hardLine
-              <> text "}"
-      | otherwise -> do
-          firstDoc <- formatRecordFieldM f
-          restDocs <- mapM formatRecordFieldM fs
-          pure $
-            group $
-              text "{"
+      | any hasMultiLineContentL (map snd fields) ->
+          let firstDoc = formatRecordFieldM f
+              restDocs = map formatRecordFieldM fs
+           in text "{"
                 <> space
                 <> firstDoc
-                <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
-                <> line
+                <> mconcat (map (\x -> hardLine <> text "," <+> x) restDocs)
+                <> hardLine
                 <> text "}"
+      | otherwise ->
+          let firstDoc = formatRecordFieldM f
+              restDocs = map formatRecordFieldM fs
+           in group $
+                text "{"
+                  <> space
+                  <> firstDoc
+                  <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
+                  <> line
+                  <> text "}"
 
 -- | A record entry to lay out vertically: either a field (gets a leading
 -- comma when not first) or an interleaved inner comment (never gets a comma).
@@ -1007,30 +993,30 @@ recEntryLine (RecComment l _) = l
 
 -- | Record literal renderer that interleaves inner comments among the fields,
 -- forcing the multi-line layout (a record carrying comments cannot be inlined).
-formatRecordLiteralWithInnerM :: [S.Comment] -> [(Text, Located S.Expr)] -> FmtM Doc
-formatRecordLiteralWithInnerM innerCs fields = do
-  entries <- recordFieldEntries fields
-  let commentEntries =
+formatRecordLiteralWithInnerM :: [S.Comment] -> [(Text, Located S.Expr)] -> Doc
+formatRecordLiteralWithInnerM innerCs fields =
+  let entries = recordFieldEntries fields
+      commentEntries =
         [ RecComment (S.commentLine c) (renderComment c) | c <- innerCs ]
       rows = sortRecEntries (entries <> commentEntries)
-  pure (layoutRecEntries Nothing rows)
+   in layoutRecEntries Nothing rows
 
 -- | Record update renderer with interleaved inner comments.
-formatRecordUpdateWithInnerM :: [S.Comment] -> Located S.Expr -> [(Text, Located S.Expr)] -> FmtM Doc
-formatRecordUpdateWithInnerM innerCs base fields = do
-  baseDoc <- formatLExprM PrecExprTop base
-  entries <- recordFieldEntries fields
-  let commentEntries =
+formatRecordUpdateWithInnerM :: [S.Comment] -> Located S.Expr -> [(Text, Located S.Expr)] -> Doc
+formatRecordUpdateWithInnerM innerCs base fields =
+  let baseDoc = formatLExprM PrecExprTop base
+      entries = recordFieldEntries fields
+      commentEntries =
         [ RecComment (S.commentLine c) (renderComment c) | c <- innerCs ]
       rows = sortRecEntries (entries <> commentEntries)
-  pure (layoutRecEntries (Just baseDoc) rows)
+   in layoutRecEntries (Just baseDoc) rows
 
-recordFieldEntries :: [(Text, Located S.Expr)] -> FmtM [RecEntry]
+recordFieldEntries :: [(Text, Located S.Expr)] -> [RecEntry]
 recordFieldEntries =
-  mapM
-    ( \f@(_, e) -> do
-        d <- formatRecordFieldM f
-        pure (RecField (spanStartLine (locSpan e)) d)
+  map
+    ( \f@(_, e) ->
+        let d = formatRecordFieldM f
+         in RecField (spanStartLine (locSpan e)) d
     )
 
 sortRecEntries :: [RecEntry] -> [RecEntry]
@@ -1085,92 +1071,89 @@ hasMultiLineContent expr =
 hasMultiLineContentL :: Located S.Expr -> Bool
 hasMultiLineContentL = hasMultiLineContent . unLoc
 
-formatRecordUpdateM :: Located S.Expr -> [(Text, Located S.Expr)] -> FmtM Doc
+formatRecordUpdateM :: Located S.Expr -> [(Text, Located S.Expr)] -> Doc
 formatRecordUpdateM base fields =
   case fields of
-    [] -> do
-      baseDoc <- formatLExprM PrecExprTop base
-      pure (group (text "{" <+> baseDoc <+> text "}"))
-    _ -> do
-      baseDoc <- formatLExprM PrecExprTop base
-      let (f : fs) = fields
-      firstDoc <- formatRecordFieldM f
-      restDocs <- mapM formatRecordFieldM fs
-      pure $
-        group $
-          text "{"
-            <> space
-            <> baseDoc
-            <> line
-            <> text "|"
-            <+> firstDoc
-            <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
-            <> line
-            <> text "}"
+    [] ->
+      let baseDoc = formatLExprM PrecExprTop base
+       in group (text "{" <+> baseDoc <+> text "}")
+    _ ->
+      let baseDoc = formatLExprM PrecExprTop base
+          (f : fs) = fields
+          firstDoc = formatRecordFieldM f
+          restDocs = map formatRecordFieldM fs
+       in group $
+            text "{"
+              <> space
+              <> baseDoc
+              <> line
+              <> text "|"
+              <+> firstDoc
+              <> mconcat (map (\x -> lineBreak <> text "," <+> x) restDocs)
+              <> line
+              <> text "}"
 
-formatRecordFieldM :: (Text, Located S.Expr) -> FmtM Doc
-formatRecordFieldM (name, expr) = do
-  exprDoc <- formatLExprM PrecExprTop expr
-  pure (group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc)))
+formatRecordFieldM :: (Text, Located S.Expr) -> Doc
+formatRecordFieldM (name, expr) =
+  let exprDoc = formatLExprM PrecExprTop expr
+   in group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc))
 
-formatAppLikeM :: ExprPrec -> S.Expr -> FmtM Doc
+formatAppLikeM :: ExprPrec -> S.Expr -> Doc
 formatAppLikeM prec expr =
   case collectInfixAppend expr of
-    Just parts -> do
-      partDocs <- mapM (formatLExprM PrecExprInfix) parts
-      let first : rest = partDocs
+    Just parts ->
+      let partDocs = map (formatLExprM PrecExprInfix) parts
+          first : rest = partDocs
           doc =
             group
               ( first
                   <> nest indentSize
                     (mconcat (map (\x -> line <> text "<>" <+> x) rest))
               )
-      pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
+       in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
     Nothing ->
       case collectInfixBackwardPipe expr of
-        Just parts -> do
-          partDocs <- mapM (formatLExprM PrecExprInfix) parts
-          let first : rest = partDocs
+        Just parts ->
+          let partDocs = map (formatLExprM PrecExprInfix) parts
+              first : rest = partDocs
               doc =
                 group
                   ( first
                       <> nest indentSize
                         (mconcat (map (\x -> line <> text "<|" <+> x) rest))
                   )
-          pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
+           in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
         Nothing ->
           case collectInfixForwardPipe expr of
-            Just parts -> do
-              partDocs <- mapM (formatLExprM PrecExprInfix) parts
-              let first : rest = partDocs
+            Just parts ->
+              let partDocs = map (formatLExprM PrecExprInfix) parts
+                  first : rest = partDocs
                   doc =
                     group
                       ( first
                           <> nest indentSize
                             (mconcat (map (\x -> line <> text "|>" <+> x) rest))
                       )
-              pure (parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc)
+               in parenthesizeIf (prec /= PrecExprTop && prec /= PrecExprInfix) doc
             Nothing ->
               let (h, args) = collectApps expr
-               in do
-                    headDoc <- formatExprM PrecExprApp h
-                    doc <-
-                      case args of
-                        -- Special case: last argument is a record literal - use hardLine before it
-                        -- This gives: func arg1 arg2\n    { field = value }
-                        _ | not (null args) && isRecordLiteralL (last args) -> do
-                          let initArgs = init args
-                              lastArg = last args
-                          initDocs <- mapM (formatLExprM PrecExprAtom) initArgs
-                          lastDoc <- formatLExprM PrecExprAtom lastArg
-                          pure $
-                            group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) initDocs)))
+                  headDoc = formatExprM PrecExprApp h
+                  doc =
+                    case args of
+                      -- Special case: last argument is a record literal - use hardLine before it
+                      -- This gives: func arg1 arg2\n    { field = value }
+                      _ | not (null args) && isRecordLiteralL (last args) ->
+                        let initArgs = init args
+                            lastArg = last args
+                            initDocs = map (formatLExprM PrecExprAtom) initArgs
+                            lastDoc = formatLExprM PrecExprAtom lastArg
+                         in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) initDocs)))
                               <> nest indentSize (hardLine <> lastDoc)
-                        -- Normal case
-                        _ -> do
-                          argDocs <- mapM (formatLExprM PrecExprAtom) args
-                          pure (group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs))))
-                    pure (parenthesizeIf (prec == PrecExprAtom) doc)
+                      -- Normal case
+                      _ ->
+                        let argDocs = map (formatLExprM PrecExprAtom) args
+                         in group (headDoc <> nest indentSize (mconcat (map (\a -> line <> a) argDocs)))
+               in parenthesizeIf (prec == PrecExprAtom) doc
 
 collectApps :: S.Expr -> (S.Expr, [Located S.Expr])
 collectApps =
@@ -1284,23 +1267,22 @@ hsepInfix _ [x] = x
 hsepInfix op (x : xs) =
   mconcat (intersperse (space <> op <> space) (x : xs))
 
-formatLetBlockM :: S.Expr -> FmtM Doc
-formatLetBlockM expr = do
+formatLetBlockM :: S.Expr -> Doc
+formatLetBlockM expr =
   let (bindings, body) = collectLetBindings expr
-  bindingDocs <-
-    mapM
-      ( \(name, rhs) -> do
-          rhsDoc <- formatLExprM PrecExprTop rhs
-          pure (group (text name <+> text "=" <> nest indentSize (rhsSepForL rhs <> rhsDoc)))
-      )
-      bindings
-  bodyDoc <- formatLExprM PrecExprTop body
-  pure $
-    text "let"
-      <> nest indentSize (hardLine <> vsep bindingDocs)
-      <> hardLine
-      <> text "in"
-      <> nest indentSize (hardLine <> bodyDoc)
+      bindingDocs =
+        map
+          ( \(name, rhs) ->
+              let rhsDoc = formatLExprM PrecExprTop rhs
+               in group (text name <+> text "=" <> nest indentSize (rhsSepForL rhs <> rhsDoc))
+          )
+          bindings
+      bodyDoc = formatLExprM PrecExprTop body
+   in text "let"
+        <> nest indentSize (hardLine <> vsep bindingDocs)
+        <> hardLine
+        <> text "in"
+        <> nest indentSize (hardLine <> bodyDoc)
 
 collectLetBindings :: S.Expr -> ([(Text, Located S.Expr)], Located S.Expr)
 collectLetBindings =
@@ -1313,75 +1295,72 @@ collectLetBindings =
         _ ->
           (reverse acc, noLoc e)
 
-formatCaseM :: Located S.Expr -> [Located S.Alt] -> FmtM Doc
-formatCaseM scrut alts = do
-  scrutDoc <- formatLExprM PrecExprTop scrut
-  altDocs <- mapM formatLAltM alts
-  pure $
-    group
-      ( text "case"
-          <> nest indentSize (line <> scrutDoc)
-          <> line
-          <> text "of"
-      )
-      <> nest indentSize (hardLine <> vsep altDocs)
+formatCaseM :: Located S.Expr -> [Located S.Alt] -> Doc
+formatCaseM scrut alts =
+  let scrutDoc = formatLExprM PrecExprTop scrut
+      altDocs = map formatLAltM alts
+   in group
+        ( text "case"
+            <> nest indentSize (line <> scrutDoc)
+            <> line
+            <> text "of"
+        )
+        <> nest indentSize (hardLine <> vsep altDocs)
 
 -- | Case renderer that interleaves the container's inner comments among the
 -- alternatives by source line (blank lines preserved from span gaps).
-formatCaseWithInnerM :: [S.Comment] -> Located S.Expr -> [Located S.Alt] -> FmtM Doc
-formatCaseWithInnerM innerCs scrut alts = do
-  scrutDoc <- formatLExprM PrecExprTop scrut
-  altRows <-
-    mapM
-      ( \la -> do
-          d <- formatLAltM la
-          pure (Row (spanStartLine (locSpan la)) (spanEndLine (locSpan la)) d)
-      )
-      alts
-  let commentRows =
+formatCaseWithInnerM :: [S.Comment] -> Located S.Expr -> [Located S.Alt] -> Doc
+formatCaseWithInnerM innerCs scrut alts =
+  let scrutDoc = formatLExprM PrecExprTop scrut
+      altRows =
+        map
+          ( \la ->
+              let d = formatLAltM la
+               in Row (spanStartLine (locSpan la)) (spanEndLine (locSpan la)) d
+          )
+          alts
+      commentRows =
         [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c) | c <- innerCs ]
       rows = sortOnStart (altRows <> commentRows)
-  pure $
-    group
-      ( text "case"
-          <> nest indentSize (line <> scrutDoc)
-          <> line
-          <> text "of"
-      )
-      <> nest indentSize (hardLine <> joinRowsWithBlanks rows)
+   in group
+        ( text "case"
+            <> nest indentSize (line <> scrutDoc)
+            <> line
+            <> text "of"
+        )
+        <> nest indentSize (hardLine <> joinRowsWithBlanks rows)
 
-formatLAltM :: Located S.Alt -> FmtM Doc
-formatLAltM lalt = do
-  inner <- formatAltM (unLoc lalt)
-  pure (withNodeComments (locComments lalt) inner)
+formatLAltM :: Located S.Alt -> Doc
+formatLAltM lalt =
+  let inner = formatAltM (unLoc lalt)
+   in withNodeComments (locComments lalt) inner
 
-formatAltM :: S.Alt -> FmtM Doc
-formatAltM (S.Alt pat body) = do
-  bodyDoc <- formatLExprM PrecExprTop body
-  let patTrailing = trailingCommentsDoc (lPatternTrailing pat)
-  pure $
-    group (formatLPattern pat <+> text "->")
-      <> nest indentSize (hardLine <> bodyDoc <> patTrailing)
+formatAltM :: S.Alt -> Doc
+formatAltM (S.Alt pat body) =
+  let bodyDoc = formatLExprM PrecExprTop body
+      patTrailing = trailingCommentsDoc (lPatternTrailing pat)
+   in group (formatLPattern pat <+> text "->")
+        <> nest indentSize (hardLine <> bodyDoc <> patTrailing)
 
 -- | Render a do-block from AST-attached comments: interleave the container's
 -- inner comments with the statements by source line, preserving blank lines
 -- between siblings (using span gaps), with no dependence on the legacy scanner.
-formatDoBlockWithInnerM :: [S.Comment] -> [Located S.Stmt] -> FmtM Doc
-formatDoBlockWithInnerM innerCs stmts = do
-  stmtRows <-
-    mapM
-      ( \ls -> do
-          d <- formatLStmtM ls
-          pure (Row (spanStartLine (locSpan ls)) (spanEndLine (locSpan ls)) d)
-      )
-      stmts
-  let commentRows =
+formatDoBlockWithInnerM :: [S.Comment] -> [Located S.Stmt] -> Doc
+formatDoBlockWithInnerM innerCs stmts =
+  let stmtRows =
+        map
+          ( \ls ->
+              let d = formatLStmtM ls
+               in Row (spanStartLine (locSpan ls)) (spanEndLine (locSpan ls)) d
+          )
+          stmts
+      commentRows =
         [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c)
         | c <- innerCs
         ]
       rows = sortOnStart (stmtRows <> commentRows)
       bodyDoc = joinRowsWithBlanks rows
-  pure (text "do" <> nest indentSize (hardLine <> bodyDoc))
+   in text "do" <> nest indentSize (hardLine <> bodyDoc)
 
 -- | A renderable item plus its source span lines, used to interleave siblings
 -- and decide blank lines between them.
@@ -1437,17 +1416,17 @@ joinRowsWithBlanksSrc src rows =
               else hardLine
        in blank <> rowDoc r <> go r rs
 
-formatLStmtM :: Located S.Stmt -> FmtM Doc
-formatLStmtM lstmt = do
-  inner <- formatStmtM (unLoc lstmt)
-  pure (withNodeComments (locComments lstmt) inner)
+formatLStmtM :: Located S.Stmt -> Doc
+formatLStmtM lstmt =
+  let inner = formatStmtM (unLoc lstmt)
+   in withNodeComments (locComments lstmt) inner
 
-formatStmtM :: S.Stmt -> FmtM Doc
+formatStmtM :: S.Stmt -> Doc
 formatStmtM stmt =
   case stmt of
-    S.BindStmt pat rhs -> do
-      d <- formatBindLikeM (formatLPattern pat) "<-" rhs
-      pure (d <> trailingCommentsDoc (lPatternTrailing pat))
+    S.BindStmt pat rhs ->
+      let d = formatBindLikeM (formatLPattern pat) "<-" rhs
+       in d <> trailingCommentsDoc (lPatternTrailing pat)
     S.DiscardBindStmt rhs ->
       formatBindLikeM (text "_") "<-" rhs
     S.LetStmt name rhs ->
@@ -1462,7 +1441,7 @@ formatStmtM stmt =
 --       y
 --       z
 --     |> f
-formatBindLikeM :: Doc -> T.Text -> Located S.Expr -> FmtM Doc
+formatBindLikeM :: Doc -> T.Text -> Located S.Expr -> Doc
 formatBindLikeM lhs op lrhs =
   case unLoc lrhs of
     -- Already a |> expression: (g x y ...) |> f where g has multiple args
@@ -1470,31 +1449,31 @@ formatBindLikeM lhs op lrhs =
       case unLoc lPipeOp of
         S.App lOp innerExpr ->
           case unLoc lOp of
-            S.Var "|>" | isMultiArgAppL innerExpr -> do
+            S.Var "|>" | isMultiArgAppL innerExpr ->
               let (innerH, innerArgs) = collectApps (unLoc innerExpr)
-              fDoc <- formatLExprM PrecExprApp f
-              innerHeadDoc <- formatExprM PrecExprApp innerH
-              innerArgDocs <- mapM (formatLExprM PrecExprAtom) innerArgs
-              let innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
-              pure (lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc))
+                  fDoc = formatLExprM PrecExprApp f
+                  innerHeadDoc = formatExprM PrecExprApp innerH
+                  innerArgDocs = map (formatLExprM PrecExprAtom) innerArgs
+                  innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
+               in lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc)
             _ -> formatBindLikeMFallback lhs op lrhs
         _ -> formatBindLikeMFallback lhs op lrhs
     -- f (g x y ...) where g has multiple args -> format with |>
-    S.App lf arg | shouldUsePipeOperatorL lf arg -> do
+    S.App lf arg | shouldUsePipeOperatorL lf arg ->
       let (innerH, innerArgs) = collectApps (unLoc arg)
-      fDoc <- formatLExprM PrecExprApp lf
-      innerHeadDoc <- formatExprM PrecExprApp innerH
-      innerArgDocs <- mapM (formatLExprM PrecExprAtom) innerArgs
-      let innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
-      pure (lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc))
+          fDoc = formatLExprM PrecExprApp lf
+          innerHeadDoc = formatExprM PrecExprApp innerH
+          innerArgDocs = map (formatLExprM PrecExprAtom) innerArgs
+          innerApp = innerHeadDoc <> nest indentSize (mconcat (map (\a -> hardLine <> a) innerArgDocs))
+       in lhs <+> text op <> nest indentSize (hardLine <> innerApp <> hardLine <> text "|>" <+> fDoc)
     -- Normal case
     _ -> formatBindLikeMFallback lhs op lrhs
 
 -- Normal case fallback for formatBindLikeM
-formatBindLikeMFallback :: Doc -> T.Text -> Located S.Expr -> FmtM Doc
-formatBindLikeMFallback lhs op lrhs = do
-  rhsDoc <- formatLExprM PrecExprTop lrhs
-  pure (group (lhs <+> text op <> nest indentSize (rhsSepForL lrhs <> rhsDoc)))
+formatBindLikeMFallback :: Doc -> T.Text -> Located S.Expr -> Doc
+formatBindLikeMFallback lhs op lrhs =
+  let rhsDoc = formatLExprM PrecExprTop lrhs
+   in group (lhs <+> text op <> nest indentSize (rhsSepForL lrhs <> rhsDoc))
 
 formatPattern :: S.Pattern -> Doc
 formatPattern pat =
@@ -1560,23 +1539,23 @@ elemHasComments le = S.hasComments (locComments le)
 -- element; a trailing comment stays inline after the element. The element's own
 -- comments are rendered here (not via the wrapping group) so they never get
 -- folded into a single line where a line comment would swallow the rest.
-formatListWithComments :: [Located S.Expr] -> FmtM Doc
-formatListWithComments xs = do
-  pieces <- mapM renderElem xs
-  case pieces of
-    [] -> pure (text "[]")
-    ((lead0, body0) : rest) ->
-      let firstDoc = lead0 <> text "[" <> space <> body0
-          restDocs =
-            map (\(lead, body) -> hardLine <> lead <> text "," <+> body) rest
-       in pure (firstDoc <> mconcat restDocs <> hardLine <> text "]")
+formatListWithComments :: [Located S.Expr] -> Doc
+formatListWithComments xs =
+  let pieces = map renderElem xs
+   in case pieces of
+        [] -> text "[]"
+        ((lead0, body0) : rest) ->
+          let firstDoc = lead0 <> text "[" <> space <> body0
+              restDocs =
+                map (\(lead, body) -> hardLine <> lead <> text "," <+> body) rest
+           in firstDoc <> mconcat restDocs <> hardLine <> text "]"
   where
-    renderElem le = do
-      d <- formatExprM PrecExprTop (unLoc le)
-      let cs = locComments le
+    renderElem le =
+      let d = formatExprM PrecExprTop (unLoc le)
+          cs = locComments le
           leading = leadingCommentsDoc (S.commentsLeading cs)
           trailing = trailingCommentsDoc (S.commentsTrailing cs)
-      pure (leading, d <> trailing)
+       in (leading, d <> trailing)
 
 formatTuple :: [Doc] -> Doc
 formatTuple elems =
