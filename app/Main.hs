@@ -574,7 +574,7 @@ buildGo opts coreMod = do
   goResult <-
     ( try
         ( readCreateProcessWithExitCode
-            (proc "go" ["build", "-gcflags=all=-l", "-o", outAbs, "."]) {cwd = Just goDirAbs, env = env1}
+            (proc "go" ["build", "-buildvcs=false", "-gcflags=all=-l", "-o", outAbs, "."]) {cwd = Just goDirAbs, env = env1}
             ""
         )
     ) ::
