@@ -2,6 +2,7 @@
 
 module Lune.Fmt.Format
   ( formatModuleDoc
+  , formatModuleDocWithAttached
   , formatModuleText
   , formatModuleHeader
   , formatImport
@@ -16,7 +17,7 @@ import Data.List (intersperse)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Lune.Syntax as S
-import Lune.Syntax.Located (Located(..), unLoc, noLoc)
+import Lune.Syntax.Located (Located(..), Span(..), unLoc, noLoc)
 import Lune.Fmt.Doc
   ( Doc
   , brackets
@@ -68,6 +69,255 @@ formatModuleText m =
 ensureSingleTrailingNewline :: Text -> Text
 ensureSingleTrailingNewline t =
   T.stripEnd t <> "\n"
+
+-- | New AST-attached entry point. Renders comments from the attached
+-- 'locComments' on 'Located' nodes and 'modComments' on the module.
+--
+-- Top-level declarations and imports are not 'Located', so their source lines
+-- (needed to preserve blank lines and to interleave standalone 'modComments')
+-- are recovered with a small column-1 line scan of the original source. Node
+-- level comments (leading / trailing / inner) come entirely from the AST.
+formatModuleDocWithAttached :: Text -> S.Module -> Doc
+formatModuleDocWithAttached src m =
+  let lns = topLevelScan src
+      headerLine = tlHeaderLine lns
+      importLines = tlImportLines lns
+      declLines = tlDeclLines lns
+
+      header = formatModuleHeader m
+
+      modCs = S.modComments m
+      preHeader = [c | c <- modCs, S.commentLine c < headerLine]
+      postHeader = [c | c <- modCs, S.commentLine c >= headerLine]
+
+      -- Comments that fall within the import block belong to the import
+      -- section; everything else after the header belongs to the decl section.
+      lastImportLine = case importLines of
+        [] -> headerLine
+        _ -> maximum importLines
+      firstImportLine = case importLines of
+        [] -> maxBound
+        (x : _) -> x
+      importSectionCs =
+        [ c | c <- postHeader
+            , not (null importLines)
+            , S.commentLine c >= firstImportLine
+            , S.commentLine c < lastImportLine ]
+      declSectionCs =
+        [ c | c <- postHeader, c `notElemBy` importSectionCs ]
+
+      -- Rows for the import section (imports + interleaved comments).
+      importRows =
+        sortOnStart $
+          [ Row l l d | (l, d) <- zipWithLines importLines (map formatImport (S.modImports m)) ]
+            <> [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c) | c <- importSectionCs ]
+
+      -- Decl blocks paired with their source start line; each block hoists any
+      -- column-1 leading comments from its leading decl above itself.
+      declBlockRows = declBlockRowsFrom declLines declSectionCs (S.modDecls m)
+
+      leadingDoc =
+        case preHeader of
+          [] -> mempty
+          _ -> mconcat [renderComment c <> hardLine | c <- preHeader]
+
+      blankAfterHeader = anyBlankBetween src headerLine (firstTopAfterHeader importLines declBlockRows)
+
+      importsDoc =
+        case importRows of
+          [] -> mempty
+          _ ->
+            let gap = if blankAfterHeader then hardLine <> hardLine else hardLine
+             in gap <> joinRowsWithBlanks importRows
+
+      blankBeforeDecls =
+        case declBlockRows of
+          [] -> False
+          (r : _) ->
+            if null importRows
+              then blankAfterHeader
+              else anyBlankBetween src lastImportLine (rowStart r)
+
+      declsDoc =
+        case declBlockRows of
+          [] -> mempty
+          _ ->
+            let gap = if blankBeforeDecls then hardLine <> hardLine else hardLine
+             in gap <> joinRowsWithBlanks declBlockRows
+   in leadingDoc <> header <> importsDoc <> declsDoc
+  where
+    notElemBy c xs = not (any (sameComment c) xs)
+    sameComment a b =
+      S.commentLine a == S.commentLine b && S.commentCol a == S.commentCol b
+    firstTopAfterHeader imps blocks =
+      minimum ([maxBound] <> imps <> map rowStart blocks)
+
+-- | Result of the minimal column-1 line scan over the original source: the
+-- module header line, and the source start lines of each top-level import and
+-- declaration-ish line (annotations and type signatures appear as their own
+-- entries, matching the parser's view).
+data TopLevelLines = TopLevelLines
+  { tlHeaderLine :: !Int
+  , tlImportLines :: ![Int]
+  , tlDeclLines :: ![Int]
+  }
+
+-- | Scan for column-1 lines that begin top-level constructs. We deliberately
+-- ignore comment and blank lines and any indented continuation lines.
+topLevelScan :: Text -> TopLevelLines
+topLevelScan src =
+  let ls = zip [1 ..] (T.splitOn "\n" src)
+      headerLine =
+        case [n | (n, t) <- ls, startsTopKeyword "module" t] of
+          (x : _) -> x
+          [] -> 1
+      importLs = [n | (n, t) <- ls, startsTopKeyword "import" t]
+      declLs =
+        [ n
+        | (n, t) <- ls
+        , n > headerLine
+        , isTopDeclStart t
+        ]
+   in TopLevelLines headerLine importLs declLs
+  where
+    startsTopKeyword kw t =
+      case T.stripPrefix kw t of
+        Nothing -> False
+        Just rest ->
+          case T.uncons rest of
+            Nothing -> True
+            Just (c, _) -> c == ' ' || c == '\t'
+
+    isTopDeclStart t =
+      case T.uncons t of
+        Nothing -> False
+        Just (c, _) ->
+          (isLower c || isUpper c || c == '@' || c == '(')
+            && not (startsTopKeyword "module" t)
+            && not (startsTopKeyword "import" t)
+    isLower c = 'a' <= c && c <= 'z'
+    isUpper c = 'A' <= c && c <= 'Z'
+
+-- | Pair imports/decls with their source lines; if the counts disagree (which
+-- should not happen for valid input), fall back to a synthetic ascending line
+-- so ordering is still stable.
+zipWithLines :: [Int] -> [Doc] -> [(Int, Doc)]
+zipWithLines lns docs =
+  if length lns == length docs
+    then zip lns docs
+    else zip [1 ..] docs
+
+-- | True if there is at least one blank (whitespace-only) line strictly between
+-- source lines @a@ and @b@.
+anyBlankBetween :: Text -> Int -> Int -> Bool
+anyBlankBetween src a b =
+  let ls = zip [1 ..] (T.splitOn "\n" src)
+   in any (\(n, t) -> n > a && n < b && T.all isSpaceChar t) ls
+  where
+    isSpaceChar c = c == ' ' || c == '\t'
+
+-- | Build the decl-section rows: pair each rendered decl block with its source
+-- start line, hoist any column-1 leading comments off the block's leading decl
+-- so they render above the block, and interleave any decl-section standalone
+-- comments (modComments) by line.
+declBlockRowsFrom :: [Int] -> [S.Comment] -> [S.Decl] -> [Row]
+declBlockRowsFrom declLines declCs decls =
+  let blocks = groupDeclBlocks decls
+      (rowsRev, _) = foldl step ([], declLines) blocks
+      blockRows = reverse rowsRev
+      commentRows =
+        [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c) | c <- declCs ]
+   in sortOnStart (blockRows <> commentRows)
+  where
+    step (acc, remaining) blk =
+      let need = declBlockSourceLineCount blk
+          (used, rest) = splitAt need remaining
+          scannedStart = case used of
+            (x : _) -> x
+            [] -> 0
+          (doc, hoistLines) = renderDeclBlock blk
+          -- A hoisted column-1 leading comment occupies the lines just above
+          -- the declaration; treat the earliest such comment as the block's
+          -- start so blank-line gaps around it are not double-counted.
+          startLn = minimum (scannedStart : hoistLines)
+          endLn = max (declBlockEndLine blk) (case used of { [] -> scannedStart; _ -> last used })
+       in (Row startLn endLn doc : acc, rest)
+
+-- | Group a decl list the same way 'formatDeclBlocks' does (a type signature
+-- immediately followed by its matching value definition forms one block).
+data DeclBlock
+  = SigValueBlock S.Decl S.Decl
+  | SingleBlock S.Decl
+
+groupDeclBlocks :: [S.Decl] -> [DeclBlock]
+groupDeclBlocks decls =
+  case decls of
+    (S.DeclTypeSig name qualTy : S.DeclValue name' args body : rest)
+      | name == name' ->
+          SigValueBlock (S.DeclTypeSig name qualTy) (S.DeclValue name' args body)
+            : groupDeclBlocks rest
+    (d : rest) ->
+      SingleBlock d : groupDeclBlocks rest
+    [] ->
+      []
+
+-- | How many column-1 source lines a block occupies in 'tlDeclLines' terms:
+-- one per annotation, one for the type signature (if any), plus one for the
+-- declaration head itself.
+declBlockSourceLineCount :: DeclBlock -> Int
+declBlockSourceLineCount blk =
+  case blk of
+    SigValueBlock _ v -> 1 + declAnnotationCount v + 1
+    SingleBlock d -> declAnnotationCount d + 1
+  where
+    declAnnotationCount d =
+      case d of
+        S.DeclTypeAnn anns _ _ _ -> length anns
+        S.DeclTypeAlias anns _ _ _ -> length anns
+        _ -> 0
+
+-- | The last source line a block plausibly occupies, taken from the value
+-- body's span end when available (0 / unknown for span-less decls, in which
+-- case the caller falls back to the scanned head line).
+declBlockEndLine :: DeclBlock -> Int
+declBlockEndLine blk =
+  case blk of
+    SigValueBlock _ (S.DeclValue _ _ body) -> spanEndLine (locSpan body)
+    SingleBlock (S.DeclValue _ _ body) -> spanEndLine (locSpan body)
+    _ -> 0
+
+-- | Render one decl block, hoisting any column-1 leading comments attached to
+-- the leading decl's body above the rendered block (so a between-decl comment
+-- written flush-left appears on its own line above the declaration rather than
+-- indented under @=@).
+renderDeclBlock :: DeclBlock -> (Doc, [Int])
+renderDeclBlock blk =
+  case blk of
+    SigValueBlock sig val ->
+      let (hoisted, lns, val') = hoistDeclLeading val
+       in (hoisted <> formatDecl sig <> hardLine <> formatDecl val', lns)
+    SingleBlock d ->
+      let (hoisted, lns, d') = hoistDeclLeading d
+       in (hoisted <> formatDecl d', lns)
+
+-- | Pull column-1 leading comments off a 'DeclValue' body and return a Doc that
+-- renders them above the declaration, plus the decl with those comments
+-- removed. Non-value decls (and bodies without column-1 leading comments) are
+-- returned unchanged.
+hoistDeclLeading :: S.Decl -> (Doc, [Int], S.Decl)
+hoistDeclLeading d =
+  case d of
+    S.DeclValue name args body ->
+      let cs = locComments body
+          (hoist, keep) = span isCol1 (S.commentsLeading cs)
+          isCol1 c = S.commentCol c == 1
+          body' = body { locComments = cs { S.commentsLeading = keep } }
+          hoistDoc =
+            case hoist of
+              [] -> mempty
+              _ -> mconcat [renderComment c <> hardLine | c <- hoist]
+       in (hoistDoc, map S.commentLine hoist, S.DeclValue name args body')
+    _ -> (mempty, [], d)
 
 formatModuleDoc :: S.Module -> Doc
 formatModuleDoc m =
@@ -441,18 +691,83 @@ popDoLayout = do
       put xs
       pure x
 
--- | Format a Located expression, unwrapping the Located wrapper
--- TODO: In future, also render attached comments from locComments
+-- | Format a Located expression, unwrapping the Located wrapper and rendering
+-- any attached leading/trailing comments around the produced Doc. Inner
+-- comments (attached to compound containers) are threaded into the relevant
+-- renderer so they land at the right source-line slot among the children.
 formatLExprM :: ExprPrec -> Located S.Expr -> FmtM Doc
-formatLExprM prec loc = formatExprM prec (unLoc loc)
+formatLExprM prec loc = do
+  inner <- formatExprWithInnerM prec (locComments loc) (unLoc loc)
+  pure (withNodeComments (locComments loc) inner)
+
+-- | Dispatch compound exprs with their container's inner comments; everything
+-- else ignores inner comments and goes through 'formatExprM'.
+formatExprWithInnerM :: ExprPrec -> S.Comments -> S.Expr -> FmtM Doc
+formatExprWithInnerM prec cs expr =
+  let innerCs = S.commentsInner cs
+   in case expr of
+        S.DoBlock stmts | prec == PrecExprTop ->
+          formatDoBlockWithInnerM innerCs stmts
+        S.DoBlock stmts ->
+          parensBlock <$> formatDoBlockWithInnerM innerCs stmts
+        _ ->
+          formatExprM prec expr
 
 -- | Helper for rhsSepFor with Located wrapper
 rhsSepForL :: Located S.Expr -> Doc
 rhsSepForL = rhsSepFor . unLoc
 
--- | Format a Located pattern
+-- | Format a Located pattern, rendering attached comments.
 formatLPattern :: Located S.Pattern -> Doc
-formatLPattern = formatPattern . unLoc
+formatLPattern lp =
+  withNodeComments (locComments lp) (formatPattern (unLoc lp))
+
+-- ===== Comment rendering =====
+
+-- | Render a single comment, re-adding the delimiters that the parser strips.
+-- Line comments store the text after @--@; block/doc comments store the inner
+-- body (doc comments with the leading @|@ already removed).
+renderComment :: S.Comment -> Doc
+renderComment c =
+  case S.commentKind c of
+    S.LineComment ->
+      text ("--" <> S.commentText c)
+    S.BlockComment ->
+      renderMultiLine ("{-" <> S.commentText c <> "-}")
+    S.DocComment ->
+      renderMultiLine ("{-|" <> S.commentText c <> "-}")
+  where
+    renderMultiLine t =
+      let ls = T.splitOn "\n" t
+       in mconcat (intersperse hardLine (map text ls))
+
+-- | Leading comments rendered on their own line(s), each followed by a hard
+-- line so the node Doc that follows starts on a fresh line.
+leadingCommentsDoc :: [S.Comment] -> Doc
+leadingCommentsDoc cs =
+  mconcat [renderComment c <> hardLine | c <- cs]
+
+-- | Trailing comments appended after the node on the same line, separated by
+-- two spaces (multiple trailing comments are unusual but handled).
+trailingCommentsDoc :: [S.Comment] -> Doc
+trailingCommentsDoc cs =
+  mconcat [text "  " <> renderComment c | c <- cs]
+
+-- | Wrap a node's Doc with its leading (before, own line) and trailing (after,
+-- inline) comments. Leading comments force the node onto a new line; to keep
+-- the node groupable when there are leading comments we wrap the whole thing so
+-- the hard lines live outside any enclosing group's flatten attempt.
+withNodeComments :: S.Comments -> Doc -> Doc
+withNodeComments cs inner =
+  let leading = S.commentsLeading cs
+      trailing = S.commentsTrailing cs
+      withLead =
+        case leading of
+          [] -> inner
+          _ -> leadingCommentsDoc leading <> inner
+   in case trailing of
+        [] -> withLead
+        _ -> withLead <> trailingCommentsDoc trailing
 
 formatExprM :: ExprPrec -> S.Expr -> FmtM Doc
 formatExprM prec expr =
@@ -1002,7 +1317,9 @@ formatAlt alt =
   evalState (formatLAltM alt) []
 
 formatLAltM :: Located S.Alt -> FmtM Doc
-formatLAltM lalt = formatAltM (unLoc lalt)
+formatLAltM lalt = do
+  inner <- formatAltM (unLoc lalt)
+  pure (withNodeComments (locComments lalt) inner)
 
 formatAltM :: S.Alt -> FmtM Doc
 formatAltM (S.Alt pat body) = do
@@ -1074,12 +1391,68 @@ formatDoBlockM maybeLayout stmts = do
             vsep stmtDocs
   pure (text "do" <> nest indentSize (hardLine <> bodyDoc))
 
+-- | Render a do-block from AST-attached comments: interleave the container's
+-- inner comments with the statements by source line, preserving blank lines
+-- between siblings (using span gaps), with no dependence on the legacy scanner.
+formatDoBlockWithInnerM :: [S.Comment] -> [Located S.Stmt] -> FmtM Doc
+formatDoBlockWithInnerM innerCs stmts = do
+  stmtRows <-
+    mapM
+      ( \ls -> do
+          d <- formatLStmtM ls
+          pure (Row (spanStartLine (locSpan ls)) (spanEndLine (locSpan ls)) d)
+      )
+      stmts
+  let commentRows =
+        [ Row (S.commentLine c) (S.commentEndLine c) (renderComment c)
+        | c <- innerCs
+        ]
+      rows = sortOnStart (stmtRows <> commentRows)
+      bodyDoc = joinRowsWithBlanks rows
+  pure (text "do" <> nest indentSize (hardLine <> bodyDoc))
+
+-- | A renderable item plus its source span lines, used to interleave siblings
+-- and decide blank lines between them.
+data Row = Row
+  { rowStart :: !Int
+  , rowEnd :: !Int
+  , rowDoc :: !Doc
+  }
+
+sortOnStart :: [Row] -> [Row]
+sortOnStart = sortRows
+  where
+    sortRows [] = []
+    sortRows (x : xs) =
+      sortRows [a | a <- xs, rowStart a < rowStart x]
+        <> [x]
+        <> sortRows [a | a <- xs, rowStart a >= rowStart x]
+
+-- | Join rows vertically, inserting a single blank line between two rows when
+-- the source had at least one blank line between them (start of next minus end
+-- of previous is greater than one).
+joinRowsWithBlanks :: [Row] -> Doc
+joinRowsWithBlanks rows =
+  case rows of
+    [] -> mempty
+    r : rs -> rowDoc r <> go r rs
+  where
+    go _ [] = mempty
+    go prev (r : rs) =
+      let blank =
+            if rowStart r - rowEnd prev > 1
+              then hardLineNoIndent <> hardLine
+              else hardLine
+       in blank <> rowDoc r <> go r rs
+
 formatStmt :: Located S.Stmt -> Doc
 formatStmt stmt =
   evalState (formatLStmtM stmt) []
 
 formatLStmtM :: Located S.Stmt -> FmtM Doc
-formatLStmtM lstmt = formatStmtM (unLoc lstmt)
+formatLStmtM lstmt = do
+  inner <- formatStmtM (unLoc lstmt)
+  pure (withNodeComments (locComments lstmt) inner)
 
 formatStmtM :: S.Stmt -> FmtM Doc
 formatStmtM stmt =

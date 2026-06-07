@@ -8,8 +8,7 @@ import A
 import B
 
 -- between imports and decls
-x = 1
--- trailing comment
+x = 1  -- trailing comment
 {- block between decls -}
 y = 2
 

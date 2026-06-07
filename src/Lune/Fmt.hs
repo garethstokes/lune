@@ -16,6 +16,7 @@ import qualified Data.IntMap.Strict as IntMap
 import qualified Data.Set as Set
 import qualified Lune.Parser as Parser
 import qualified Lune.Syntax as S
+import qualified Lune.Syntax.Comments.Attach as Attach
 import qualified Lune.Fmt.Doc as D
 import qualified Lune.Fmt.Format as Fmt
 import Text.Megaparsec (errorBundlePretty)
@@ -31,11 +32,12 @@ renderFmtError err =
 
 formatText :: FilePath -> Text -> Either FmtError Text
 formatText path src =
-  case Parser.parseTextBundle path src of
+  case Parser.parseTextWithComments path src of
     Left err ->
       Left (FmtParseError (T.pack (errorBundlePretty err)))
-    Right m ->
-      Right (formatModuleTextWithComments src m)
+    Right (m, comments) ->
+      let m' = Attach.attachComments m comments
+       in Right (ensureSingleTrailingNewline (D.render 80 (Fmt.formatModuleDocWithAttached src m')))
 
 data CommentKind
   = CommentLine
