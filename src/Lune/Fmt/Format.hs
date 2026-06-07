@@ -460,10 +460,6 @@ formatClassMethodSig :: S.ClassMethodSig -> Doc
 formatClassMethodSig (S.ClassMethodSig name qualTy) =
   group (text name <+> text ":" <> nest 4 (line <> formatQualType qualTy))
 
-formatInstanceDecl :: Text -> S.Type -> [S.InstanceMethodDef] -> Doc
-formatInstanceDecl cls headTy methods =
-  evalState (formatInstanceDeclM cls headTy methods) []
-
 formatInstanceDeclM :: Text -> S.Type -> [S.InstanceMethodDef] -> FmtM Doc
 formatInstanceDeclM cls headTy methods = do
   let header =
@@ -477,18 +473,10 @@ formatInstanceDeclM cls headTy methods = do
         pure (nest indentSize (hardLine <> vsep docs))
   pure (header <> methodsDoc)
 
-formatInstanceMethodDef :: S.InstanceMethodDef -> Doc
-formatInstanceMethodDef def =
-  evalState (formatInstanceMethodDefM def) []
-
 formatInstanceMethodDefM :: S.InstanceMethodDef -> FmtM Doc
 formatInstanceMethodDefM (S.InstanceMethodDef name expr) = do
   exprDoc <- formatLExprM PrecExprTop expr
   pure (group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc)))
-
-formatValueDecl :: Text -> [Located S.Pattern] -> Located S.Expr -> Doc
-formatValueDecl name args body =
-  evalState (formatValueDeclM name args body) []
 
 formatValueDeclM :: Text -> [Located S.Pattern] -> Located S.Expr -> FmtM Doc
 formatValueDeclM name args body =
@@ -890,10 +878,6 @@ formatCharLiteral c =
         '\t' -> "\\t"
         _ -> T.singleton ch
 
-formatTemplateLit :: S.TemplateFlavor -> [S.TemplatePart] -> Doc
-formatTemplateLit flavor parts =
-  evalState (formatTemplateLitM flavor parts) []
-
 formatTemplateLitM :: S.TemplateFlavor -> [S.TemplatePart] -> FmtM Doc
 formatTemplateLitM flavor parts =
   case flavor of
@@ -981,10 +965,6 @@ renderFlatExprM e = do
 
 renderFlatLExprM :: Located S.Expr -> FmtM Text
 renderFlatLExprM = renderFlatExprM . unLoc
-
-formatRecordLiteral :: [(Text, Located S.Expr)] -> Doc
-formatRecordLiteral fields =
-  evalState (formatRecordLiteralM fields) []
 
 formatRecordLiteralM :: [(Text, Located S.Expr)] -> FmtM Doc
 formatRecordLiteralM fields =
@@ -1105,10 +1085,6 @@ hasMultiLineContent expr =
 hasMultiLineContentL :: Located S.Expr -> Bool
 hasMultiLineContentL = hasMultiLineContent . unLoc
 
-formatRecordUpdate :: Located S.Expr -> [(Text, Located S.Expr)] -> Doc
-formatRecordUpdate base fields =
-  evalState (formatRecordUpdateM base fields) []
-
 formatRecordUpdateM :: Located S.Expr -> [(Text, Located S.Expr)] -> FmtM Doc
 formatRecordUpdateM base fields =
   case fields of
@@ -1132,18 +1108,10 @@ formatRecordUpdateM base fields =
             <> line
             <> text "}"
 
-formatRecordField :: (Text, Located S.Expr) -> Doc
-formatRecordField f =
-  evalState (formatRecordFieldM f) []
-
 formatRecordFieldM :: (Text, Located S.Expr) -> FmtM Doc
 formatRecordFieldM (name, expr) = do
   exprDoc <- formatLExprM PrecExprTop expr
   pure (group (text name <+> text "=" <> nest indentSize (rhsSepForL expr <> exprDoc)))
-
-formatAppLike :: ExprPrec -> S.Expr -> Doc
-formatAppLike prec expr =
-  evalState (formatAppLikeM prec expr) []
 
 formatAppLikeM :: ExprPrec -> S.Expr -> FmtM Doc
 formatAppLikeM prec expr =
@@ -1316,10 +1284,6 @@ hsepInfix _ [x] = x
 hsepInfix op (x : xs) =
   mconcat (intersperse (space <> op <> space) (x : xs))
 
-formatLetBlock :: S.Expr -> Doc
-formatLetBlock expr =
-  evalState (formatLetBlockM expr) []
-
 formatLetBlockM :: S.Expr -> FmtM Doc
 formatLetBlockM expr = do
   let (bindings, body) = collectLetBindings expr
@@ -1348,10 +1312,6 @@ collectLetBindings =
           go ((name, rhs) : acc) (unLoc body)
         _ ->
           (reverse acc, noLoc e)
-
-formatCase :: Located S.Expr -> [Located S.Alt] -> Doc
-formatCase scrut alts =
-  evalState (formatCaseM scrut alts) []
 
 formatCaseM :: Located S.Expr -> [Located S.Alt] -> FmtM Doc
 formatCaseM scrut alts = do
@@ -1389,10 +1349,6 @@ formatCaseWithInnerM innerCs scrut alts = do
           <> text "of"
       )
       <> nest indentSize (hardLine <> joinRowsWithBlanks rows)
-
-formatAlt :: Located S.Alt -> Doc
-formatAlt alt =
-  evalState (formatLAltM alt) []
 
 formatLAltM :: Located S.Alt -> FmtM Doc
 formatLAltM lalt = do
@@ -1481,10 +1437,6 @@ joinRowsWithBlanksSrc src rows =
               else hardLine
        in blank <> rowDoc r <> go r rs
 
-formatStmt :: Located S.Stmt -> Doc
-formatStmt stmt =
-  evalState (formatLStmtM stmt) []
-
 formatLStmtM :: Located S.Stmt -> FmtM Doc
 formatLStmtM lstmt = do
   inner <- formatStmtM (unLoc lstmt)
@@ -1510,10 +1462,6 @@ formatStmtM stmt =
 --       y
 --       z
 --     |> f
-formatBindLike :: Doc -> T.Text -> Located S.Expr -> Doc
-formatBindLike lhs op rhs =
-  evalState (formatBindLikeM lhs op rhs) []
-
 formatBindLikeM :: Doc -> T.Text -> Located S.Expr -> FmtM Doc
 formatBindLikeM lhs op lrhs =
   case unLoc lrhs of
