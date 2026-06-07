@@ -1,0 +1,3 @@
+module FmtTrailingDecl exposing (x)
+
+x = 1  -- note

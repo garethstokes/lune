@@ -3,6 +3,7 @@ module Lune.Parser
   , parseFileEither
   , parseTextEither
   , parseTextBundle
+  , parseTextWithComments
   , parseModule
   , parseExpr
   , parseDo
@@ -12,7 +13,7 @@ module Lune.Parser
 
 import Control.Applicative (empty, many, optional, some)
 import Control.Monad (guard, void)
-import Control.Monad.State.Strict (StateT, evalStateT, get, modify, put)
+import Control.Monad.State.Strict (StateT, evalStateT, modify, runStateT)
 import Data.Functor (($>))
 import Data.Char (isUpper)
 import Data.Text (Text)
@@ -20,8 +21,8 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Data.Void (Void)
 import Lune.Syntax
-import Lune.Syntax.Comment (Comment(..), CommentKind(..), CommentPosition(..), Comments(..), emptyComments)
-import Lune.Syntax.Located (Span(..), Located(..), withLoc, withComments)
+import Lune.Syntax.Comment (Comment(..), CommentKind(..), CommentPosition(..), emptyComments)
+import Lune.Syntax.Located (Span(..), Located(..))
 import Text.Megaparsec
   ( Parsec
   , ParseErrorBundle
@@ -63,11 +64,12 @@ initialParserState = ParserState []
 
 -- ===== Located helpers =====
 
--- | Wrap a parsed value with location and attach pending comments
+-- | Wrap a parsed value with its source span. Comments are no longer attached
+-- per node; they remain in 'psPendingComments' as a flat list (see
+-- 'parseTextWithComments') for a later attachment pass.
 located :: Parser a -> Parser (Located a)
 located p = do
   startPos <- P.getSourcePos
-  leading <- consumePendingComments
   result <- p
   endPos <- P.getSourcePos
   let span = Span
@@ -75,31 +77,7 @@ located p = do
         (P.unPos (P.sourceColumn startPos))
         (P.unPos (P.sourceLine endPos))
         (P.unPos (P.sourceColumn endPos))
-      comments = Comments leading [] []
-  pure (Located span comments result)
-
--- | Consume all pending comments, marking them as leading
-consumePendingComments :: Parser [Comment]
-consumePendingComments = do
-  s <- get
-  put s { psPendingComments = [] }
-  pure (map (\c -> c { commentPosition = Leading }) (psPendingComments s))
-
--- | Attach trailing comments (on same line) to a Located value
--- Note: Placeholder for trailing comment detection (complex to implement)
-attachTrailing :: Located a -> Parser (Located a)
-attachTrailing loc = do
-  -- Trailing comment detection is complex and deferred to later
-  -- For now, just return the Located value unchanged
-  pure loc
-
--- | Collect comments that appear on the given line
--- Note: Placeholder - implementing trailing comments is complex
-collectTrailingComments :: Int -> Parser [Comment]
-collectTrailingComments _line = do
-  -- Placeholder - trailing comment detection requires looking ahead
-  -- without consuming, which is tricky
-  pure []
+  pure (Located span emptyComments result)
 
 parseFile :: FilePath -> IO Module
 parseFile path = do
@@ -123,13 +101,22 @@ parseTextBundle :: FilePath -> Text -> Either (ParseErrorBundle Text Void) Modul
 parseTextBundle path contents =
   runParser (evalStateT (scnOptional *> parseModule <* eof) initialParserState) path contents
 
+-- | Parse a module and also return the flat list of captured comments.
+-- Uses 'runStateT' (not 'evalStateT') so the final 'ParserState' is recoverable,
+-- yielding the comments left in 'psPendingComments' after the parse.
+parseTextWithComments :: FilePath -> Text -> Either (ParseErrorBundle Text Void) (Module, [Comment])
+parseTextWithComments path contents =
+  case runParser (runStateT (scnOptional *> parseModule <* eof) initialParserState) path contents of
+    Left err -> Left err
+    Right (mod', finalState) -> Right (mod', psPendingComments finalState)
+
 parseModule :: Parser Module
 parseModule = do
   (name, exports) <- moduleHeader
   imports <- many (try importDecl)
   decls <- many decl
   scnOptional
-  pure Module {modName = name, modExports = exports, modImports = imports, modDecls = decls}
+  pure Module {modName = name, modExports = exports, modImports = imports, modDecls = decls, modComments = []}
 
 moduleHeader :: Parser (Text, [Expose])
 moduleHeader = do

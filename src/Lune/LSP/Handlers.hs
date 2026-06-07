@@ -610,6 +610,7 @@ checkFileWithSemantic stateRef path contents =
                             , S.modExports = []
                             , S.modImports = []
                             , S.modDecls = concatMap S.modDecls ms
+                            , S.modComments = []
                             }
                         mod' = desugarModule combined
                     case validateModule mod' of

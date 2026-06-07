@@ -21,6 +21,7 @@ data Module = Module
   , modExports :: [Expose]
   , modImports :: [Import]
   , modDecls :: [Decl]
+  , modComments :: [Comment]   -- ^ Top-level standalone comments, attached by Lune.Syntax.Comments.Attach
   }
   deriving (Show)
 

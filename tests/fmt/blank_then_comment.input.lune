@@ -1,0 +1,7 @@
+module FmtBlankThenComment exposing (x, y)
+
+x=1
+
+-- standalone between decls
+
+y=2

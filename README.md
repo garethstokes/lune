@@ -103,13 +103,37 @@ main =
 
 ## Tests
 
+The golden suite is built and run with `cabal` inside the Nix dev shell. The
+dev-shell GHC ships no pre-built package set, so `cabal` resolves the test-only
+dependencies (aeson, tasty, tasty-golden, ...) from Hackage. This requires a
+populated package index, so run `cabal update` once before the first build:
+
 ```bash
+# One-time, inside the dev shell: populate the Hackage index so the solver
+# can resolve test-suite dependencies. Without this, `cabal build`/`cabal test`
+# fail with "unknown package: parser-combinators" (or similar).
+nix develop --command cabal update
+
 # Run all golden tests
-cabal test golden
+nix develop --command cabal test golden
 
 # Accept new golden output
-cabal test golden --test-options="--accept"
+nix develop --command cabal test golden --test-options="--accept"
 ```
+
+### Known environment-dependent failures
+
+Two classes of test failure are environmental, not regressions:
+
+- **`Eval.60_System_Inventory` / `Eval.61_System_Sample`** snapshot live
+  hardware (CPU model, core count, RAM, GPU, live network/disk counters), so
+  their golden files only match the machine they were recorded on. Re-accept
+  them locally if needed; do not commit machine-specific output.
+- **`Process Go.*`** shell out to `go build`, which stamps binaries with VCS
+  info. If a stray `.git` exists at or above the system temp dir (e.g. a
+  `/tmp/.git`), `go build` aborts with
+  `error obtaining VCS status: exit status 128`. Remove the stray repo, or run
+  with `GOFLAGS=-buildvcs=false` to disable VCS stamping.
 
 ## Example
 

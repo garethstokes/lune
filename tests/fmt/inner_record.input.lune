@@ -1,0 +1,6 @@
+module FmtInnerRecord exposing (point)
+
+point = { x = 1
+  -- between fields
+  , y = 2
+  }

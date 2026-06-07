@@ -1,0 +1,9 @@
+module FmtCommentInCase exposing (f)
+
+f x =
+  case x of
+    Ok y ->
+      y  -- happy path
+    -- between alternatives
+    Err e ->
+      0

@@ -283,6 +283,7 @@ runProgramPipeline opts = do
                 , S.modExports = []
                 , S.modImports = []
                 , S.modDecls = decls
+                , S.modComments = []
                 }
 
   let mod' =
@@ -443,6 +444,7 @@ build opts = do
                 , S.modExports = []
                 , S.modImports = []
                 , S.modDecls = decls
+                , S.modComments = []
                 }
 
   let mod' = desugarModule resolved
