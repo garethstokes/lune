@@ -32,7 +32,8 @@ lune --fmt --stdout path/to/File.lune
 
 ## Style Summary (v0.1)
 
-The formatter is AST-driven and does not consult existing whitespace (beyond comment capture).
+The formatter is AST-driven: blank-line preservation and comment placement derive from AST node
+spans (with a small column-1 source scan only for top-level declarations, which carry no spans).
 
 - Indentation: 2 spaces per block level.
 - Trailing whitespace: removed.
@@ -94,12 +95,16 @@ The formatter is AST-driven and does not consult existing whitespace (beyond com
     ```
   - Multi-line records use leading commas, and record updates use `|` on its own line.
 
-## Comments (best-effort)
+## Comments
 
-Lune v0.1 does not yet attach comments to the AST in the parser, so the formatter uses a minimal
-scanner to preserve comments at top-level boundaries (module header/imports/decls).
+Comments are attached to AST nodes after parsing and rendered in place:
 
-- Line comments and nested block comments are preserved.
-- Comment placement may shift to the nearest stable boundary if the original position was ambiguous.
-- Block comment contents are preserved exactly (only surrounding indentation may change).
+- **Leading** comments (on their own line above a node) render on their own line(s) above it.
+- **Trailing** comments (on the same line as code) stay inline: `x = 1  -- note`.
+- **Inner** comments (between elements of a do-block, record, or case) render at their slot.
+  Comments between list/tuple elements render as a leading comment on the following element.
+- **Doc comments** (`{-| ... -}`) render verbatim in leading position.
+- Line and nested block comments are preserved exactly. No comment is dropped: a comment with
+  no precise structural home attaches to the nearest enclosing construct (or the module's
+  top-level comment list).
 
