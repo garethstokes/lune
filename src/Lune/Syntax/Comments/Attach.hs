@@ -236,23 +236,23 @@ matchTrailing nodes c =
        [] -> Nothing
        _ -> Just (niId (deepest candidates), setPos Trailing c)
 
--- | Leading: comment on its own line(s) immediately above a node. Choose the
--- nearest following node (smallest positive line gap from the comment's end to
--- the node's start), breaking ties by deepest span.
+-- | Leading: comment on its own line(s) /immediately/ above a node — the node
+-- begins on the very next line after the comment ends (no blank line between).
+-- This adjacency requirement is what distinguishes a node-leading comment from
+-- a free-floating between-declaration comment (which falls through to the
+-- top-level 'modComments' bucket). Among nodes starting on that next line, the
+-- deepest (tightest) one owns the comment.
 matchLeading :: [NodeInfo] -> Comment -> Maybe (NodeId, Comment)
 matchLeading nodes c =
   let cel = commentEndLine c
       candidates =
         [ ni
         | ni <- nodes
-        , spanStartLine (niSpan ni) > cel
+        , spanStartLine (niSpan ni) == cel + 1
         ]
   in case candidates of
        [] -> Nothing
-       _ ->
-         let gap ni = spanStartLine (niSpan ni) - cel
-             best = minGapDeepest gap candidates
-         in Just (niId best, setPos Leading c)
+       _ -> Just (niId (deepest candidates), setPos Leading c)
 
 -- | Inner: comment on its own line strictly between a compound container's
 -- first and last lines (so it genuinely sits between the container's children,
@@ -276,16 +276,6 @@ matchInner nodes c =
 -- | Pick the node with the smallest span (deepest / tightest) among candidates.
 deepest :: [NodeInfo] -> NodeInfo
 deepest = foldr1 (\a b -> if spanSize (niSpan a) <= spanSize (niSpan b) then a else b)
-
--- | Among candidates, pick the one minimising the given gap function, breaking
--- ties by deepest span.
-minGapDeepest :: (NodeInfo -> Int) -> [NodeInfo] -> NodeInfo
-minGapDeepest gap =
-  foldr1 (\a b ->
-    case compare (gap a) (gap b) of
-      LT -> a
-      GT -> b
-      EQ -> if spanSize (niSpan a) <= spanSize (niSpan b) then a else b)
 
 -- | A rough size of a span (in lines*cols), used to compare nesting depth.
 -- Smaller means deeper/tighter.

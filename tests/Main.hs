@@ -121,7 +121,94 @@ attachTests = testGroup "Attach"
           let m' = Attach.attachComments m cs
           assertBool "inner comment on the do-block"
             (any (T.isInfixOf "between" . commentText) (doBlockInner m'))
+  , testCase "comment between two top-level decls lands in modComments" $ do
+      let src = "module M exposing (x, y)\n\nx = 1\n\n-- standalone\n\ny = 2\n"
+      case Parser.parseTextWithComments "M" src of
+        Left e -> assertFailure (show e)
+        Right (m, cs) -> do
+          let m' = Attach.attachComments m cs
+          assertBool "between-decl comment is preserved" (commentPreserved "standalone" m')
+          assertBool "between-decl comment is in modComments"
+            (any (T.isInfixOf "standalone" . commentText) (modComments m'))
+  , testCase "trailing comment after the last decl is not dropped" $ do
+      let src = "module M exposing (x)\n\nx = 1\n\n-- final trailing\n"
+      case Parser.parseTextWithComments "M" src of
+        Left e -> assertFailure (show e)
+        Right (m, cs) -> do
+          let m' = Attach.attachComments m cs
+          assertBool "final comment is preserved somewhere"
+            (commentPreserved "final trailing" m')
+          assertEqual "no comments are dropped"
+            (length cs) (totalAttached m')
   ]
+
+-- | Total number of comments attached across all node slots and modComments.
+totalAttached :: Module -> Int
+totalAttached m = length (modComments m) + sum (map declCount (modDecls m))
+  where
+    declCount (DeclValue _ pats rhs) = sum (map patCount pats) + exprCount rhs
+    declCount (DeclInstance _ _ methods) = sum (map (exprCount . instanceMethodExpr) methods)
+    declCount _ = 0
+    csCount cs = length (commentsLeading cs) + length (commentsTrailing cs) + length (commentsInner cs)
+    exprCount l = csCount (locComments l) + exprChildCount (locValue l)
+    exprChildCount e = case e of
+      App f x -> exprCount f + exprCount x
+      Lam pats body -> sum (map patCount pats) + exprCount body
+      LetIn _ rhs body -> exprCount rhs + exprCount body
+      Case scrut alts -> exprCount scrut + sum (map altCount alts)
+      DoBlock stmts -> sum (map stmtCount stmts)
+      RecordLiteral fields -> sum (map (exprCount . snd) fields)
+      RecordUpdate base fields -> exprCount base + sum (map (exprCount . snd) fields)
+      FieldAccess base _ -> exprCount base
+      TemplateLit _ parts -> sum (map tplCount parts)
+      _ -> 0
+    tplCount (TemplateHole e) = exprCount e
+    tplCount _ = 0
+    altCount la = let Alt p b = locValue la in csCount (locComments la) + patCount p + exprCount b
+    stmtCount ls = csCount (locComments ls) + case locValue ls of
+      BindStmt p e -> patCount p + exprCount e
+      DiscardBindStmt e -> exprCount e
+      LetStmt _ e -> exprCount e
+      ExprStmt e -> exprCount e
+    patCount lp = csCount (locComments lp) + case locValue lp of
+      PCon _ args -> sum (map patCount args)
+      _ -> 0
+
+-- | True if a comment containing the needle is preserved in any slot anywhere
+-- in the AST or in modComments.
+commentPreserved :: Text -> Module -> Bool
+commentPreserved needle m =
+  any (T.isInfixOf needle . commentText) (modComments m)
+    || any declHas (modDecls m)
+  where
+    declHas (DeclValue _ pats rhs) = any patHas pats || exprHas rhs
+    declHas (DeclInstance _ _ methods) = any (exprHas . instanceMethodExpr) methods
+    declHas _ = False
+    csHas cs = any (T.isInfixOf needle . commentText)
+                 (commentsLeading cs ++ commentsTrailing cs ++ commentsInner cs)
+    exprHas l = csHas (locComments l) || exprChildHas (locValue l)
+    exprChildHas e = case e of
+      App f x -> exprHas f || exprHas x
+      Lam pats body -> any patHas pats || exprHas body
+      LetIn _ rhs body -> exprHas rhs || exprHas body
+      Case scrut alts -> exprHas scrut || any altHas alts
+      DoBlock stmts -> any stmtHas stmts
+      RecordLiteral fields -> any (exprHas . snd) fields
+      RecordUpdate base fields -> exprHas base || any (exprHas . snd) fields
+      FieldAccess base _ -> exprHas base
+      TemplateLit _ parts -> any tplHas parts
+      _ -> False
+    tplHas (TemplateHole e) = exprHas e
+    tplHas _ = False
+    altHas la = let Alt p b = locValue la in csHas (locComments la) || patHas p || exprHas b
+    stmtHas ls = csHas (locComments ls) || case locValue ls of
+      BindStmt p e -> patHas p || exprHas e
+      DiscardBindStmt e -> exprHas e
+      LetStmt _ e -> exprHas e
+      ExprStmt e -> exprHas e
+    patHas lp = csHas (locComments lp) || case locValue lp of
+      PCon _ args -> any patHas args
+      _ -> False
 
 moduleHasTrailing :: Text -> Module -> Bool
 moduleHasTrailing needle m = any declHasTrailing (modDecls m)
