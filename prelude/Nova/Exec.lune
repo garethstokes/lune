@@ -3,6 +3,7 @@ module Nova.Exec exposing (
   ApprovalDecision(..),
   Approve,
   runCommand,
+  executeApproved,
   toolResultMessage
 )
 
@@ -11,9 +12,9 @@ import Lune.Process as Process exposing (ProcessError(..), ExitStatus(..))
 import Lune.Bytes as Bytes
 import Lune.String as Str
 import Lune.Task as Task
-import Nova.Core as Core exposing (Message)
-import Nova.Runtime exposing (ToolExecError(..))
-import Nova.Tool exposing (ToolId)
+import Nova.Core as Core exposing (Message, setMember)
+import Nova.Runtime exposing (RuntimeConfig, ToolExecError(..))
+import Nova.Tool exposing (ToolId, eqToolId)
 
 type alias CommandResult =
   { exitCode : Int
@@ -58,6 +59,54 @@ runCommand command =
         (Process.runCapture c)
   in
     Task.onError captured (\perr -> Task.fail (ToolFailed (processErrorToString perr)))
+
+-- allow + maxTurns check ONLY (approval handled separately so the injected callback decides)
+guardAllow : RuntimeConfig -> ToolId -> Result ToolExecError Unit
+guardAllow cfg toolId =
+  case prim_leInt cfg.maxTurns 0 of
+    True ->
+      Err (MaxTurnsExceeded cfg.maxTurns)
+    False ->
+      case setMember eqToolId toolId cfg.allowedTools of
+        False ->
+          Err (ToolNotAllowed toolId)
+        True ->
+          Ok unit
+
+-- Run a command under a timeout, flattening Lune.Task.withTimeout's
+-- Result Timeout into a ToolTimedOut error. Uses Lune.Task.withTimeout
+-- (Fiber.awaitAny based) rather than Nova.Runtime.withTimeout because the
+-- latter's Atomic.commit/retry await cannot block on a subprocess task under
+-- the sequential evaluator.
+withToolTimeout : Int -> ToolId -> Task ToolExecError CommandResult -> Task ToolExecError CommandResult
+withToolTimeout timeoutMs toolId task =
+  Task.andThen
+    (Task.withTimeout timeoutMs task)
+    (\r ->
+      case r of
+        Err _ ->
+          Task.fail (ToolTimedOut toolId)
+        Ok cr ->
+          Task.succeed cr)
+
+executeApproved : RuntimeConfig -> Approve -> ToolId -> String -> Task ToolExecError CommandResult
+executeApproved cfg approve toolId command =
+  case guardAllow cfg toolId of
+    Err e ->
+      Task.fail e
+    Ok _ ->
+      case setMember eqToolId toolId cfg.requireApproval of
+        False ->
+          withToolTimeout cfg.toolTimeoutMs toolId (runCommand command)
+        True ->
+          Task.andThen
+            (Task.mapError (\_ -> ToolFailed "approval callback failed") (approve toolId command))
+            (\decision ->
+              case decision of
+                Denied ->
+                  Task.fail (ApprovalRequired toolId)
+                Approved ->
+                  withToolTimeout cfg.toolTimeoutMs toolId (runCommand command))
 
 toolResultMessage : String -> CommandResult -> Message
 toolResultMessage command result =

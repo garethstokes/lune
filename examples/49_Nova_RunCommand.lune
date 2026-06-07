@@ -4,7 +4,8 @@ import Lune.IO as IO
 import Lune.Task as Task
 import Lune.String as Str
 import Nova.Core as Core exposing (Message, Role(..))
-import Nova.Runtime exposing (ToolExecError(..))
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+import Nova.Tool as Tool
 import Nova.Exec as Exec
 
 describe : Result ToolExecError Exec.CommandResult -> String
@@ -16,6 +17,35 @@ describe r =
           (Str.append " stdout=" cr.stdout))
     Err _ ->
       "err"
+
+describeErr : Result ToolExecError Exec.CommandResult -> String
+describeErr r =
+  case r of
+    Ok _ ->
+      "ok"
+    Err (ApprovalRequired _) ->
+      "err ApprovalRequired"
+    Err (ToolNotAllowed _) ->
+      "err ToolNotAllowed"
+    Err _ ->
+      "err other"
+
+runTool : Tool.ToolId
+runTool = Tool.toolId "run" "1"
+
+cfg : RuntimeConfig
+cfg =
+  { maxTurns = 5
+  , toolTimeoutMs = 5000
+  , allowedTools = Core.setFromList Tool.eqToolId [runTool]
+  , requireApproval = Core.setFromList Tool.eqToolId [runTool]
+  }
+
+autoApprove : Exec.Approve
+autoApprove _ _ = Task.succeed Exec.Approved
+
+autoDeny : Exec.Approve
+autoDeny _ _ = Task.succeed Exec.Denied
 
 roleName : Message -> String
 roleName msg =
@@ -36,3 +66,10 @@ main =
     IO.println (Str.append "exit3: " (describe r2))
     let msg = Exec.toolResultMessage "echo hi" { exitCode = 0, stdout = "hi", stderr = "" }
     IO.println (Str.append "msg.role=" (roleName msg))
+    a <- Task.result (Exec.executeApproved cfg autoApprove runTool "echo approved")
+    IO.println (Str.append "approve: " (describe a))
+    d <- Task.result (Exec.executeApproved cfg autoDeny runTool "echo denied")
+    IO.println (Str.append "deny: " (describeErr d))
+    let cfgNoTool = { cfg | allowedTools = Core.setEmpty }
+    n <- Task.result (Exec.executeApproved cfgNoTool autoApprove runTool "echo nope")
+    IO.println (Str.append "notallowed: " (describeErr n))
