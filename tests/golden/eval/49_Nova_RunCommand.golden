@@ -1,0 +1,8 @@
+echo: ok exit=0 stdout=hello
+
+exit3: ok exit=3 stdout=
+msg.role=user
+approve: ok exit=0 stdout=approved
+
+deny: err ApprovalRequired
+notallowed: err ToolNotAllowed

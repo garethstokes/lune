@@ -1,0 +1,75 @@
+module NovaRunCommand exposing (main)
+
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.String as Str
+import Nova.Core as Core exposing (Message, Role(..))
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+import Nova.Tool as Tool
+import Nova.Exec as Exec
+
+describe : Result ToolExecError Exec.CommandResult -> String
+describe r =
+  case r of
+    Ok cr ->
+      Str.append "ok exit="
+        (Str.append (Str.fromInt cr.exitCode)
+          (Str.append " stdout=" cr.stdout))
+    Err _ ->
+      "err"
+
+describeErr : Result ToolExecError Exec.CommandResult -> String
+describeErr r =
+  case r of
+    Ok _ ->
+      "ok"
+    Err (ApprovalRequired _) ->
+      "err ApprovalRequired"
+    Err (ToolNotAllowed _) ->
+      "err ToolNotAllowed"
+    Err _ ->
+      "err other"
+
+runTool : Tool.ToolId
+runTool = Tool.toolId "run" "1"
+
+cfg : RuntimeConfig
+cfg =
+  { maxTurns = 5
+  , toolTimeoutMs = 5000
+  , allowedTools = Core.setFromList Tool.eqToolId [runTool]
+  , requireApproval = Core.setFromList Tool.eqToolId [runTool]
+  }
+
+autoApprove : Exec.Approve
+autoApprove _ _ = Task.succeed Exec.Approved
+
+autoDeny : Exec.Approve
+autoDeny _ _ = Task.succeed Exec.Denied
+
+roleName : Message -> String
+roleName msg =
+  case msg.role of
+    User ->
+      "user"
+    System ->
+      "system"
+    Assistant ->
+      "assistant"
+
+main : Task Unit Unit
+main =
+  do
+    r1 <- Task.result (Exec.runCommand "echo hello")
+    IO.println (Str.append "echo: " (describe r1))
+    r2 <- Task.result (Exec.runCommand "exit 3")
+    IO.println (Str.append "exit3: " (describe r2))
+    let msg = Exec.toolResultMessage "echo hi" { exitCode = 0, stdout = "hi", stderr = "" }
+    IO.println (Str.append "msg.role=" (roleName msg))
+    a <- Task.result (Exec.executeApproved cfg autoApprove runTool "echo approved")
+    IO.println (Str.append "approve: " (describe a))
+    d <- Task.result (Exec.executeApproved cfg autoDeny runTool "echo denied")
+    IO.println (Str.append "deny: " (describeErr d))
+    let cfgNoTool = { cfg | allowedTools = Core.setEmpty }
+    n <- Task.result (Exec.executeApproved cfgNoTool autoApprove runTool "echo nope")
+    IO.println (Str.append "notallowed: " (describeErr n))
