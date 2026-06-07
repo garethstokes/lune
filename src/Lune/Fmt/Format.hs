@@ -223,8 +223,8 @@ declBlockRowsFrom declLines declCs decls =
           endLn = max (declBlockEndLine blk) (case used of { [] -> scannedStart; _ -> last used })
        in (Row startLn endLn doc : acc, rest)
 
--- | Group a decl list the same way 'formatDeclBlocks' does (a type signature
--- immediately followed by its matching value definition forms one block).
+-- | Group a decl list so that a type signature immediately followed by its
+-- matching value definition forms one block.
 data DeclBlock
   = SigValueBlock S.Decl S.Decl
   | SingleBlock S.Decl
