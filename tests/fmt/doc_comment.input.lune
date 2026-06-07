@@ -1,0 +1,4 @@
+module FmtDocComment exposing (greeting)
+
+{-| The greeting shown at startup. -}
+greeting="hello"

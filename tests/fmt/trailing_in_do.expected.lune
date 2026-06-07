@@ -1,0 +1,6 @@
+module FmtTrailingDo exposing (main)
+
+main =
+  do
+    let x = 1  -- keep me inline
+    IO.println "hi"
