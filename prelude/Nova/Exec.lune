@@ -1,0 +1,71 @@
+module Nova.Exec exposing (
+  CommandResult,
+  ApprovalDecision(..),
+  Approve,
+  runCommand,
+  toolResultMessage
+)
+
+import Lune.Prelude exposing (Int, Bool(..), Result(..), Maybe(..), Unit, unit, String, Task(..), Applicative(..), Monad(..))
+import Lune.Process as Process exposing (ProcessError(..), ExitStatus(..))
+import Lune.Bytes as Bytes
+import Lune.String as Str
+import Lune.Task as Task
+import Nova.Core as Core exposing (Message)
+import Nova.Runtime exposing (ToolExecError(..))
+import Nova.Tool exposing (ToolId)
+
+type alias CommandResult =
+  { exitCode : Int
+  , stdout : String
+  , stderr : String
+  }
+
+type ApprovalDecision
+  = Approved
+  | Denied
+
+type alias Approve =
+  ToolId -> String -> Task Unit ApprovalDecision
+
+processErrorToString : ProcessError -> String
+processErrorToString err =
+  case err of
+    NotFound m ->
+      Str.append "command not found: " m
+    PermissionDenied m ->
+      Str.append "permission denied: " m
+    SpawnFailed m ->
+      Str.append "spawn failed: " m
+    IoError m ->
+      Str.append "io error: " m
+    NonZeroExit _ info ->
+      Str.append "non-zero exit: " info.program
+
+runCommand : String -> Task ToolExecError CommandResult
+runCommand command =
+  let
+    c = Process.arg command (Process.arg "-c" (Process.cmd "sh"))
+    captured =
+      Task.map
+        (\cap ->
+          case cap.status of
+            Exited code ->
+              { exitCode = code
+              , stdout = Bytes.toString cap.stdout
+              , stderr = Bytes.toString cap.stderr
+              })
+        (Process.runCapture c)
+  in
+    Task.onError captured (\perr -> Task.fail (ToolFailed (processErrorToString perr)))
+
+toolResultMessage : String -> CommandResult -> Message
+toolResultMessage command result =
+  Core.user
+    (Str.append "Command: "
+      (Str.append command
+        (Str.append "\nExit: "
+          (Str.append (Str.fromInt result.exitCode)
+            (Str.append "\nstdout:\n"
+              (Str.append result.stdout
+                (Str.append "\nstderr:\n" result.stderr)))))))

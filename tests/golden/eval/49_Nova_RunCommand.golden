@@ -1,0 +1,4 @@
+echo: ok exit=0 stdout=hello
+
+exit3: ok exit=3 stdout=
+msg.role=user
