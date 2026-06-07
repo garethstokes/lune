@@ -57,9 +57,20 @@ threaded through the megaparsec grammar.
    the flat comment list alongside the parsed `Located` module.
 
 2. **Attachment pass** (new module, e.g. `Lune.Syntax.Comments.Attach`):
-   a pure function `attachComments :: Located Module -> [Comment] -> Located Module`
-   that walks the AST once and assigns each comment to exactly one node in one
-   of the three slots, by position heuristics (below).
+   a pure function `attachComments :: Module -> [Comment] -> Module`
+   that walks the AST once and assigns each comment to exactly one node, by
+   position heuristics (below).
+
+   **Top-level note:** `Module`, `Decl`, and `Import` are **not** `Located`
+   (only the recursive positions inside them are). Per design decision X, rather
+   than Located-wrapping every `Decl`/`Import` (which would ripple through every
+   compiler pass), `Module` gains a `modComments :: [Comment]` field holding
+   top-level *standalone/leading* comments with their spans; the module renderer
+   interleaves them with imports/decls by span position. Top-level **trailing**
+   comments (`x = 1  -- note`) still attach structurally — they land in the
+   trailing slot of the innermost `Located` node on that line (e.g. the RHS
+   `Located Expr`). Everything below declaration level is fully structural via
+   `locComments`.
 
 3. **Formatter** (`src/Lune/Fmt/Format.hs`): render comments from `locComments`
    at each `Located` node. `Fmt.hs`'s scanner machinery
@@ -93,9 +104,11 @@ in `Comment.hs` (`Leading`, `Trailing`, `Inner`).
 2. **Leading** — comment on its own line(s), immediately above a node → `Leading`
    on that node. Rendered on its own line(s) above the node.
 3. **Inner** — comment inside a compound (between do-statements, list/record
-   elements, case branches, between imports) that is not trailing a specific
-   child → `Inner` on the container, keyed by the child-gap index it precedes so
-   the renderer can slot it at the correct boundary.
+   elements, case branches) that is not trailing a specific child → `Inner` on
+   the container, keyed by the child-gap index it precedes so the renderer can
+   slot it at the correct boundary. Top-level standalone comments (between
+   imports, between decls, leading the first decl) are the module-level
+   equivalent and live in `Module.modComments`, placed by span position.
 4. **Doc comments** (`{-| -}`) — treated as `Leading`; rendered verbatim in
    place. No special semantics in v0.1.
 5. **Determinism / no silent drops** — each comment attaches to exactly one
@@ -143,9 +156,11 @@ gap calculation so blanks around comments are not double-counted. This keeps the
 
 ## Affected code
 
+- `src/Lune/Syntax.hs` — add `modComments :: [Comment]` field to `Module`.
 - `src/Lune/Parser.hs` — flat comment capture; revert inline attachment + the
-  `attachTrailing` stub.
-- `src/Lune/Syntax/Comments/Attach.hs` — **new** attachment pass.
+  `attachTrailing` stub; thread the captured comment list out of the parse.
+- `src/Lune/Syntax/Comments/Attach.hs` — **new** attachment pass
+  (`attachComments :: Module -> [Comment] -> Module`).
 - `src/Lune/Fmt.hs` — delete scanner; rewire `formatText` to parse → attach →
   render.
 - `src/Lune/Fmt/Format.hs` — render `locComments`; blank lines from spans.
