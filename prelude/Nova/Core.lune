@@ -32,6 +32,7 @@ module Nova.Core exposing (
   , defaultProviderConfig
   , defaultProviderRegistry
   , callProvider
+  , mockOllama
 )
 
 import Lune.Prelude exposing (
@@ -513,7 +514,14 @@ parseOllamaResponse raw =
 
 mockOllama : String -> List Message -> Result Error Response
 mockOllama modelId messages =
-  mockOllamaForPrompt modelId (messagesToPrompt messages)
+  case Str.eq modelId "mock-echo-count" of
+    True ->
+      Ok
+        { text = Str.append "turns=" (Str.fromInt (List.length messages))
+        , usage = Nothing
+        }
+    False ->
+      mockOllamaForPrompt modelId (messagesToPrompt messages)
 
 mockOllamaForPrompt : String -> String -> Result Error Response
 mockOllamaForPrompt modelId prompt =
