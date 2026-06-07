@@ -1,18 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Lune.Fmt.Format
-  ( formatModuleDoc
-  , formatModuleDocWithAttached
-  , formatModuleText
+  ( formatModuleDocWithAttached
   , formatModuleHeader
   , formatImport
   , formatDecl
-  , formatDeclsWithLayouts
-  , DoLayout (..)
-  , DoItem (..)
   ) where
 
-import Control.Monad.Trans.State.Strict (State, evalState, get, put)
+import Control.Monad.Trans.State.Strict (State, evalState)
 import Data.List (intersperse)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -31,7 +26,6 @@ import Lune.Fmt.Doc
   , nest
   , parens
   , render
-  , sep
   , space
   , softSpace
   , text
@@ -39,36 +33,16 @@ import Lune.Fmt.Doc
   , (<+>)
   )
 
-data DoItem
-  = DoSlot
-  | DoBlank
-  | DoComment !Text
-  deriving (Eq, Show)
-
-data DoLayout = DoLayout
-  { doLayoutItems :: ![DoItem]
-  , doLayoutCommentOffsets :: ![Int]
-  }
-  deriving (Eq, Show)
-
-type LayoutStream = [Maybe DoLayout]
-
-type FmtM a = State LayoutStream a
+-- | The expression formatters thread a (now-trivial) State value. The legacy
+-- do-block layout stream has been removed; the state is retained only so the
+-- many @evalState m []@ call sites continue to typecheck without churn.
+type FmtM a = State [()] a
 
 indentSize :: Int
 indentSize = 2
 
 defaultWidth :: Int
 defaultWidth = 80
-
-formatModuleText :: S.Module -> Text
-formatModuleText m =
-  let out = render defaultWidth (formatModuleDoc m)
-   in ensureSingleTrailingNewline out
-
-ensureSingleTrailingNewline :: Text -> Text
-ensureSingleTrailingNewline t =
-  T.stripEnd t <> "\n"
 
 -- | New AST-attached entry point. Renders comments from the attached
 -- 'locComments' on 'Located' nodes and 'modComments' on the module.
@@ -325,26 +299,6 @@ hoistDeclLeading d =
        in (hoistDoc, map S.commentLine hoist, S.DeclValue name args body')
     _ -> (mempty, [], d)
 
-formatModuleDoc :: S.Module -> Doc
-formatModuleDoc m =
-  let header = formatModuleHeader m
-      imports = map formatImport (S.modImports m)
-      declBlocks = formatDeclBlocks (S.modDecls m)
-      importsDoc =
-        case imports of
-          [] -> mempty
-          _ -> hardLine <> vsep imports
-      declsDoc =
-        case declBlocks of
-          [] -> mempty
-          _ ->
-            let gap =
-                  case imports of
-                    [] -> hardLine
-                    _ -> hardLine <> hardLine
-             in gap <> vsepWithBlankLines declBlocks
-   in header <> importsDoc <> declsDoc
-
 formatModuleHeader :: S.Module -> Doc
 formatModuleHeader m =
   text "module"
@@ -389,29 +343,9 @@ formatExpose ex =
         S.ExposeOpaque -> text name
         S.ExposeAll -> text name <> text "(..)"
 
-vsepWithBlankLines :: [Doc] -> Doc
-vsepWithBlankLines docs =
-  mconcat (intersperse (hardLine <> hardLine) docs)
-
-formatDeclBlocks :: [S.Decl] -> [Doc]
-formatDeclBlocks decls =
-  case decls of
-    (S.DeclTypeSig name qualTy : S.DeclValue name' args body : rest)
-      | name == name' ->
-          (formatDecl (S.DeclTypeSig name qualTy) <> hardLine <> formatDecl (S.DeclValue name' args body))
-            : formatDeclBlocks rest
-    (d : rest) ->
-      formatDecl d : formatDeclBlocks rest
-    [] ->
-      []
-
 formatDecl :: S.Decl -> Doc
 formatDecl decl =
   evalState (formatDeclM decl) []
-
-formatDeclsWithLayouts :: [Maybe DoLayout] -> [S.Decl] -> [Doc]
-formatDeclsWithLayouts layouts decls =
-  evalState (mapM formatDeclM decls) layouts
 
 formatDeclM :: S.Decl -> FmtM Doc
 formatDeclM decl =
@@ -689,15 +623,6 @@ formatExpr :: ExprPrec -> S.Expr -> Doc
 formatExpr prec expr =
   evalState (formatExprM prec expr) []
 
-popDoLayout :: FmtM (Maybe DoLayout)
-popDoLayout = do
-  st <- get
-  case st of
-    [] -> pure Nothing
-    x : xs -> do
-      put xs
-      pure x
-
 -- | Format a Located expression, unwrapping the Located wrapper and rendering
 -- any attached leading/trailing comments around the produced Doc. Inner
 -- comments (attached to compound containers) are threaded into the relevant
@@ -867,13 +792,12 @@ formatExprM prec expr =
                 else parensBlock <$> formatCaseM scrut alts
 
             S.DoBlock stmts ->
+              -- Reached only when a do-block is formatted without its Located
+              -- wrapper (e.g. as an application head); inner comments, which
+              -- live on the wrapper, are therefore unavailable here.
               if prec == PrecExprTop
-                then do
-                  layout <- popDoLayout
-                  formatDoBlockM layout stmts
-                else do
-                  layout <- popDoLayout
-                  parensBlock <$> formatDoBlockM layout stmts
+                then formatDoBlockWithInnerM [] stmts
+                else parensBlock <$> formatDoBlockWithInnerM [] stmts
 
 isBlockExpr :: S.Expr -> Bool
 isBlockExpr e =
@@ -1458,69 +1382,6 @@ formatAltM (S.Alt pat body) = do
   pure $
     group (formatLPattern pat <+> text "->")
       <> nest indentSize (hardLine <> bodyDoc <> patTrailing)
-
-formatDoBlock :: [Located S.Stmt] -> Doc
-formatDoBlock stmts =
-  evalState (formatDoBlockM Nothing stmts) []
-
-formatCommentDoc :: Text -> Doc
-formatCommentDoc t =
-  let ls = T.splitOn "\n" t
-      lineDocs = map text ls
-   in mconcat (intersperse hardLine lineDocs)
-
-vsepKeepEmpty :: [Doc] -> Doc
-vsepKeepEmpty docs =
-  case docs of
-    [] -> mempty
-    d : ds -> go d ds
-  where
-    go prev rest =
-      case rest of
-        [] ->
-          prev
-        next : xs ->
-          prev <> sepForNext next <> go next xs
-
-    sepForNext next =
-      if next == mempty
-        then hardLineNoIndent
-        else hardLine
-
-doLayoutSlotCount :: DoLayout -> Int
-doLayoutSlotCount =
-  length . filter (== DoSlot) . doLayoutItems
-
-renderDoLayoutItems :: [Doc] -> [DoItem] -> [Doc]
-renderDoLayoutItems stmtDocs0 items0 =
-  go stmtDocs0 items0 []
-  where
-    go stmtDocs items acc =
-      case items of
-        [] ->
-          reverse acc <> stmtDocs
-        it : rest ->
-          case it of
-            DoSlot ->
-              case stmtDocs of
-                d : ds -> go ds rest (d : acc)
-                [] -> go [] rest acc
-            DoBlank ->
-              go stmtDocs rest (mempty : acc)
-            DoComment t ->
-              go stmtDocs rest (formatCommentDoc t : acc)
-
-formatDoBlockM :: Maybe DoLayout -> [Located S.Stmt] -> FmtM Doc
-formatDoBlockM maybeLayout stmts = do
-  stmtDocs <- mapM formatLStmtM stmts
-  let bodyDoc =
-        case maybeLayout of
-          Just layout
-            | doLayoutSlotCount layout == length stmts ->
-                vsepKeepEmpty (renderDoLayoutItems stmtDocs (doLayoutItems layout))
-          _ ->
-            vsep stmtDocs
-  pure (text "do" <> nest indentSize (hardLine <> bodyDoc))
 
 -- | Render a do-block from AST-attached comments: interleave the container's
 -- inner comments with the statements by source line, preserving blank lines
