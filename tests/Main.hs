@@ -27,7 +27,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import System.Directory (createDirectoryIfMissing, findExecutable, listDirectory, removeDirectoryRecursive)
 import System.Directory (getTemporaryDirectory, removeFile, getCurrentDirectory)
-import System.Environment (lookupEnv)
+import System.Environment (lookupEnv, getEnvironment)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeBaseName)
 import System.Info (os)
@@ -38,7 +38,9 @@ import System.Process
   , StdStream (CreatePipe)
   , createProcess
   , proc
+  , env
   , readProcessWithExitCode
+  , readCreateProcessWithExitCode
   , terminateProcess
   , getProcessExitCode
   )
@@ -331,6 +333,17 @@ runLune :: [String] -> FilePath -> IO (ExitCode, String, String)
 runLune flags file =
   readProcessWithExitCode "cabal" (["run", "-v0", "lune", "--"] ++ flags ++ [file]) ""
 
+-- | Run the lune compiler with extra environment variables overlaid on the
+-- current process environment. Race-safe: the overrides are passed per-process
+-- via the spawned CreateProcess, never via global setEnv (tasty runs tests in
+-- parallel). Used to inject LUNE_SYSTEM_ROOT for deterministic System tests.
+runLuneWithEnv :: [(String, String)] -> [String] -> FilePath -> IO (ExitCode, String, String)
+runLuneWithEnv overrides flags file = do
+  baseEnv <- getEnvironment
+  let merged = overrides ++ filter (\(k, _) -> k `notElem` map fst overrides) baseEnv
+      cp = (proc "cabal" (["run", "-v0", "lune", "--"] ++ flags ++ [file])) {env = Just merged}
+  readCreateProcessWithExitCode cp ""
+
 -- | Normalize output for stable snapshots:
 --   - Trim trailing whitespace per line
 --   - Remove trailing empty lines
@@ -443,12 +456,38 @@ coreTest file = goldenVsStringDiff testName diffCmd (goldenPath "core" file) $ d
 -- =============================================================================
 
 -- | Test evaluation and snapshot the result/trace.
+--
+-- The System examples (60/61) read /proc and /sys. To make them deterministic
+-- across machines, we run them against a committed fixture sysroot via the
+-- LUNE_SYSTEM_ROOT env var (honored by prim_readFile). For 61, the printed
+-- dt_ms is real wall-clock elapsed time across a sleep, so it is masked to a
+-- placeholder; every other field is deterministic (counter deltas are zero
+-- because the fixture is read identically twice).
 evalTest :: FilePath -> TestTree
 evalTest file = goldenVsStringDiff testName diffCmd (goldenPath "eval" file) $ do
-  (_, stdout, stderr) <- runLune ["--eval"] file
-  pure $ normalizeOutput (stderr ++ stdout)
+  (_, stdout, stderr) <-
+    if isSystemTest
+      then do
+        cwd <- getCurrentDirectory
+        let sysroot = cwd </> "tests" </> "fixtures" </> "sysroot"
+        runLuneWithEnv [("LUNE_SYSTEM_ROOT", sysroot)] ["--eval"] file
+      else runLune ["--eval"] file
+  let combined = stderr ++ stdout
+      finalOut = if isSystemTest then maskDtMs combined else combined
+  pure $ normalizeOutput finalOut
   where
     testName = takeBaseName file
+    isSystemTest =
+      testName == "60_System_Inventory" || testName == "61_System_Sample"
+
+-- | Mask the non-deterministic dt_ms value (real elapsed wall-clock) in System
+-- sample output, so the golden is stable while still asserting the line exists.
+maskDtMs :: String -> String
+maskDtMs = unlines . map maskLine . lines
+  where
+    maskLine l
+      | "dt_ms=" `isPrefixOf` l = "dt_ms=<elapsed>"
+      | otherwise = l
 
 -- =============================================================================
 -- Negative Tests

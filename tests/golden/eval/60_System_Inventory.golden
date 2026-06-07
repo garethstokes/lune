@@ -1,9 +1,9 @@
 os=linux
 arch=x86_64
-cpu_model=12th Gen Intel(R) Core(TM) i7-1280P
-logical_cores=20
-mem_total_bytes=33305300992
-disks=10
-net_ifaces=19
+cpu_model=Lune Test CPU @ 3.00GHz
+logical_cores=8
+mem_total_bytes=16384000000
+disks=2
+net_ifaces=2
 gpus=0
 gpu_list=[]

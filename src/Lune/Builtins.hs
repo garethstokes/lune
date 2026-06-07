@@ -24,7 +24,7 @@ import Data.String (fromString)
 import Data.Maybe (mapMaybe)
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IntMap
-import Data.List (foldl')
+import Data.List (foldl', isPrefixOf)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -41,7 +41,7 @@ import qualified Network.Socket as NS
 import qualified Network.Socket.ByteString as NSB
 import qualified Network.Connection as NC
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import System.Environment (getEnvironment)
+import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.IO (BufferMode (NoBuffering), Handle, hClose, hFlush, hSetBinaryMode, hSetBuffering)
 import System.IO.Error (isEOFError, isDoesNotExistError, isPermissionError, userError)
@@ -2678,13 +2678,30 @@ primProcessReadStream getQ getBuf getEof getErr args =
 -- File I/O Primitives
 -- =============================================================================
 
+-- | sysroot override for deterministic System tests. When LUNE_SYSTEM_ROOT is
+-- set, reads of paths under /proc or /sys are rewritten to <root><path>.
+-- Any other path (and the default, unset case) is returned unchanged.
+resolveSystemRoot :: FilePath -> IO FilePath
+resolveSystemRoot path = do
+  mRoot <- lookupEnv "LUNE_SYSTEM_ROOT"
+  case mRoot of
+    Just root
+      | not (null root)
+      , "/proc" `isPrefixOf` path || "/sys" `isPrefixOf` path ->
+          pure (root ++ path)
+    _ -> pure path
+
 -- | prim_readFile : String -> IO (Result Error String)
 primReadFile :: [Value] -> Either EvalError Value
 primReadFile args =
   case args of
     [VString path] ->
       Right $ VIO $ \world -> do
-        result <- try (TIO.readFile (T.unpack path))
+        -- sysroot override for deterministic System tests: if LUNE_SYSTEM_ROOT
+        -- is set, rewrite /proc and /sys reads to <root><path> so System
+        -- inspection reads fixture files instead of real host hardware.
+        actualPath <- resolveSystemRoot (T.unpack path)
+        result <- try (TIO.readFile actualPath)
         case result of
           Left (e :: IOException) ->
             pure $ Right $ StepDone world (VCon (preludeCon "Err") [VString (T.pack (show e))])
