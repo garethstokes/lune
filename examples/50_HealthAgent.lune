@@ -7,7 +7,7 @@ Architecture:
   1. Data Collection - Uses Lune.System module for metrics
   2. LLM Analysis - Sends metrics to Ollama (qwen3 model) for issue detection
   3. Human-in-the-Loop - Presents proposed actions for user approval
-  4. Action Recording - Approved commands are written to approved-commands.sh
+  4. Action Execution - Approved commands are run for real via Nova.Exec (human-gated)
 
 Requirements:
   - Ollama running locally on port 11434
@@ -35,6 +35,9 @@ import Lune.System as System
 import Template exposing (render)
 import Nova exposing (withModel, tool)
 import Nova.Core as Core
+import Nova.Exec as Exec
+import Nova.Runtime as Runtime exposing (RuntimeConfig, ToolExecError(..))
+import Nova.Tool as Tool
 
 -- Data Types ----------------------------------------------------------------
 
@@ -326,6 +329,41 @@ buildAnalysisPrompt report =
 makeClient : Nova.Client
 makeClient = Nova.defaultClient |> withModel "qwen3"
 
+runTool : Tool.ToolId
+runTool = Tool.toolId "run" "1"
+
+runtimeConfig : RuntimeConfig
+runtimeConfig =
+  { maxTurns = 1
+  , toolTimeoutMs = 30000
+  , allowedTools = Core.setFromList Tool.eqToolId [runTool]
+  , requireApproval = Core.setFromList Tool.eqToolId [runTool]
+  }
+
+-- The human y/n at the prompt is the approval decision; runTool is in
+-- requireApproval so executeApproved consults this callback (the gate fires).
+-- The Approved branch only runs after the user pressed y, so it relays approval.
+loopApprove : Exec.Approve
+loopApprove _ _ = Task.succeed Exec.Approved
+
+showExecOutcome : String -> Result ToolExecError Exec.CommandResult -> String
+showExecOutcome command outcome =
+  case outcome of
+    Ok cr ->
+      let msg = Exec.toolResultMessage command cr in msg.content
+    Err err ->
+      Str.append "Execution failed: " (showToolExecError err)
+
+showToolExecError : ToolExecError -> String
+showToolExecError err =
+  case err of
+    ToolNotAllowed _ -> "tool not allowed"
+    ApprovalRequired _ -> "approval required"
+    ToolTimedOut _ -> "timed out"
+    MaxTurnsExceeded _ -> "max turns exceeded"
+    ToolNotImplemented _ -> "not implemented"
+    ToolFailed m -> Str.append "failed: " m
+
 -- Agent ---------------------------------------------------------------------
 
 analyzeHealth : HealthReport -> Task AgentError HealthAnalysis
@@ -385,7 +423,7 @@ promptForApproval : Task e ApprovalResult
 promptForApproval =
   do
     IO.println
-      "Approve this action (record command to approved-commands.sh)? [y/n/q] "
+      "Approve this action (RUN this command)? [y/n/q] "
     input <- IO.readLine
     case input of
       "y" ->
@@ -398,27 +436,6 @@ promptForApproval =
         do
           IO.println "Please enter y, n, or q"
           promptForApproval
-
-approvedCommandsPath : String
-approvedCommandsPath = "approved-commands.sh"
-
-recordApprovedCommand : String -> Task e String
-recordApprovedCommand cmd =
-  do
-    existing <-
-      Task.onError (IO.readFile approvedCommandsPath) (\_ -> Task.succeed "")
-    let line = Str.append cmd "\n"
-    let updated =
-      case Str.isEmpty existing of
-        True ->
-          Str.append "#!/usr/bin/env sh\n\n" line
-        False ->
-          Str.append existing line
-    _ <-
-      Task.onError
-        (IO.writeFile approvedCommandsPath updated)
-        (\_ -> Task.succeed unit)
-    Task.succeed (render "Recorded: ${cmd}")
 
 processActions : Int -> List ProposedAction -> Task e Unit
 processActions total actions = processActionsGo 1 total actions
@@ -445,9 +462,9 @@ processActionsGo current total actions =
               processActionsGo (Int.add current 1) total rest
           Approved ->
             do
-              result <- recordApprovedCommand act.command
-              IO.println result
-              IO.println "Action recorded."
+              IO.println (render "Running: ${act.command}")
+              outcome <- Task.result (Exec.executeApproved runtimeConfig loopApprove runTool act.command)
+              IO.println (showExecOutcome act.command outcome)
               processActionsGo (Int.add current 1) total rest
 
 -- Main ----------------------------------------------------------------------
