@@ -1,0 +1,7 @@
+proposed: echo agent-ran
+Command: echo agent-ran
+Exit: 0
+stdout:
+agent-ran
+
+stderr:

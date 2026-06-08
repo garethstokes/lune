@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+import Lune.IO as IO
+import Lune.Task as Task
+import Lune.String as Str
+import Lune.Json as RawJson exposing (Json)
+import Lune.Json.Decode as D
+import Nova exposing (newClient, provider, providerEq, tool, showError, Client)
+import Nova.Core as Core exposing (Provider, Response, Error)
+import Nova.Tool as Tool
+import Nova.Runtime as Runtime exposing (RuntimeConfig)
+import Nova.Exec as Exec
+
+@derive(Json)
+type alias Action =
+  { command : String }
+
+mockProvider : Provider
+mockProvider = provider "mock"
+
+-- Fixed (deterministic) provider reply: a single tool-call JSON proposing the
+-- command the agent should run.
+mockResponse : Result Error Response
+mockResponse =
+  Ok
+    { text = "{\"command\":\"echo agent-ran\"}"
+    , usage = Just { inputTokens = 0, outputTokens = 0, totalTokens = 0 }
+    }
+
+-- The provider callback. Referencing all three arguments through
+-- `Core.callProvider` (whose own signature is concrete) pins their types so the
+-- inferred `mockCall` unifies with `ProviderImpl.call`'s
+-- `ProviderConfig -> String -> List Message -> IO (Result Error Response)`.
+mockCall providerCfg model messages =
+  case
+    Core.callProvider
+      Core.defaultProviderRegistry
+      providerCfg
+      mockProvider
+      model
+      messages
+  of
+    _ ->
+      IO.pure mockResponse
+
+mockProviderImpl =
+  { id = mockProvider, call = mockCall, capabilities = Core.setEmpty }
+
+runTool : Tool.ToolId
+runTool = Tool.toolId "run" "1"
+
+cfg : RuntimeConfig
+cfg =
+  { maxTurns = 1
+  , toolTimeoutMs = 30000
+  , allowedTools = Core.setFromList Tool.eqToolId [runTool]
+  , requireApproval = Core.setFromList Tool.eqToolId [runTool]
+  }
+
+autoApprove : Exec.Approve
+autoApprove _ _ = Task.succeed Exec.Approved
+
+proposeAction : Client -> Task Core.Error Action
+proposeAction client =
+  Task.andThen
+    (tool client "propose a remediation command")
+    (\rawJson ->
+      case D.decodeValue actionDecoder rawJson of
+        Ok action ->
+          Task.succeed action
+        Err decodeErr ->
+          Task.fail (Core.DecodeError decodeErr.message))
+
+main : Task Unit Unit
+main =
+  do
+    let providers =
+      Core.dictInsert providerEq mockProvider mockProviderImpl Core.defaultProviderRegistry
+    let client = newClient providers mockProvider "mock-action"
+    actionResult <- Task.result (proposeAction client)
+    case actionResult of
+      Err e ->
+        IO.println (Str.append "analysis error: " (showError e))
+      Ok action ->
+        do
+          IO.println (Str.append "proposed: " action.command)
+          execResult <- Task.result (Exec.executeApproved cfg autoApprove runTool action.command)
+          case execResult of
+            Err _ ->
+              IO.println "execution error"
+            Ok cr ->
+              let
+                msg = Exec.toolResultMessage action.command cr
+              in
+                IO.println msg.content
